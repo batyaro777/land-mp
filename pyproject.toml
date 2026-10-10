@@ -37,9 +37,6 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["landcheck"]
 
-[tool.hatch.build.targets.wheel.force-include]
-"landcheck/web/templates" = "landcheck/web/templates"
-"landcheck/web/static" = "landcheck/web/static"
 
 [tool.ruff]
 line-length = 100
