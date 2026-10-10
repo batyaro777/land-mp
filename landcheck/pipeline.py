@@ -38,21 +38,30 @@ def fetch_payload(
 ) -> tuple[dict[str, Any], list[str]]:
     """Возвращает (payload, ошибки получения). При сбое отдаёт устаревший кэш, если есть."""
     errors: list[str] = []
+    live = getattr(provider, "name", "unknown") != "fixture"
     if cache is not None and not refresh:
         cached = cache.get(cad_num)
-        if cached is not None:
+        # Синтетический ответ фикстур никогда не выдаём за данные НСПД.
+        if cached is not None and not (live and cached.get("provider") == "fixture"):
             return cached, errors
     try:
         payload = provider.fetch_raw(cad_num)
     except Exception as e:  # noqa: BLE001 — сеть; деградируем в кэш
         errors.append(f"{type(e).__name__}: {e}")
         payload = None
-    if payload is not None and not payload.get("errors") and cache is not None:
+    if (
+        payload is not None
+        and not payload.get("errors")
+        and cache is not None
+        and payload.get("provider") != "fixture"
+    ):
         cache.put(cad_num, payload)
     if payload is not None and payload.get("errors"):
         errors.extend(payload["errors"])
     if payload is None or (not payload.get("found") and errors):
         stale = cache.get(cad_num, allow_stale=True) if cache is not None else None
+        if stale is not None and live and stale.get("provider") == "fixture":
+            stale = None
         if stale is not None:
             stale.setdefault("errors", []).extend(errors)
             return stale, errors

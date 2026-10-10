@@ -30,7 +30,13 @@
 {% endif %}
 
 {% if not p.found %}
-<article><p class="err">Участок с таким номером в НСПД не найден.</p>
+<article>
+{% if p.errors %}
+<p class="err">Данные НСПД по участку не получены: сбой запроса. Это не значит, что участка нет. Нажмите «Обновить данные» в подборке или повторите позже.</p>
+<p class="muted small">{{ p.errors|join('; ') }}</p>
+{% else %}
+<p class="err">Участок с таким номером в НСПД не найден.</p>
+{% endif %}
 {% for f in d.flags %}<p>{{ f.message }} <span class="muted small">— {{ f.source }}</span></p>{% endfor %}</article>
 {% else %}
 

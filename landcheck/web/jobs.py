@@ -7,6 +7,8 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
+from sqlalchemy import select
+
 from landcheck.cache import ParcelCache
 from landcheck.inputs import dedupe, load_listings
 from landcheck.models import BatchResult
@@ -62,6 +64,45 @@ def stats_of(batch: BatchResult) -> dict:
     }
 
 
+def _history_for(db, check: Check, cad_num: str, verdict: str, had_history: bool) -> dict:
+    """М1.7: новый ли номер для брокера и изменился ли вердикт с прошлой проверки."""
+    prev = db.execute(
+        select(CheckItem.verdict, Check.id, Check.created_at, Check.title)
+        .join(Check, CheckItem.check_id == Check.id)
+        .where(
+            Check.user_id == check.user_id,
+            Check.id != check.id,
+            Check.status == "done",
+            CheckItem.cad_num == cad_num,
+        )
+        .order_by(Check.created_at.desc())
+        .limit(1)
+    ).first()
+    if prev is None:
+        return {"seen_before": False, "is_new": had_history}
+    prev_verdict, prev_id, prev_at, prev_title = prev
+    return {
+        "seen_before": True,
+        "is_new": False,
+        "prev_check_id": prev_id,
+        "prev_title": prev_title,
+        "prev_at": prev_at.isoformat() if prev_at else None,
+        "prev_verdict": prev_verdict,
+        "changed": prev_verdict != verdict,
+    }
+
+
+def resume_pending() -> int:
+    """После рестарта процесса дочитать незавершённые проверки: работа шла только в памяти."""
+    with session() as db:
+        ids = list(
+            db.scalars(select(Check.id).where(Check.status.in_(["queued", "running"]))).all()
+        )
+    for cid in ids:
+        enqueue(cid)
+    return len(ids)
+
+
 def run_check(check_id: int) -> None:
     with session() as db:
         check = db.get(Check, check_id)
@@ -79,17 +120,30 @@ def run_check(check_id: int) -> None:
         _set(check_id, status="running", total=len(groups), done=0)
         request = request_from_dict(request_d)
         provider = build_provider()
-        cache = ParcelCache(settings.cache_path, ttl_days=settings.cache_ttl_days)
+        # В демо-режиме на фикстурах кэш НСПД не трогаем: demo и live не смешиваются.
+        cache = (
+            None
+            if settings.fixtures is not None
+            else ParcelCache(settings.cache_path, ttl_days=settings.cache_ttl_days)
+        )
+        refresh = bool(request_d.pop("refresh", False))
 
         def progress(done: int, total: int, _cn: str) -> None:
             _set(check_id, done=done, total=total)
 
         try:
             batch = check_batch(
-                listings, request, provider, cache, workers=settings.workers, progress=progress
+                listings,
+                request,
+                provider,
+                cache,
+                refresh=refresh,
+                workers=settings.workers,
+                progress=progress,
             )
         finally:
-            cache.close()
+            if cache is not None:
+                cache.close()
             close = getattr(provider, "close", None)
             if close:
                 close()
@@ -97,7 +151,20 @@ def run_check(check_id: int) -> None:
             check = db.get(Check, check_id)
             assert check is not None
             db.query(CheckItem).filter(CheckItem.check_id == check_id).delete()
+            had_history = bool(
+                db.scalar(
+                    select(Check.id).where(
+                        Check.user_id == check.user_id,
+                        Check.id != check_id,
+                        Check.status == "done",
+                    )
+                )
+            )
             for pos, r in enumerate(batch.results, start=1):
+                data = result_to_dict(r)
+                data["history"] = _history_for(
+                    db, check, r.listing.cad_num, r.verdict.value, had_history
+                )
                 db.add(
                     CheckItem(
                         check_id=check_id,
@@ -105,9 +172,10 @@ def run_check(check_id: int) -> None:
                         cad_num=r.listing.cad_num,
                         verdict=r.verdict.value,
                         score=r.score,
-                        data=result_to_dict(r),
+                        data=data,
                     )
                 )
+            check.request = {k: v for k, v in dict(check.request).items() if k != "refresh"}
             check.status = "done"
             check.done = check.total = len(batch.results)
             check.stats = stats_of(batch)

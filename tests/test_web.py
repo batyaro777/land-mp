@@ -134,22 +134,149 @@ def test_listing_composer(client: TestClient):
         },
     )
     assert r.status_code == 303, r.text
-    page = client.get(r.headers["location"])
+    url = r.headers["location"]
+    page = client.get(url)
     assert page.status_code == 200
     assert "сельхозназначения" in page.text  # предупреждение: ИЖС на сельхозземле
     assert "по ЕГРН 10.0 сот." in page.text  # площадь из заметок расходится
-    xml = client.get(r.headers["location"] + "/avito.xml")
+    assert "Выгрузка заблокирована" in page.text
+    assert "Данные НСПД от" in page.text  # дата данных, а не дата подготовки
+    blocked = client.get(url + "/avito.xml")
+    assert blocked.status_code == 409 and "противоречащие кадастру" in blocked.text
+    # брокер исправил текст — противоречий нет, выгрузка открыта
+    r2 = client.post(
+        url,
+        data={
+            "title": "Участок 10 сот. садоводство",
+            "description": "Продаётся участок 10 сот. на сельхозземле, газ по границе.",
+            "price": "1,1 млн",
+        },
+    )
+    assert r2.status_code == 303
+    page = client.get(url)
+    assert "Выгрузка заблокирована" not in page.text and "Участок 10 сот. садоводство" in page.text
+    xml = client.get(url + "/avito.xml")
     assert xml.status_code == 200
     assert "<Category>Земельные участки</Category>" in xml.text
     assert "<ObjectType>Сельхозназначения (СНТ, ДНП)</ObjectType>" in xml.text
-    assert "<LandArea>10</LandArea>" in xml.text and "<Price>900000</Price>" in xml.text
-    r2 = client.post(
-        r.headers["location"],
-        data={"title": "Новый заголовок", "description": "", "price": "1,1 млн"},
-    )
-    assert r2.status_code == 303
-    assert "Новый заголовок" in client.get(r.headers["location"]).text
-    assert "<Price>1100000</Price>" in client.get(r.headers["location"] + "/avito.xml").text
+    assert "<LandArea>10</LandArea>" in xml.text and "<Price>1100000</Price>" in xml.text
     assert (
         client.post("/listing", data={"cad_num": "50:09:0060202:999"}).text.count("не найден") >= 1
     )
+
+
+def test_query_purpose_kept_and_form_overrides(client: TestClient):
+    login(client)
+    from landcheck.web.db import Check, session
+
+    r = client.post(
+        "/checks", data={"numbers": "50:09:0060202:101", "query": "ИЖС до 3 млн", "purpose": "any"}
+    )
+    assert r.status_code == 303
+    client.post(
+        "/checks", data={"numbers": "50:09:0060202:101", "query": "ИЖС до 3 млн", "purpose": "snt"}
+    )
+    with session() as db:
+        checks = db.query(Check).order_by(Check.id).all()
+    assert checks[-2].request["purpose"] == "izhs" and checks[-2].request["budget_rub"] == 3_000_000
+    assert checks[-1].request["purpose"] == "snt"
+
+
+def test_rerun_sets_refresh_and_history(client: TestClient):
+    login(client)
+    from landcheck.web.db import Check, session
+
+    r = client.post(
+        "/checks", data={"numbers": "50:09:0060202:101\n50:09:0060202:104", "purpose": "izhs"}
+    )
+    first = r.headers["location"]
+    page1 = client.get(first)
+    assert "новый" not in page1.text  # первая подборка: истории ещё нет
+    r = client.post(
+        "/checks", data={"numbers": "50:09:0060202:101\n50:09:0060202:105", "purpose": "izhs"}
+    )
+    second = r.headers["location"]
+    page2 = client.get(second)
+    assert "новых для вас: 1" in page2.text  # 105 новый, 101 уже был
+    with session() as db:
+        check = db.get(Check, int(second.rsplit("/", 1)[1]))
+        items = {i.cad_num: i.data["history"] for i in check.items}
+    assert items["50:09:0060202:105"]["is_new"] and not items["50:09:0060202:105"]["seen_before"]
+    assert (
+        items["50:09:0060202:101"]["seen_before"] and items["50:09:0060202:101"]["changed"] is False
+    )
+    # повтор запрашивает данные заново: флаг ставится и снимается после завершения
+    captured = {}
+    import landcheck.web.jobs as jobs_mod
+
+    orig = jobs_mod.check_batch
+
+    def spy(*a, **kw):
+        captured["refresh"] = kw.get("refresh")
+        return orig(*a, **kw)
+
+    jobs_mod.check_batch = spy
+    try:
+        assert client.post(second + "/rerun").status_code == 303
+    finally:
+        jobs_mod.check_batch = orig
+    assert captured["refresh"] is True
+    with session() as db:
+        check = db.get(Check, int(second.rsplit("/", 1)[1]))
+        assert "refresh" not in check.request and check.status == "done"
+
+
+def test_report_distinguishes_fetch_error_from_not_found(client: TestClient, fixtures_dir: Path):
+    login(client)
+    import json
+
+    from tests.helpers import make_payload
+
+    (fixtures_dir / "50_09_0060202_777.json").write_text(
+        json.dumps(make_payload("50:09:0060202:777", found=False, errors=["timeout"])),
+        encoding="utf-8",
+    )
+    r = client.post("/checks", data={"numbers": "50:09:0060202:777\n50:09:0060202:999"})
+    url = r.headers["location"]
+    err = client.get(url + "/items/50:09:0060202:777").text
+    nf = client.get(url + "/items/50:09:0060202:999").text
+    assert "не получены" in err and "не найден." not in err
+    assert "не найден." in nf and "не получены" not in nf
+
+
+def test_login_rate_limit_and_photo_signature(client: TestClient):
+    from landcheck.web import auth
+
+    auth._ATTEMPTS.clear()
+    for _ in range(auth.ATTEMPT_LIMIT):
+        assert client.post("/login", data={"code": "LC-BAD", "name": "x"}).status_code == 200
+    assert client.post("/login", data={"code": "LC-BAD", "name": "x"}).status_code == 429
+    auth._ATTEMPTS.clear()
+    login(client)
+    fake_jpg = ("fake.jpg", b"not an image at all", "image/jpeg")
+    real_png = ("ok.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 32, "image/png")
+    r = client.post(
+        "/listing",
+        data={"cad_num": "50:09:0060202:101", "notes": "лес рядом"},
+        files=[("photos", fake_jpg), ("photos", real_png)],
+    )
+    assert r.status_code == 303
+    page = client.get(r.headers["location"]).text
+    assert "Не приняты файлы" in page and "fake.jpg" in page and "Фото (1)" in page
+
+
+def test_resume_pending_reenqueues(client: TestClient, monkeypatch):
+    login(client)
+    from landcheck.web import jobs
+    from landcheck.web.db import Check, session
+
+    with session() as db:
+        stuck = Check(
+            user_id=1, title="зависла", request={}, input_text="50:09:0060202:101", status="running"
+        )
+        db.add(stuck)
+        db.commit()
+        stuck_id = stuck.id
+    seen: list[int] = []
+    monkeypatch.setattr(jobs, "enqueue", lambda cid: seen.append(cid))
+    assert jobs.resume_pending() == 1 and seen == [stuck_id]

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from typing import Any
 from xml.sax.saxutils import escape
 
@@ -22,6 +21,42 @@ AVITO_OBJECT_TYPES = {
     "snt": "Сельхозназначения (СНТ, ДНП)",
     "industry": "Промназначения",
 }
+
+
+@dataclass
+class ParcelFacts:
+    """Минимум фактов участка для повторной проверки текста после правок (хранится в БД)."""
+
+    cad_num: str
+    category: str | None
+    permitted_use: str | None
+    permitted_use_all: str
+    best_area_m2: float | None
+    has_borders: bool
+    zouit_count: int
+    cadastral_cost_rub: float | None
+    fetched_at: str | None = None
+
+    @classmethod
+    def from_parcel(cls, p: Parcel) -> ParcelFacts:
+        return cls(
+            cad_num=p.cad_num,
+            category=p.category,
+            permitted_use=p.permitted_use,
+            permitted_use_all=p.permitted_use_all,
+            best_area_m2=p.best_area_m2,
+            has_borders=p.has_borders,
+            zouit_count=len(p.zouit),
+            cadastral_cost_rub=p.cadastral_cost_rub,
+            fetched_at=p.fetched_at.isoformat(),
+        )
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> ParcelFacts:
+        return cls(**{k: d.get(k) for k in cls.__dataclass_fields__})  # type: ignore[arg-type]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {k: getattr(self, k) for k in self.__dataclass_fields__}
 
 
 @dataclass
@@ -63,38 +98,47 @@ def _fmt_sotka(m2: float | None) -> str | None:
     return f"{v:.0f}" if abs(v - round(v)) < 0.05 else f"{v:.1f}"
 
 
-def contradictions(parcel: Parcel, notes: str, price_rub: float | None) -> list[str]:
-    """Утверждения в заметках продавца, которые расходятся с кадастром."""
+def contradictions(f: ParcelFacts, text: str, price_rub: float | None) -> list[str]:
+    """Утверждения в тексте (заметки продавца или готовое объявление), которые расходятся с кадастром."""
     out: list[str] = []
-    t = (notes or "").lower()
-    cls = category_class(parcel.category)
+    t = (text or "").lower()
+    cls = category_class(f.category)
     if ("ижс" in t or "под дом" in t or "построить дом" in t) and cls == "agri":
-        out.append("в заметках ИЖС / дом, а по НСПД земля сельхозназначения — писать «ИЖС» нельзя")
+        out.append("в тексте ИЖС / дом, а по НСПД земля сельхозназначения — писать «ИЖС» нельзя")
     if (
-        ("ижс" in t)
-        and parcel.permitted_use_all
-        and vri_match(Purpose.IZHS, parcel.permitted_use_all) == "conflict"
+        "ижс" in t
+        and f.permitted_use_all
+        and vri_match(Purpose.IZHS, f.permitted_use_all) == "conflict"
     ):
+        out.append(f"в тексте ИЖС, а ВРИ по НСПД «{f.permitted_use}» — указать фактический ВРИ")
+    if f.best_area_m2:
+        actual = f.best_area_m2 / SOTKA_M2
+        for m in re.finditer(r"(\d+(?:[.,]\d+)?)\s*сот", t):
+            claimed = float(m.group(1).replace(",", "."))
+            if actual and abs(claimed - actual) / actual > 0.1:
+                out.append(
+                    f"в тексте {claimed:g} сот., по ЕГРН {actual:.1f} сот. — в объявление идёт площадь ЕГРН"
+                )
+                break
+    if ("межеван" in t or "границы установлены" in t) and not f.has_borders:
+        out.append("в тексте межевание сделано, а в ЕГРН границы не установлены")
+    if "без обременений" in t and f.zouit_count:
         out.append(
-            f"в заметках ИЖС, а ВРИ по НСПД «{parcel.permitted_use}» — указать фактический ВРИ"
+            f"в тексте «без обременений», а участок пересекает {f.zouit_count} ЗОУИТ — не обещать"
         )
-    m = re.search(r"(\d+(?:[.,]\d+)?)\s*сот", t)
-    if m and parcel.best_area_m2:
-        claimed = float(m.group(1).replace(",", "."))
-        actual = parcel.best_area_m2 / SOTKA_M2
-        if actual and abs(claimed - actual) / actual > 0.1:
-            out.append(
-                f"в заметках {claimed:g} сот., по ЕГРН {actual:.1f} сот. — в объявление идёт площадь ЕГРН"
-            )
-    if ("межеван" in t or "границы установлены" in t) and not parcel.has_borders:
-        out.append("в заметках межевание сделано, а в ЕГРН границы не установлены")
-    if "без обременений" in t and parcel.zouit:
-        out.append(
-            f"в заметках «без обременений», а участок пересекает {len(parcel.zouit)} ЗОУИТ — не обещать"
-        )
-    if price_rub and parcel.cadastral_cost_rub and price_rub < 0.3 * parcel.cadastral_cost_rub:
+    if price_rub and f.cadastral_cost_rub and price_rub < 0.3 * f.cadastral_cost_rub:
         out.append(
             "цена ниже 30% кадастровой стоимости — покупатели заподозрят подвох, проверьте цифру"
+        )
+    return out
+
+
+def static_warnings(f: ParcelFacts) -> list[str]:
+    """Предупреждения по самому участку, не зависящие от текста."""
+    out: list[str] = []
+    if not f.has_borders:
+        out.append(
+            "без межевания сделку не зарегистрируют (487-ФЗ) — сначала межевание, потом продажа"
         )
     return out
 
@@ -166,17 +210,14 @@ def build_draft(
             + ". Уточняйте перед строительством."
         )
     paragraphs.append(
-        "Проверка по открытым данным НСПД на "
-        + datetime.now(UTC).strftime("%d.%m.%Y")
+        "Данные НСПД от "
+        + parcel.fetched_at.strftime("%d.%m.%Y")
         + ". Документы покажем при осмотре."
     )
     description = "\n\n".join(paragraphs)
 
-    warnings = contradictions(parcel, notes, price_rub)
-    if not parcel.has_borders:
-        warnings.append(
-            "без межевания сделку не зарегистрируют (487-ФЗ) — сначала межевание, потом продажа"
-        )
+    pf = ParcelFacts.from_parcel(parcel)
+    warnings = contradictions(pf, description, price_rub) + static_warnings(pf)
     return Draft(
         cad_num=parcel.cad_num,
         title=title[:50] if len(title) > 50 else title,

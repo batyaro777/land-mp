@@ -60,8 +60,14 @@ class MonitorReport:
 def load_reference(path: str | Path) -> list[str]:
     from landcheck.inputs import CAD_RE, normalize_cad_num
 
-    text = Path(path).read_text(encoding="utf-8")
-    return [normalize_cad_num(m.group(0)) for m in CAD_RE.finditer(text)]
+    out: list[str] = []
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        body = line.split("#", 1)[0]  # комментарии после # не считаем
+        for m in CAD_RE.finditer(body):
+            cn = normalize_cad_num(m.group(0))
+            if cn not in out:
+                out.append(cn)
+    return out
 
 
 def _option_keys(payload: dict[str, Any]) -> set[str]:

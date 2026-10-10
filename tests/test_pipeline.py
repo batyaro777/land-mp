@@ -72,6 +72,7 @@ class FlakyProvider:
 def test_cache_hit_and_stale_fallback(tmp_path: Path):
     cache = ParcelCache(tmp_path / "c.sqlite", ttl_days=7)
     payload = make_payload("50:09:0060202:101")
+    payload["provider"] = "nspd"  # живой ответ; фикстурные payload в кэш не пишутся
     prov = FlakyProvider(payload)
     p1, e1 = fetch_payload("50:09:0060202:101", prov, cache)
     p2, e2 = fetch_payload("50:09:0060202:101", prov, cache)
@@ -90,3 +91,31 @@ def test_fixture_provider_missing_file_is_not_found_with_error(tmp_path: Path):
     assert payload["found"] is False and payload["errors"]
     saved = prov.save(make_payload("50:09:0060202:2"))
     assert json.loads(saved.read_text(encoding="utf-8"))["found"] is True
+
+
+def test_fixture_payloads_never_cached_or_served_as_live(tmp_path: Path, fixtures_dir: Path):
+    cache = ParcelCache(tmp_path / "c.sqlite", ttl_days=7)
+    fx = FixtureProvider(fixtures_dir)
+    p1, _ = fetch_payload("50:09:0060202:101", fx, cache)
+    assert p1["found"] and cache.stats()["total"] == 0  # фикстура в кэш не попала
+    # даже если фикстурный payload оказался в кэше, живой провайдер его не возьмёт
+    cache.put("50:09:0060202:101", make_payload("50:09:0060202:101"))
+    live = FlakyProvider({**make_payload("50:09:0060202:101"), "provider": "nspd"})
+    live.name = "nspd"
+    p2, _ = fetch_payload("50:09:0060202:101", live, cache)
+    assert live.calls == 1 and p2["provider"] == "nspd"
+    cache.close()
+
+
+def test_load_reference_ignores_comments(tmp_path: Path):
+    from landcheck.monitor import load_reference
+
+    f = tmp_path / "ref.txt"
+    f.write_text(
+        "# исключён 77:09:0005008:11446\n77:05:0001005:19  # Москва\n63:01:0810003:510\n77:05:0001005:19\n",
+        encoding="utf-8",
+    )
+    assert load_reference(f) == ["77:05:0001005:19", "63:01:0810003:510"]
+    from pathlib import Path as P
+
+    assert load_reference(P("data/reference_cns.txt")) == ["77:05:0001005:19", "63:01:0810003:510"]

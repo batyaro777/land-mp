@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import threading
+import time
+
 from fastapi import Request
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 
@@ -30,3 +33,24 @@ def current_user(request: Request) -> User | None:
         return None
     with session() as db:
         return db.get(User, int(data["uid"]))
+
+
+# --- ограничение попыток входа: 10 неудачных за 10 минут с одного адреса ------------------
+
+_ATTEMPTS: dict[str, list[float]] = {}
+_ATTEMPTS_LOCK = threading.Lock()
+ATTEMPT_LIMIT = 10
+ATTEMPT_WINDOW = 600.0
+
+
+def too_many_attempts(ip: str) -> bool:
+    now = time.monotonic()
+    with _ATTEMPTS_LOCK:
+        stamps = [t for t in _ATTEMPTS.get(ip, []) if now - t < ATTEMPT_WINDOW]
+        _ATTEMPTS[ip] = stamps
+        return len(stamps) >= ATTEMPT_LIMIT
+
+
+def record_failed_attempt(ip: str) -> None:
+    with _ATTEMPTS_LOCK:
+        _ATTEMPTS.setdefault(ip, []).append(time.monotonic())

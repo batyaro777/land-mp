@@ -21,7 +21,14 @@ from landcheck.intent import parse_request
 from landcheck.models import SOTKA_M2, BatchResult, Purpose
 from landcheck.models import Request as CheckRequest
 from landcheck.web import jobs
-from landcheck.web.auth import COOKIE, MAX_AGE, current_user, make_token
+from landcheck.web.auth import (
+    COOKIE,
+    MAX_AGE,
+    current_user,
+    make_token,
+    record_failed_attempt,
+    too_many_attempts,
+)
 from landcheck.web.config import settings
 from landcheck.web.content import CHECKLIST, price_orientation
 from landcheck.web.db import Check, CheckItem, User, init_db, redeem_invite, session
@@ -60,6 +67,9 @@ def create_app() -> FastAPI:
     uploads.mkdir(parents=True, exist_ok=True)
     app.mount("/uploads", StaticFiles(directory=str(uploads)), name="uploads")
     app.include_router(router)
+    resumed = jobs.resume_pending()
+    if resumed:
+        log.warning("возобновлено незавершённых проверок после рестарта: %s", resumed)
     return app
 
 
@@ -79,10 +89,10 @@ def require_user(request: Request) -> User:
 UserDep = Annotated[User, Depends(require_user)]
 
 
-def render(request: Request, name: str, **ctx: Any) -> HTMLResponse:
+def render(request: Request, name: str, status_code: int = 200, **ctx: Any) -> HTMLResponse:
     ctx.setdefault("user", current_user(request))
     ctx["request"] = request
-    return templates.TemplateResponse(request, name, ctx)
+    return templates.TemplateResponse(request, name, ctx, status_code=status_code)
 
 
 def _own_check(db, user: User, check_id: int) -> Check:
@@ -120,9 +130,19 @@ def login(
     contact: Annotated[str, Form()] = "",
     brand_name: Annotated[str, Form()] = "",
 ):
+    ip = request.client.host if request.client else "?"
+    if too_many_attempts(ip):
+        return render(
+            request,
+            "login.html",
+            error="Слишком много попыток. Подождите 10 минут.",
+            user=None,
+            status_code=429,
+        )
     with session() as db:
         user = redeem_invite(db, code, name or "Брокер", contact, brand_name)
     if user is None:
+        record_failed_attempt(ip)
         return render(request, "login.html", error="Код не найден. Проверьте написание.", user=None)
     resp = RedirectResponse("/", status_code=303)
     resp.set_cookie(COOKIE, make_token(user.id), max_age=MAX_AGE, httponly=True, samesite="lax")
@@ -208,10 +228,12 @@ async def create_check(
             user=user,
         )
     req = parse_request(query) if query.strip() else CheckRequest()
-    try:
-        req.purpose = Purpose(purpose)
-    except ValueError:
-        pass
+    # Явный выбор в форме главнее запроса словами; «any» по умолчанию ничего не затирает.
+    if purpose and purpose != Purpose.ANY.value:
+        try:
+            req.purpose = Purpose(purpose)
+        except ValueError:
+            pass
     if budget.strip():
         from landcheck.inputs import parse_number
 
@@ -282,6 +304,9 @@ def check_page(
     with session() as db:
         check = _own_check(db, user, check_id)
         items = _filtered_items(check, verdict, sort) if check.status == "done" else []
+        hist = [i.data.get("history") or {} for i in check.items]
+        new_count = sum(1 for h in hist if h.get("is_new"))
+        changed_count = sum(1 for h in hist if h.get("changed"))
         return render(
             request,
             "check.html",
@@ -290,6 +315,8 @@ def check_page(
             verdict=verdict,
             sort=sort,
             counts=(check.stats or {}).get("counts") or {},
+            new_count=new_count,
+            changed_count=changed_count,
             user=user,
         )
 
@@ -318,6 +345,7 @@ def check_rerun(user: UserDep, check_id: int):
     with session() as db:
         check = _own_check(db, user, check_id)
         check.status, check.done, check.error = "queued", 0, None
+        check.request = {**check.request, "refresh": True}
         db.commit()
     jobs.enqueue(check_id)
     return RedirectResponse(f"/checks/{check_id}", status_code=303)
@@ -439,6 +467,33 @@ def single_create(
 
 
 # --- listing composer (М3) ----------------------------------------------------------------
+MAX_PHOTOS = 10
+MAX_PHOTO_BYTES = 10 * 1024 * 1024
+
+
+def _image_kind(raw: bytes) -> str | None:
+    """Тип по сигнатуре файла, а не по расширению."""
+    if raw[:3] == b"\xff\xd8\xff":
+        return "jpg"
+    if raw[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png"
+    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
+def _listing_warnings(data: dict[str, Any]) -> list[str]:
+    """Противоречия конечного текста с кадастром плюс предупреждения по участку."""
+    from landcheck.listing import ParcelFacts, contradictions, static_warnings
+
+    pf_raw = data.get("parcel_facts")
+    if not pf_raw:
+        return list(data.get("warnings") or [])
+    pf = ParcelFacts.from_dict(pf_raw)
+    text = f"{data.get('title') or ''}\n{data.get('description') or ''}"
+    return contradictions(pf, text, data.get("price_rub")) + static_warnings(pf)
+
+
 def _fetch_parcel_now(cad_num: str, *, refresh: bool = False):
     from landcheck.cache import ParcelCache
     from landcheck.normalize import parcel_from_payload
@@ -477,7 +532,7 @@ async def listing_create(
     photos: Annotated[list[UploadFile] | None, File()] = None,
 ):
     from landcheck.inputs import parse_number
-    from landcheck.listing import build_draft
+    from landcheck.listing import ParcelFacts, build_draft
     from landcheck.web.db import Listing as ListingRow
 
     m = CAD_RE.search(cad_num)
@@ -498,17 +553,20 @@ async def listing_create(
         db.flush()
         # фото: сохраняем в data/uploads/<id>/ и отдаём по /uploads/...
         image_paths: list[str] = []
+        skipped: list[str] = []
         if photos:
             updir = settings.db_path.parent / "uploads" / str(row.id)
             updir.mkdir(parents=True, exist_ok=True)
-            for i, ph in enumerate(photos, start=1):
+            for i, ph in enumerate(photos[:MAX_PHOTOS], start=1):
                 if not ph.filename:
                     continue
-                suffix = Path(ph.filename).suffix.lower()
-                if suffix not in (".jpg", ".jpeg", ".png", ".webp"):
+                raw = await ph.read(MAX_PHOTO_BYTES + 1)
+                kind = _image_kind(raw)
+                if kind is None or len(raw) > MAX_PHOTO_BYTES:
+                    skipped.append(ph.filename)
                     continue
-                target = updir / f"{i:02d}{suffix}"
-                target.write_bytes(await ph.read())
+                target = updir / f"{i:02d}.{kind}"
+                target.write_bytes(raw)
                 image_paths.append(f"/uploads/{row.id}/{target.name}")
         row.data = {
             "title": draft.title,
@@ -523,7 +581,9 @@ async def listing_create(
             "notes": notes,
             "phone": phone.strip(),
             "images": image_paths,
+            "skipped_photos": skipped,
             "fetch_errors": errors,
+            "parcel_facts": ParcelFacts.from_parcel(parcel).to_dict(),
         }
         db.commit()
         listing_id = row.id
@@ -566,18 +626,31 @@ def listing_update(
             v = parse_number(price)
             data["price_rub"] = v * 1_000_000 if v is not None and v < 1000 else v
         data["phone"] = phone.strip()
+        data["warnings"] = _listing_warnings(data)
         row.data = data
         db.commit()
     return RedirectResponse(f"/listing/{listing_id}", status_code=303)
 
 
 @router.get("/listing/{listing_id}/avito.xml")
-def listing_xml(user: UserDep, listing_id: int):
+def listing_xml(request: Request, user: UserDep, listing_id: int):
     from landcheck.listing import Draft, avito_xml
 
     with session() as db:
         row = _own_listing(db, user, listing_id)
         d = row.data
+        problems = _listing_warnings(d)
+        if problems:
+            return render(
+                request,
+                "error.html",
+                message=(
+                    "Выгрузка заблокирована: в тексте есть утверждения, "
+                    "противоречащие кадастру. " + " · ".join(problems)
+                ),
+                user=user,
+                status_code=409,
+            )
         draft = Draft(
             cad_num=row.cad_num,
             title=d["title"],

@@ -7,8 +7,9 @@
 </hgroup>
 {% if d.warnings %}
 <article class="flag check">
-  <strong>Проверьте перед публикацией</strong>
+  <strong>Выгрузка заблокирована, пока текст противоречит кадастру</strong>
   <ul>{% for w in d.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+  <p class="small muted">Исправьте текст и нажмите «Сохранить правки» — проверка повторится.</p>
 </article>
 {% endif %}
 <div class="grid two">
@@ -33,7 +34,8 @@
   <div class="photos">{% for img in d.images %}<img src="{{ img }}" alt="">{% endfor %}</div>
   {% endif %}
   <h4>Выгрузка</h4>
-  <p><a href="/listing/{{ row.id }}/avito.xml" role="button" class="sm">Скачать Avito XML</a>
+  {% if d.skipped_photos %}<p class="small err">Не приняты файлы (не изображение или больше 10 МБ): {{ d.skipped_photos|join(', ') }}</p>{% endif %}
+  <p>{% if d.warnings %}<button class="sm" disabled title="Сначала уберите противоречия">Скачать Avito XML</button>{% else %}<a href="/listing/{{ row.id }}/avito.xml" role="button" class="sm">Скачать Avito XML</a>{% endif %}
      <button class="outline sm" onclick="navigator.clipboard.writeText(document.querySelector('textarea[name=description]').value);this.textContent='Текст скопирован'">Скопировать текст</button></p>
   <p class="muted small">Файл для автозагрузки Avito: нужен подключённый тариф, перед первой загрузкой прогоните файл через проверку XML в кабинете автозагрузки. Фото попадут в XML только при публичном адресе сервиса.</p>
   <p class="small"><a href="/single">Полный отчёт по этому участку</a></p>

@@ -29,12 +29,14 @@
     <div>
       <a href="/checks/{{ check.id }}/export.xlsx" role="button" class="sm">Скачать XLSX</a>
       <a href="/checks/{{ check.id }}/export.csv" role="button" class="outline sm">CSV</a>
+      <button class="outline sm" onclick="window.print()">Печать / PDF</button>
       <form method="post" action="/checks/{{ check.id }}/rerun" class="inline"><button class="outline secondary sm" title="Запросить НСПД заново">Обновить данные</button></form>
       <form method="post" action="/checks/{{ check.id }}/delete" class="inline" onsubmit="return confirm('Удалить подборку?')"><button class="outline secondary sm">Удалить</button></form>
     </div>
   </div>
   <p class="muted small">Проверено за {{ st.get('seconds') }} с{% if st.get('median_price_per_sotka') %} · медиана по подборке {{ st.get('median_price_per_sotka')|money }} за сотку{% endif %}.
-  {% if st.get('errors') %}<span class="err">Ошибок получения данных: {{ st.get('errors')|length }}.</span>{% endif %}</p>
+  {% if st.get('errors') %}<span class="err">Ошибок получения данных: {{ st.get('errors')|length }}.</span>{% endif %}
+  {% if new_count %} · новых для вас: {{ new_count }}{% endif %}{% if changed_count %} · <span class="err">вердикт изменился: {{ changed_count }}</span>{% endif %}</p>
 
   <div class="table-wrap">
   <table class="results">
@@ -48,7 +50,9 @@
         <td class="muted">{{ loop.index }}</td>
         <td><a href="/checks/{{ check.id }}/items/{{ it.cad_num }}"><code>{{ it.cad_num }}</code></a>
           {% if d.listing.url %}<br><a href="{{ d.listing.url }}" target="_blank" rel="noopener" class="small muted">объявление</a>{% endif %}
-          {% if d.duplicates %}<br><span class="small muted">в {{ d.duplicates|length + 1 }} объявлениях</span>{% endif %}</td>
+          {% if d.duplicates %}<br><span class="small muted">в {{ d.duplicates|length + 1 }} объявлениях</span>{% endif %}
+          {% set h = d.get('history') or {} %}
+          {% if h.get('is_new') %}<br><span class="badge">новый</span>{% elif h.get('changed') %}<br><span class="badge v-check" title="{{ h.get('prev_title') }}">было: {{ h.get('prev_verdict') }}</span>{% endif %}</td>
         <td><span class="badge v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[it.verdict] }}">{{ it.verdict }}</span></td>
         <td class="reasons">
           <ul>
