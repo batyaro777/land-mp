@@ -92,7 +92,14 @@ def make_payload(
     }
 
 
-def zone(layer: str, reg: str, kind: str | None = None, name: str | None = None) -> dict[str, Any]:
+def zone(
+    layer: str,
+    reg: str,
+    kind: str | None = None,
+    name: str | None = None,
+    restrictions: str | None = None,
+) -> dict[str, Any]:
+    """Структура как в реальном ответе НСПД (type_zone, name_by_doc, reg_numb_border)."""
     return {
         "type": "Feature",
         "id": 1,
@@ -100,6 +107,11 @@ def zone(layer: str, reg: str, kind: str | None = None, name: str | None = None)
         "properties": {
             "category": 36940,
             "categoryName": layer,
-            "options": {"reg_numb_border": reg, "type": kind, "name": name},
+            "options": {
+                "reg_numb_border": reg,
+                "type_zone": kind,
+                "name_by_doc": name,
+                "content_restrict_encumbrances": restrictions,
+            },
         },
     }

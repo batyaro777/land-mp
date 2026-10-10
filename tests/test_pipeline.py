@@ -48,7 +48,7 @@ def test_exports(fixtures_dir: Path, sample_csv: Path, tmp_path: Path):
     from openpyxl import load_workbook
 
     wb = load_workbook(xlsx)
-    assert wb.sheetnames == ["Подборка", "Флаги", "Источники и поля", "О проверке"]
+    assert wb.sheetnames == ["Подборка", "Флаги", "ЗОУИТ", "Источники и поля", "О проверке"]
     assert wb["Подборка"].max_row == 10
     csv_text = to_csv(batch)
     assert csv_text.count("\n") == 10

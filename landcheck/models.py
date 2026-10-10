@@ -89,17 +89,37 @@ class Listing:
 
 @dataclass
 class ZoneHit:
-    """Пересечение участка с зоной (ЗОУИТ или территориальная зона)."""
+    """Пересечение участка с зоной (ЗОУИТ или территориальная зона).
+
+    Поля по реальному ответу НСПД: ``type_zone`` → kind, ``name_by_doc`` → name,
+    ``reg_numb_border`` → reg_number, ``content_restrict_encumbrances`` → restrictions.
+    """
 
     layer: str  # название слоя НСПД
     reg_number: str | None = None
     kind: str | None = None
     name: str | None = None
+    restrictions: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
-    def describe(self) -> str:
-        parts = [p for p in (self.kind, self.name, self.reg_number) if p]
-        return f"{self.layer}: {' · '.join(parts)}" if parts else self.layer
+    @property
+    def layer_short(self) -> str:
+        lo = self.layer.lower()
+        if "особыми условиями" in lo or "зоуит" in lo:
+            return "ЗОУИТ"
+        if "территориальн" in lo:
+            return "терзона"
+        return self.layer
+
+    def describe(self, max_len: int = 120) -> str:
+        """Одна строка для таблицы: вид · название (реестровый номер)."""
+        parts = [p for p in (self.kind, self.name) if p]
+        text = " · ".join(parts) if parts else self.layer_short
+        if self.reg_number:
+            text = f"{text} ({self.reg_number})"
+        if len(text) > max_len:
+            text = text[: max_len - 1] + "…"
+        return text
 
 
 @dataclass

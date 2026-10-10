@@ -12,6 +12,7 @@ dependencies = [
     "openpyxl>=3.1.5",
     "typer>=0.15",
     "rich>=13",
+    "socksio>=1.0",
 ]
 
 [project.optional-dependencies]

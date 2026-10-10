@@ -61,16 +61,19 @@ def _zone_hit(feature: dict[str, Any]) -> ZoneHit:
     opts = props.get("options") or {}
     layer = _get(props, "category_name", default="ЗОУИТ")
     reg = _get(opts, "reg_numb_border", "brd_nmb", "registration_number", "reg_number")
-    kind = _get(opts, "type", "obj_kind_value", "zone_type", "type_zone", "kind")
-    name = _get(
-        opts, "name", "name_zone", "zone_name", "description", "content_restrict_encumbrances"
+    kind = _get(opts, "type_zone", "type", "obj_kind_value", "zone_type", "kind")
+    name = _get(opts, "name_by_doc", "name", "name_zone", "zone_name", "description")
+    restrictions = _get(opts, "content_restrict_encumbrances", "restrictions")
+    skip = ("geocoderObject", "objdocId", "registersId")
+    extra = {k: v for k, v in opts.items() if k not in skip and v not in (None, "")}
+    return ZoneHit(
+        layer=str(layer),
+        reg_number=reg,
+        kind=kind,
+        name=name,
+        restrictions=restrictions,
+        extra=extra,
     )
-    if name is None:
-        name = _get(props, "descr", "label")
-    extra = {
-        k: v for k, v in opts.items() if k not in ("geocoderObject", "objdocId", "registersId")
-    }
-    return ZoneHit(layer=str(layer), reg_number=reg, kind=kind, name=name, extra=extra)
 
 
 def parcel_from_payload(payload: dict[str, Any]) -> Parcel:
@@ -104,7 +107,7 @@ def parcel_from_payload(payload: dict[str, Any]) -> Parcel:
         category=_get(opts, "land_record_category_type"),
         permitted_use=_get(opts, "permitted_use_established_by_document"),
         permitted_use_tab=[str(x) for x in (payload.get("permission_types") or []) if x],
-        area_m2=_to_float(_get(opts, "area")),
+        area_m2=_to_float(_get(opts, "area", "land_record_area")),
         specified_area_m2=_to_float(_get(opts, "specified_area")),
         declared_area_m2=_to_float(_get(opts, "declared_area")),
         cadastral_cost_rub=_to_float(_get(opts, "cost_value")),

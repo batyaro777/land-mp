@@ -143,7 +143,7 @@ def test_public_ownership_is_check():
         run(make_payload("x", ownership="Собственность публично-правовых образований"))["R12"].level
         is Level.CHECK
     )
-    assert run(make_payload("x", ownership=None))["R12"].level is Level.CHECK
+    assert run(make_payload("x", ownership=None))["R12"].level is Level.OK
     assert "R12" not in run(make_payload("x", ownership="Частная собственность"))
 
 
@@ -157,3 +157,21 @@ def test_budget_and_area_range_are_info():
 def test_stale_data_is_info():
     p = make_payload("x", fetched_at=datetime.now(UTC) - timedelta(days=30))
     assert run(p)["R16"].level is Level.OK
+
+
+def test_sanitary_zone_is_stop_for_housing_but_check_for_industry():
+    p = make_payload(
+        "x",
+        zouit=[
+            zone(
+                "Зоны с особыми условиями использования территории",
+                "63:01-6.5119",
+                "Санитарно-защитная зона предприятий, сооружений и иных объектов",
+                "СЗЗ АО «Пример»",
+            )
+        ],
+        tz=[zone("Территориальные зоны", "63:01-7.1")],
+    )
+    assert run(p)["R10"].level is Level.STOP
+    assert run(p, request=Request(purpose=Purpose.INDUSTRY))["R10"].level is Level.CHECK
+    assert "СанПиН" in run(p)["R10"].source

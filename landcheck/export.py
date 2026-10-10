@@ -213,6 +213,17 @@ def to_xlsx(batch: BatchResult, path: str | Path) -> Path:
     for col, w in zip("ABCDE", [20, 8, 11, 90, 70], strict=True):
         wf.column_dimensions[col].width = w
 
+    wz = wb.create_sheet("ЗОУИТ")
+    wz.append(["Кадастровый номер", "Вид зоны", "Наименование", "Реестровый номер", "Ограничения"])
+    for cell in wz[1]:
+        cell.font = Font(bold=True)
+    for r in batch.results:
+        for z in r.parcel.zouit:
+            wz.append([r.listing.cad_num, z.kind, z.name, z.reg_number, z.restrictions])
+            wz.cell(row=wz.max_row, column=5).alignment = Alignment(wrap_text=True, vertical="top")
+    for col, w in zip("ABCDE", [20, 36, 50, 18, 120], strict=True):
+        wz.column_dimensions[col].width = w
+
     wsrc = wb.create_sheet("Источники и поля")
     wsrc.append(["Кадастровый номер", "Поле", "Значение", "Источник", "Получено"])
     for cell in wsrc[1]:

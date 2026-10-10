@@ -251,21 +251,78 @@ def r09_price_vs_median(ctx: RuleContext):
     return None
 
 
+ZOUIT_SEVERITY: tuple[tuple[str, Level, str], ...] = (
+    # (подстрока в type_zone/name, уровень для жилых целей, пояснение)
+    ("санитарно-защитн", Level.STOP, "жилая застройка в санитарно-защитной зоне запрещена"),
+    ("затоплен", Level.STOP, "зона затопления: строительство без защитных сооружений запрещено"),
+    ("подтоплен", Level.CHECK, "зона подтопления: строительство с инженерной защитой"),
+    ("приаэродром", Level.CHECK, "приаэродромная территория: согласование строительства"),
+    ("водоохран", Level.CHECK, "водоохранная зона: ограничения на строительство и стоки"),
+    ("прибрежн", Level.CHECK, "прибрежная защитная полоса: распашка и застройка ограничены"),
+    (
+        "культурного наследия",
+        Level.CHECK,
+        "зона охраны ОКН: высотность и облик согласуются с органом охраны",
+    ),
+    (
+        "инженерных коммуникаций",
+        Level.CHECK,
+        "охранная зона сетей: строительство только по согласованию с сетевой организацией",
+    ),
+    ("электросет", Level.CHECK, "охранная зона электросетей: строительство только по согласованию"),
+    ("газопровод", Level.CHECK, "зона газопровода: минимальные расстояния до построек"),
+    ("кладбищ", Level.STOP, "санитарная зона кладбища: жильё запрещено"),
+)
+RESIDENTIAL = {"izhs", "lph", "snt"}
+SRC_SANPIN = "СанПиН 2.2.1/2.1.1.1200-03, п. 5.1: жилая застройка в СЗЗ не допускается"
+
+
+def _zouit_level(z, residential: bool) -> tuple[Level, str | None]:
+    text = f"{z.kind or ''} {z.name or ''}".lower()
+    for needle, level, note in ZOUIT_SEVERITY:
+        if needle in text:
+            if level is Level.STOP and not residential:
+                return Level.CHECK, note
+            return level, note
+    return Level.CHECK, None
+
+
 @rule("R10", "ЗОУИТ", "Пересечение с зонами с особыми условиями использования")
 def r10_zouit(ctx: RuleContext):
     p = ctx.parcel
-    if not p.found or not p.zouit_checked:
+    if not p.found or not p.zouit_checked or not p.zouit:
         return None
-    if not p.zouit:
-        return None
-    names = "; ".join(z.describe() for z in p.zouit[:4])
+    residential = ctx.request.purpose.value in RESIDENTIAL
+    worst = Level.CHECK
+    notes: list[str] = []
+    for z in p.zouit:
+        level, note = _zouit_level(z, residential)
+        if level.rank > worst.rank:
+            worst = level
+        if note and note not in notes:
+            notes.append(note)
+    names = "; ".join(z.describe(max_len=90) for z in p.zouit[:4])
     more = f" и ещё {len(p.zouit) - 4}" if len(p.zouit) > 4 else ""
+    tail = ("; ".join(notes)) if notes else "ограничения на строительство"
+    source = SRC_NSPD_ZOUIT + "; " + SRC_LAW_ZOUIT
+    if worst is Level.STOP:
+        source += "; " + SRC_SANPIN
     return Flag(
         "R10",
-        Level.CHECK,
-        f"участок пересекает ЗОУИТ ({len(p.zouit)}): {names}{more} — уточнить ограничения на строительство",
-        SRC_NSPD_ZOUIT + "; " + SRC_LAW_ZOUIT,
-        {"zouit": [z.describe() for z in p.zouit]},
+        worst,
+        f"участок пересекает ЗОУИТ ({len(p.zouit)}): {names}{more} — {tail}, текст на листе «ЗОУИТ»",
+        source,
+        {
+            "zouit": [
+                {
+                    "kind": z.kind,
+                    "name": z.name,
+                    "reg_number": z.reg_number,
+                    "restrictions": z.restrictions,
+                }
+                for z in p.zouit
+            ]
+        },
     )
 
 
@@ -300,8 +357,8 @@ def r12_ownership(ctx: RuleContext):
     if not o:
         return Flag(
             "R12",
-            Level.CHECK,
-            "форма собственности в НСПД не указана: права могут быть не зарегистрированы, запросить выписку ЕГРН",
+            Level.OK,
+            "форма собственности в карточке НСПД не указана (обычно для НСПД): собственника смотреть по выписке ЕГРН",
             SRC_NSPD,
         )
     if "частн" in o:
