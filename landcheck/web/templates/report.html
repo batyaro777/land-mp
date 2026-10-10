@@ -48,7 +48,7 @@
     {% if d.listing.price_rub %}<tr><th>Цена в объявлении</th><td>{{ d.listing.price_rub|money }}{% if d.price_per_sotka %} <span class="muted small">({{ d.price_per_sotka|money }} за сотку)</span>{% endif %}</td></tr>{% endif %}
     <tr><th>Форма собственности</th><td>{{ p.ownership_type or 'в карточке не указана' }}</td></tr>
     <tr><th>Вид участка</th><td>{{ p.land_record_subtype or p.land_record_type or '—' }}</td></tr>
-    <tr><th>Дата постановки на учёт</th><td>{{ p.reg_date|dt if p.reg_date else '—' }}</td></tr>
+    <tr><th>Дата постановки на учёт</th><td>{{ p.reg_date|day }}</td></tr>
     <tr><th>Территориальная зона</th><td>{% if not p.territorial_zone_checked %}не проверялась{% elif p.territorial_zones %}{% for z in p.territorial_zones %}{{ z.describe }}{% if not loop.last %}; {% endif %}{% endfor %}{% else %}в НСПД не найдена: ПЗЗ не опубликованы{% endif %}</td></tr>
     <tr><th>Источник</th><td class="small muted">{{ p.source }}, получено {{ p.fetched_at|dt }}</td></tr>
   </table>

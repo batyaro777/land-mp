@@ -151,6 +151,17 @@ def fmt_date(s: str | datetime | None) -> str:
         return s
 
 
+def fmt_day(s: str | datetime | None) -> str:
+    if not s:
+        return "—"
+    if isinstance(s, datetime):
+        return s.strftime("%d.%m.%Y")
+    try:
+        return datetime.fromisoformat(s).strftime("%d.%m.%Y")
+    except ValueError:
+        return s
+
+
 def flag_obj(d: dict[str, Any]) -> Flag:
     return Flag(d["rule_id"], Level(d["level"]), d["message"], d["source"], d.get("details") or {})
 

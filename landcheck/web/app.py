@@ -29,6 +29,7 @@ from landcheck.web.serialize import (
     LEVEL_RANK,
     flags_by_level,
     fmt_date,
+    fmt_day,
     fmt_money,
     fmt_sotka,
     request_from_dict,
@@ -42,6 +43,7 @@ templates = Jinja2Templates(directory=str(BASE / "templates"))
 templates.env.filters["money"] = fmt_money
 templates.env.filters["sotka"] = fmt_sotka
 templates.env.filters["dt"] = fmt_date
+templates.env.filters["day"] = fmt_day
 templates.env.globals.update(
     brand=settings.brand, version=__version__, Purpose=Purpose, disclaimer=DISCLAIMER
 )
