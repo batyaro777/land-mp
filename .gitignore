@@ -13,3 +13,5 @@ out/
 data/*.sqlite*
 data/uploads/
 .env
+data/.secret
+data/*.log
