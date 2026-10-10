@@ -1,0 +1,267 @@
+"""Доменные модели: заявка брокера, участок из НСПД с прослеживаемостью, флаги и вердикт."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import StrEnum
+from typing import Any, Generic, TypeVar
+
+T = TypeVar("T")
+
+SOTKA_M2 = 100.0  # 1 сотка = 100 м²
+
+
+class Purpose(StrEnum):
+    """Цель покупателя. Значения совпадают с аргументом CLI --purpose."""
+
+    IZHS = "izhs"  # индивидуальное жилищное строительство
+    LPH = "lph"  # личное подсобное хозяйство
+    SNT = "snt"  # садоводство / дача
+    RECREATION = "recreation"  # рекреация, туризм
+    COMMERCE = "commerce"  # торговля, услуги, офисы
+    INDUSTRY = "industry"  # производство, склады
+    ANY = "any"  # цель не задана — только проверка данных
+
+    @property
+    def label(self) -> str:
+        return PURPOSE_LABELS[self]
+
+
+PURPOSE_LABELS: dict[Purpose, str] = {
+    Purpose.IZHS: "ИЖС",
+    Purpose.LPH: "ЛПХ",
+    Purpose.SNT: "Садоводство / дача",
+    Purpose.RECREATION: "Рекреация",
+    Purpose.COMMERCE: "Коммерция",
+    Purpose.INDUSTRY: "Промышленность",
+    Purpose.ANY: "Без цели",
+}
+
+
+class Level(StrEnum):
+    """Уровень флага. Порядок важен: стоп > проверить > ок."""
+
+    STOP = "стоп"
+    CHECK = "проверить"
+    OK = "ок"
+
+    @property
+    def rank(self) -> int:
+        return {Level.STOP: 2, Level.CHECK: 1, Level.OK: 0}[self]
+
+
+@dataclass(frozen=True)
+class Sourced(Generic[T]):
+    """Значение с источником и моментом получения — требование прослеживаемости ТЗ."""
+
+    value: T
+    source: str
+    fetched_at: datetime
+
+    def __bool__(self) -> bool:  # pragma: no cover — удобство в условиях
+        return self.value is not None
+
+
+@dataclass
+class Listing:
+    """Строка подборки брокера: кадастровый номер и то, что заявлено в объявлении."""
+
+    cad_num: str
+    price_rub: float | None = None
+    declared_area_m2: float | None = None
+    url: str | None = None
+    note: str | None = None
+    raw_cad_num: str | None = None  # как было во входе до нормализации
+
+    @property
+    def declared_area_sotka(self) -> float | None:
+        if self.declared_area_m2 is None:
+            return None
+        return self.declared_area_m2 / SOTKA_M2
+
+    @property
+    def price_per_sotka(self) -> float | None:
+        if self.price_rub is None or not self.declared_area_m2:
+            return None
+        return self.price_rub / (self.declared_area_m2 / SOTKA_M2)
+
+
+@dataclass
+class ZoneHit:
+    """Пересечение участка с зоной (ЗОУИТ или территориальная зона)."""
+
+    layer: str  # название слоя НСПД
+    reg_number: str | None = None
+    kind: str | None = None
+    name: str | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    def describe(self) -> str:
+        parts = [p for p in (self.kind, self.name, self.reg_number) if p]
+        return f"{self.layer}: {' · '.join(parts)}" if parts else self.layer
+
+
+@dataclass
+class Parcel:
+    """Нормализованный участок из НСПД. Каждое поле знает, откуда оно."""
+
+    cad_num: str
+    found: bool
+    fetched_at: datetime
+    source: str = "НСПД, слой «Земельные участки из ЕГРН»"
+    address: str | None = None
+    status: str | None = None
+    category: str | None = None
+    permitted_use: str | None = None
+    permitted_use_tab: list[str] = field(default_factory=list)
+    area_m2: float | None = None
+    specified_area_m2: float | None = None
+    declared_area_m2: float | None = None
+    cadastral_cost_rub: float | None = None
+    cost_index_rub_m2: float | None = None
+    ownership_type: str | None = None
+    land_record_type: str | None = None
+    land_record_subtype: str | None = None
+    reg_date: datetime | None = None
+    has_borders: bool = False
+    geometry: dict[str, Any] | None = None  # GeoJSON EPSG:4326
+    zouit: list[ZoneHit] = field(default_factory=list)
+    zouit_checked: bool = False
+    territorial_zones: list[ZoneHit] = field(default_factory=list)
+    territorial_zone_checked: bool = False
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def best_area_m2(self) -> float | None:
+        """Площадь для расчётов: уточнённая > общая > декларированная."""
+        for v in (self.specified_area_m2, self.area_m2, self.declared_area_m2):
+            if v:
+                return v
+        return None
+
+    @property
+    def area_sotka(self) -> float | None:
+        a = self.best_area_m2
+        return a / SOTKA_M2 if a else None
+
+    @property
+    def cadastral_cost_per_sotka(self) -> float | None:
+        a = self.area_sotka
+        if self.cadastral_cost_rub is None or not a:
+            return None
+        return self.cadastral_cost_rub / a
+
+    @property
+    def permitted_use_all(self) -> str:
+        """Склеенный текст ВРИ из карточки и вкладки — для сопоставления с целью."""
+        parts = [self.permitted_use or "", *self.permitted_use_tab]
+        return " | ".join(p for p in parts if p)
+
+    def field_sources(self) -> dict[str, Sourced[Any]]:
+        """Прослеживаемость по полям для отчёта."""
+        ts = self.fetched_at
+        base = self.source
+        out: dict[str, Sourced[Any]] = {
+            "status": Sourced(self.status, base, ts),
+            "category": Sourced(self.category, base, ts),
+            "permitted_use": Sourced(self.permitted_use, base, ts),
+            "area_m2": Sourced(self.best_area_m2, base, ts),
+            "cadastral_cost_rub": Sourced(self.cadastral_cost_rub, base, ts),
+            "ownership_type": Sourced(self.ownership_type, base, ts),
+            "has_borders": Sourced(self.has_borders, base, ts),
+        }
+        if self.permitted_use_tab:
+            out["permitted_use_tab"] = Sourced(
+                self.permitted_use_tab, "НСПД, вкладка «Виды разрешенного использования»", ts
+            )
+        if self.zouit_checked:
+            out["zouit"] = Sourced(
+                [z.describe() for z in self.zouit], "НСПД, слои ЗОУИТ (пересечение контура)", ts
+            )
+        if self.territorial_zone_checked:
+            out["territorial_zones"] = Sourced(
+                [z.describe() for z in self.territorial_zones],
+                "НСПД, слой «Территориальные зоны» (пересечение контура)",
+                ts,
+            )
+        return out
+
+
+@dataclass
+class Flag:
+    """Один риск-флаг: уровень, одно предложение понятным языком, источник."""
+
+    rule_id: str
+    level: Level
+    message: str
+    source: str
+    details: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class CheckResult:
+    """Итог по одному кадастровому номеру."""
+
+    listing: Listing
+    parcel: Parcel
+    flags: list[Flag]
+    duplicates: list[Listing] = field(default_factory=list)
+    score: float = 0.0
+
+    @property
+    def verdict(self) -> Level:
+        if not self.flags:
+            return Level.OK
+        return max((f.level for f in self.flags), key=lambda lv: lv.rank)
+
+    @property
+    def stops(self) -> list[Flag]:
+        return [f for f in self.flags if f.level is Level.STOP]
+
+    @property
+    def checks(self) -> list[Flag]:
+        return [f for f in self.flags if f.level is Level.CHECK]
+
+    @property
+    def infos(self) -> list[Flag]:
+        return [f for f in self.flags if f.level is Level.OK]
+
+    @property
+    def effective_area_m2(self) -> float | None:
+        return self.parcel.best_area_m2 or self.listing.declared_area_m2
+
+    @property
+    def price_per_sotka(self) -> float | None:
+        a = self.effective_area_m2
+        if self.listing.price_rub is None or not a:
+            return None
+        return self.listing.price_rub / (a / SOTKA_M2)
+
+
+@dataclass
+class Request:
+    """Запрос брокера: цель, бюджет, площадь."""
+
+    purpose: Purpose = Purpose.ANY
+    budget_rub: float | None = None
+    min_area_m2: float | None = None
+    max_area_m2: float | None = None
+    region_hint: str | None = None
+
+
+@dataclass
+class BatchResult:
+    request: Request
+    results: list[CheckResult]
+    started_at: datetime
+    finished_at: datetime
+    median_price_per_sotka: float | None = None
+    errors: list[str] = field(default_factory=list)
+
+    @property
+    def counts(self) -> dict[str, int]:
+        c = {lv.value: 0 for lv in Level}
+        for r in self.results:
+            c[r.verdict.value] += 1
+        return c
