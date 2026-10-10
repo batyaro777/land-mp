@@ -69,3 +69,19 @@ def test_dedupe_merges_and_keeps_first_values():
     assert len(groups) == 2
     primary, dups = groups[0]
     assert primary.price_rub == 2_500_000 and len(dups) == 1
+
+
+def test_parse_text_many_numbers_in_one_line():
+    items = parse_text("77:05:0001005:19; 63:01:0810003:510; 77:09:0005008:11446")
+    assert [i.cad_num for i in items] == [
+        "77:05:0001005:19",
+        "63:01:0810003:510",
+        "77:09:0005008:11446",
+    ]
+    assert all(i.price_rub is None and i.declared_area_m2 is None for i in items)
+    items = parse_text(
+        "50:09:0060202:101 2 500 000 10 сот; 50:09:0060202:102 1,2 млн 8 сот https://x.ru/2"
+    )
+    assert items[0].price_rub == 2_500_000 and items[0].declared_area_m2 == 1000
+    assert items[1].price_rub == 1_200_000 and items[1].declared_area_m2 == 800
+    assert items[1].url == "https://x.ru/2"

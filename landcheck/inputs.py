@@ -151,26 +151,30 @@ def parse_text(text: str, area_unit: AreaUnit = "sotka") -> list[Listing]:
     for line in text.splitlines():
         if not line.strip():
             continue
-        m = CAD_RE.search(line)
-        if not m:
+        matches = list(CAD_RE.finditer(line))
+        if not matches:
             continue
-        cad = normalize_cad_num(m.group(0))
-        rest = line[: m.start()] + " " + line[m.end() :]
-        url_m = _URL_RE.search(rest)
-        url = url_m.group(0) if url_m else None
-        if url:
-            rest = rest.replace(url, " ")
-        price, area, note = _amounts_from_text(rest, area_unit)
-        listings.append(
-            Listing(
-                cad_num=cad,
-                price_rub=price,
-                declared_area_m2=area,
-                url=url,
-                note=note,
-                raw_cad_num=m.group(0),
+        # Несколько номеров в строке («КН1; КН2; КН3») — каждый со своим хвостом до следующего КН.
+        for idx, m in enumerate(matches):
+            seg_end = matches[idx + 1].start() if idx + 1 < len(matches) else len(line)
+            rest = line[m.end() : seg_end]
+            if idx == 0:
+                rest = line[: m.start()] + " " + rest
+            url_m = _URL_RE.search(rest)
+            url = url_m.group(0) if url_m else None
+            if url:
+                rest = rest.replace(url, " ")
+            price, area, note = _amounts_from_text(rest, area_unit)
+            listings.append(
+                Listing(
+                    cad_num=normalize_cad_num(m.group(0)),
+                    price_rub=price,
+                    declared_area_m2=area,
+                    url=url,
+                    note=note,
+                    raw_cad_num=m.group(0),
+                )
             )
-        )
     return listings
 
 
