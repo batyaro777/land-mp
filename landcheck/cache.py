@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ class ParcelCache:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.ttl = timedelta(days=ttl_days)
+        self._lock = threading.Lock()  # одно соединение, пишут несколько потоков
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
         self._conn.execute(
             """
@@ -30,12 +32,14 @@ class ParcelCache:
         self._conn.commit()
 
     def close(self) -> None:
-        self._conn.close()
+        with self._lock:
+            self._conn.close()
 
     def get(self, cad_num: str, *, allow_stale: bool = False) -> dict[str, Any] | None:
-        row = self._conn.execute(
-            "SELECT fetched_at, payload FROM parcels WHERE cad_num = ?", (cad_num,)
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT fetched_at, payload FROM parcels WHERE cad_num = ?", (cad_num,)
+            ).fetchone()
         if row is None:
             return None
         fetched_at = datetime.fromisoformat(row[0])
@@ -50,14 +54,17 @@ class ParcelCache:
     def put(self, cad_num: str, payload: dict[str, Any]) -> None:
         fetched_at = payload.get("fetched_at") or datetime.now(UTC).isoformat()
         provider = payload.get("provider", "unknown")
-        self._conn.execute(
-            "INSERT OR REPLACE INTO parcels (cad_num, fetched_at, provider, payload) "
-            "VALUES (?, ?, ?, ?)",
-            (cad_num, fetched_at, provider, json.dumps(payload, ensure_ascii=False, default=str)),
-        )
-        self._conn.commit()
+        body = json.dumps(payload, ensure_ascii=False, default=str)
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO parcels (cad_num, fetched_at, provider, payload) "
+                "VALUES (?, ?, ?, ?)",
+                (cad_num, fetched_at, provider, body),
+            )
+            self._conn.commit()
 
     def stats(self) -> dict[str, Any]:
-        total = self._conn.execute("SELECT COUNT(*) FROM parcels").fetchone()[0]
-        oldest = self._conn.execute("SELECT MIN(fetched_at) FROM parcels").fetchone()[0]
+        with self._lock:
+            total = self._conn.execute("SELECT COUNT(*) FROM parcels").fetchone()[0]
+            oldest = self._conn.execute("SELECT MIN(fetched_at) FROM parcels").fetchone()[0]
         return {"total": total, "oldest": oldest, "path": str(self.path)}

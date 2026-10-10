@@ -282,5 +282,33 @@ def cache_stats(cache: Annotated[Path, typer.Option(help="SQLite-кэш")] = DEF
         c.close()
 
 
+@app.command()
+def web(
+    host: Annotated[str, typer.Option(help="Адрес")] = "127.0.0.1",
+    port: Annotated[int, typer.Option(help="Порт")] = 8000,
+    reload: Annotated[bool, typer.Option(help="Автоперезапуск при правках (разработка)")] = False,
+):
+    """Веб-кабинет брокера. Настройки — переменные LANDCHECK_* (см. README)."""
+    import uvicorn
+
+    uvicorn.run("landcheck.web.app:create_app", factory=True, host=host, port=port, reload=reload)
+
+
+@app.command()
+def invite(
+    count: Annotated[int, typer.Option(help="Сколько кодов создать")] = 1,
+    note: Annotated[str | None, typer.Option(help="Пометка: кому")] = None,
+):
+    """Создать коды приглашения для входа в кабинет."""
+    from landcheck.web.config import settings
+    from landcheck.web.db import create_invites, init_db, session
+
+    init_db(settings.db_path)
+    with session() as db:
+        codes = create_invites(db, count, note)
+    for c in codes:
+        print(c)
+
+
 if __name__ == "__main__":  # pragma: no cover
     sys.exit(app())

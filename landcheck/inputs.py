@@ -10,7 +10,7 @@ import io
 import re
 from collections import OrderedDict
 from pathlib import Path
-from typing import Literal
+from typing import IO, Literal
 
 from landcheck.models import SOTKA_M2, Listing
 
@@ -259,9 +259,10 @@ def parse_csv(text: str, area_unit: AreaUnit = "sotka", source_name: str = "csv"
     return _rows_to_listings(rows, area_unit, source_name)
 
 
-def parse_xlsx(path: Path, area_unit: AreaUnit = "sotka") -> list[Listing]:
+def parse_xlsx(path: Path | IO[bytes], area_unit: AreaUnit = "sotka") -> list[Listing]:
     from openpyxl import load_workbook
 
+    name = Path(path).name if isinstance(path, str | Path) else "xlsx"
     wb = load_workbook(path, read_only=True, data_only=True)
     ws = wb.worksheets[0]
     rows: list[list[str]] = []
@@ -270,7 +271,7 @@ def parse_xlsx(path: Path, area_unit: AreaUnit = "sotka") -> list[Listing]:
             continue
         rows.append(["" if c is None else str(c) for c in row])
     wb.close()
-    return _rows_to_listings(rows, area_unit, path.name)
+    return _rows_to_listings(rows, area_unit, name)
 
 
 def load_listings(source: str | Path, area_unit: AreaUnit = "sotka") -> list[Listing]:

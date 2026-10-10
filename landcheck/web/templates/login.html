@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Вход — {{ brand }}{% endblock %}
+{% block content %}
+<article class="narrow">
+  <hgroup>
+    <h2>Вход по коду приглашения</h2>
+    <p>Пилот для брокеров. Код выдаёт организатор. Пароль не нужен.</p>
+  </hgroup>
+  {% if error %}<p class="err">{{ error }}</p>{% endif %}
+  <form method="post" action="/login">
+    <label>Код приглашения
+      <input name="code" placeholder="LC-XXXXXX" required autocomplete="off" autofocus>
+    </label>
+    <label>Как вас называть
+      <input name="name" placeholder="Имя" required>
+    </label>
+    <label>Название вашей компании или бренда <small class="muted">(будет в шапке отчётов для клиентов)</small>
+      <input name="brand_name" placeholder="Например, Земля Подмосковья">
+    </label>
+    <label>Контакт <small class="muted">(телефон или Telegram, по желанию)</small>
+      <input name="contact" placeholder="@username">
+    </label>
+    <button type="submit">Войти</button>
+  </form>
+</article>
+{% endblock %}

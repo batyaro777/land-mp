@@ -13,6 +13,12 @@ dependencies = [
     "typer>=0.15",
     "rich>=13",
     "socksio>=1.0",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.9",
+    "sqlalchemy>=2.0",
+    "itsdangerous>=2.2",
 ]
 
 [project.optional-dependencies]
@@ -31,6 +37,10 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["landcheck"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"landcheck/web/templates" = "landcheck/web/templates"
+"landcheck/web/static" = "landcheck/web/static"
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
@@ -41,6 +51,8 @@ select = ["E", "F", "I", "B", "UP", "W"]
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E501"]
 "landcheck/rules/*" = ["E501"]  # тексты флагов не рвём ради длины строки
+"landcheck/web/content.py" = ["E501"]
+"landcheck/listing.py" = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

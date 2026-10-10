@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}{{ check.title }} — {{ brand }}{% endblock %}
+{% block content %}
+<hgroup>
+  <h2>{{ check.title }}</h2>
+  <p>Цель: {{ (check.stats or {}).get('purpose') or '—' }}
+  {% if check.request.budget_rub %} · бюджет до {{ check.request.budget_rub|money }}{% endif %}
+  {% if check.request.min_area_m2 or check.request.max_area_m2 %} · площадь {{ check.request.min_area_m2|sotka if check.request.min_area_m2 else '' }}{% if check.request.max_area_m2 %} – {{ check.request.max_area_m2|sotka }}{% endif %}{% endif %}
+  · {{ check.created_at|dt }}</p>
+</hgroup>
+
+{% if check.status != 'done' %}
+  {% include "_status.html" %}
+{% else %}
+  {% set st = check.stats or {} %}
+  <div class="toolbar no-print">
+    <div>
+      <a href="/checks/{{ check.id }}" role="button" class="{{ 'secondary' if verdict else '' }} outline sm">Все {{ check.total }}</a>
+      <a href="/checks/{{ check.id }}?verdict=ок&sort={{ sort }}" role="button" class="outline sm v-ok">ок {{ counts.get('ок', 0) }}</a>
+      <a href="/checks/{{ check.id }}?verdict=проверить&sort={{ sort }}" role="button" class="outline sm v-check">проверить {{ counts.get('проверить', 0) }}</a>
+      <a href="/checks/{{ check.id }}?verdict=стоп&sort={{ sort }}" role="button" class="outline sm v-stop">стоп {{ counts.get('стоп', 0) }}</a>
+    </div>
+    <div>
+      <span class="muted small">Сортировка:</span>
+      {% for key, label in [('score','по соответствию'),('price','по цене'),('pps','по цене за сотку'),('area','по площади')] %}
+        <a href="/checks/{{ check.id }}?sort={{ key }}{% if verdict %}&verdict={{ verdict }}{% endif %}" class="small {{ 'active' if sort == key else '' }}">{{ label }}</a>{% if not loop.last %} · {% endif %}
+      {% endfor %}
+    </div>
+    <div>
+      <a href="/checks/{{ check.id }}/export.xlsx" role="button" class="sm">Скачать XLSX</a>
+      <a href="/checks/{{ check.id }}/export.csv" role="button" class="outline sm">CSV</a>
+      <form method="post" action="/checks/{{ check.id }}/rerun" class="inline"><button class="outline secondary sm" title="Запросить НСПД заново">Обновить данные</button></form>
+      <form method="post" action="/checks/{{ check.id }}/delete" class="inline" onsubmit="return confirm('Удалить подборку?')"><button class="outline secondary sm">Удалить</button></form>
+    </div>
+  </div>
+  <p class="muted small">Проверено за {{ st.get('seconds') }} с{% if st.get('median_price_per_sotka') %} · медиана по подборке {{ st.get('median_price_per_sotka')|money }} за сотку{% endif %}.
+  {% if st.get('errors') %}<span class="err">Ошибок получения данных: {{ st.get('errors')|length }}.</span>{% endif %}</p>
+
+  <div class="table-wrap">
+  <table class="results">
+    <thead><tr>
+      <th>№</th><th>Кадастровый номер</th><th>Вердикт</th><th>Причины</th><th class="num">Цена</th><th class="num">ЕГРН, сот.</th><th class="num">₽/сот.</th><th>Категория · ВРИ</th>
+    </tr></thead>
+    <tbody>
+    {% for it in items %}
+      {% set d = it.data %}
+      <tr>
+        <td class="muted">{{ loop.index }}</td>
+        <td><a href="/checks/{{ check.id }}/items/{{ it.cad_num }}"><code>{{ it.cad_num }}</code></a>
+          {% if d.listing.url %}<br><a href="{{ d.listing.url }}" target="_blank" rel="noopener" class="small muted">объявление</a>{% endif %}
+          {% if d.duplicates %}<br><span class="small muted">в {{ d.duplicates|length + 1 }} объявлениях</span>{% endif %}</td>
+        <td><span class="badge v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[it.verdict] }}">{{ it.verdict }}</span></td>
+        <td class="reasons">
+          <ul>
+          {% for f in d.flags if f.level != 'ок' %}<li><span class="dot {{ 'stop' if f.level == 'стоп' else 'check' }}"></span>{{ f.message }}</li>{% endfor %}
+          </ul>
+          {% if not d.flags or (d.flags|selectattr('level','ne','ок')|list|length == 0) %}<span class="muted">Замечаний нет</span>{% endif %}
+        </td>
+        <td class="num">{{ d.listing.price_rub|money }}</td>
+        <td class="num">{{ d.parcel.area_m2|sotka }}</td>
+        <td class="num">{{ d.price_per_sotka|money }}</td>
+        <td class="small">{{ d.parcel.category or '—' }}<br><span class="muted">{{ (d.parcel.permitted_use or '—')|truncate(70) }}</span></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+{% endif %}
+{% endblock %}

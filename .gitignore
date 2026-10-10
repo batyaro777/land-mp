@@ -10,3 +10,6 @@ build/
 *.sqlite
 out/
 .env
+data/*.sqlite*
+data/uploads/
+.env
