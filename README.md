@@ -109,6 +109,12 @@ docker compose up -d --build    # слушает 127.0.0.1:8010, снаружи 
 docker compose exec landcheck landcheck invite --count 5
 ```
 
+Прод: https://land-mp.dnai.engineering на VPS 176.124.203.214, каталог `/opt/land-mp`, порт публикуется
+на `172.19.0.1:8020` (override-файл), домен через `mcp-caddy`. Обновление:
+`cd /opt/land-mp && git pull && docker compose up -d --build`. Если под рукой нет машины с SSH,
+обновление делается через коннектор MCP VPS: задача Клавдию (`klavdiy_task`) с этими же командами,
+статус по `klavdiy_task_status`, логи и рестарт контейнера — `logs` / `restart`.
+
 ## Данные и кэш
 
 * Ответы НСПД кэшируются в SQLite (`~/.landcheck/cache.sqlite`), повтор не чаще раза в 7 дней
