@@ -53,7 +53,7 @@ def test_samara_parcel_sanitary_zone_stops_housing():
     flags = {f.rule_id: f for f in r.flags}
     assert flags["R10"].level is Level.STOP and "санитарно-защитной" in flags["R10"].message
     assert flags["R11"].level is Level.CHECK  # терзона в НСПД не опубликована
-    assert flags["R05"].level is Level.CHECK  # «многоэтажная застройка» не ИЖС
+    assert flags["R05"].level is Level.STOP  # «многоэтажная застройка» несовместима с ИЖС
     assert r.verdict is Level.STOP
     # Для производства та же СЗЗ — «проверить», а не «стоп»
     ind = check_batch(load_listings("63:01:0810003:510"), Request(purpose=Purpose.INDUSTRY), prov)

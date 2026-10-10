@@ -163,7 +163,13 @@ CATEGORY_MATRIX: dict[Purpose, dict[str, tuple[Level, str]]] = {
 VRI_POSITIVE: dict[Purpose, tuple[tuple[str, ...], tuple[str, ...]]] = {
     # (ключевые слова, коды классификатора)
     Purpose.IZHS: (
-        ("индивидуальн", "ижс", "для жилищного", "жилищное строительство", "жилой дом"),
+        (
+            "индивидуальн",
+            "ижс",
+            "для жилищного",
+            "жилищное строительство",
+            "индивидуального жилого",
+        ),
         ("2.1", "2.2"),
     ),
     Purpose.LPH: (("личного подсобного", "личное подсобное", "лпх"), ("2.2", "1.16")),
@@ -211,8 +217,11 @@ _RESIDENTIAL_INCOMPATIBLE = (
     "коммунальное обслуживание",
     "специальн",
 )
+_MULTISTOREY = ("многоэтажн", "среднеэтажн", "многоквартирн", "малоэтажная многоквартирн")
 VRI_NEGATIVE: dict[Purpose, tuple[str, ...]] = {
-    Purpose.IZHS: _RESIDENTIAL_INCOMPATIBLE + ("магазин", "торгов", "гостиничн", "офис"),
+    Purpose.IZHS: _RESIDENTIAL_INCOMPATIBLE
+    + _MULTISTOREY
+    + ("магазин", "торгов", "гостиничн", "офис"),
     Purpose.LPH: _RESIDENTIAL_INCOMPATIBLE + ("магазин", "торгов", "гостиничн", "офис"),
     Purpose.SNT: _RESIDENTIAL_INCOMPATIBLE + ("магазин", "торгов", "гостиничн", "офис"),
     Purpose.RECREATION: (
