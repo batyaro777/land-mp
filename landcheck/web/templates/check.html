@@ -3,7 +3,7 @@
 {% block content %}
 <hgroup>
   <h2>{{ check.title }}</h2>
-  <p>Цель: {{ (check.stats or {}).get('purpose') or '—' }}
+  <p>Цель: {{ purpose.activity if purpose.value != 'any' else 'только проверка данных' }}
   {% if check.request.budget_rub %} · бюджет до {{ check.request.budget_rub|money }}{% endif %}
   {% if check.request.min_area_m2 or check.request.max_area_m2 %} · площадь {{ check.request.min_area_m2|sotka if check.request.min_area_m2 else '' }}{% if check.request.max_area_m2 %} – {{ check.request.max_area_m2|sotka }}{% endif %}{% endif %}
   · {{ check.created_at|dt }}</p>
@@ -41,7 +41,7 @@
   <div class="table-wrap">
   <table class="results">
     <thead><tr>
-      <th>№</th><th>Кадастровый номер</th><th>Вердикт</th><th>Причины</th><th class="num">Цена</th><th class="num">ЕГРН, сот.</th><th class="num">₽/сот.</th><th>Категория · ВРИ</th>
+      <th>№</th><th>Кадастровый номер</th><th>Вердикт</th>{% if purpose.value != 'any' %}<th title="Категория · ВРИ · терзона">Цель</th>{% endif %}<th>Причины</th><th class="num">Цена</th><th class="num">ЕГРН, сот.</th><th class="num">₽/сот.</th><th>Категория · ВРИ</th>
     </tr></thead>
     <tbody>
     {% for it in items %}
@@ -54,6 +54,14 @@
           {% set h = d.get('history') or {} %}
           {% if h.get('is_new') %}<br><span class="badge">новый</span>{% elif h.get('changed') %}<br><span class="badge v-check" title="{{ h.get('prev_title') }}">было: {{ h.get('prev_verdict') }}</span>{% endif %}</td>
         <td><span class="badge v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[it.verdict] }}">{{ it.verdict }}</span></td>
+        {% if purpose.value != 'any' %}
+        <td class="goal-cell">
+          {% set g = goals.get(it.id) %}
+          {% if g %}
+            {% for r in g.rows %}<span class="badge mini v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[r.level] }}" title="{{ r.title }}: {{ r.text }}">{{ {'R04':'кат','R05':'ВРИ','R11':'зона'}[r.rule_id] }}</span>{% endfor %}
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
+        {% endif %}
         <td class="reasons">
           <ul>
           {% for f in d.flags if f.level != 'ок' %}<li><span class="dot {{ 'stop' if f.level == 'стоп' else 'check' }}"></span>{{ f.message }}</li>{% endfor %}

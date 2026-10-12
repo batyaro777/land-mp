@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from landcheck.models import SOTKA_M2
+from landcheck.models import SOTKA_M2, Level, Purpose
 
 CHECKLIST: list[dict[str, Any]] = [
     {
@@ -76,4 +76,67 @@ def price_orientation(item: dict[str, Any], median_pps: float | None) -> dict[st
         "low": min(values),
         "high": max(values),
         "disclaimer": PRICE_DISCLAIMER,
+    }
+
+
+# --- «Можно ли здесь то, что хочет покупатель»: категория × ВРИ × терзона ----------------
+_GOAL_ROWS: tuple[tuple[str, str], ...] = (
+    ("R04", "Категория земель"),
+    ("R05", "Вид разрешённого использования"),
+    ("R11", "Территориальная зона по ПЗЗ"),
+)
+_GOAL_OK_TEXT = {
+    "R04": "категория допускает цель",
+    "R05": "ВРИ прямо предусматривает цель",
+    "R11": "зона допускает цель",
+}
+_OVERALL_TEXT = {
+    Level.OK: "Можно: категория, ВРИ и территориальная зона допускают цель",
+    Level.CHECK: "Возможно с оговорками: есть что уточнить до сделки",
+    Level.STOP: "Нельзя без смены назначения: один из уровней запрещает цель",
+}
+
+
+def goal_summary(item: dict[str, Any], purpose: Purpose) -> dict[str, Any] | None:
+    """Три уровня проверки цели одной таблицей. None — цель не задана или участка нет."""
+    parcel = item.get("parcel") or {}
+    if purpose is Purpose.ANY or not parcel.get("found"):
+        return None
+    flags = {f["rule_id"]: f for f in item.get("flags") or []}
+    rows: list[dict[str, Any]] = []
+    worst = Level.OK
+    for rule_id, title in _GOAL_ROWS:
+        if rule_id == "R04":
+            value = parcel.get("category")
+        elif rule_id == "R05":
+            value = parcel.get("permitted_use") or " | ".join(parcel.get("permitted_use_tab") or [])
+        else:
+            value = "; ".join(
+                z.get("describe") or "" for z in parcel.get("territorial_zones") or []
+            )
+        f = flags.get(rule_id)
+        if f is not None:
+            level, text, source = Level(f["level"]), f["message"], f.get("source")
+        elif rule_id == "R11" and not parcel.get("territorial_zone_checked"):
+            level, text, source = Level.CHECK, "зона не проверялась: у участка нет контура", None
+        else:
+            level, text, source = Level.OK, _GOAL_OK_TEXT[rule_id], None
+        if level.rank > worst.rank:
+            worst = level
+        rows.append(
+            {
+                "rule_id": rule_id,
+                "title": title,
+                "value": value or "—",
+                "level": level.value,
+                "text": text,
+                "source": source,
+            }
+        )
+    return {
+        "activity": purpose.activity,
+        "level": worst.value,
+        "text": _OVERALL_TEXT[worst],
+        "rows": rows,
+        "short": " · ".join(f"{r['title'].split()[0].lower()}: {r['level']}" for r in rows),
     }

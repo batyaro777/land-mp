@@ -29,6 +29,22 @@
 </div>
 {% endif %}
 
+{% if goal %}
+<article class="goal">
+  <h4>Можно ли здесь: {{ goal.activity|lower }}? <span class="badge v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[goal.level] }}">{{ goal.level }}</span></h4>
+  <p>{{ goal.text }}.</p>
+  <table class="facts goal-table">
+    {% for r in goal.rows %}
+    <tr>
+      <th>{{ r.title }}<br><span class="muted small">{{ r.value|truncate(90) }}</span></th>
+      <td><span class="badge mini v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[r.level] }}">{{ r.level }}</span> {{ r.text }}{% if r.source %}<div class="muted small">Источник: {{ r.source }}</div>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="muted small">Три уровня: категория земель задаёт, что на земле бывает в принципе; ВРИ — что разрешено на этом участке; территориальная зона ПЗЗ — что и какой этажности можно строить именно здесь. Один и тот же ВРИ в разных зонах разрешает разное.</p>
+</article>
+{% endif %}
+
 {% if not p.found %}
 <article>
 {% if p.errors %}

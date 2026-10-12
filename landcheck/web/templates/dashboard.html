@@ -20,22 +20,21 @@
       <input type="file" name="file" accept=".csv,.xlsx,.txt">
       <small class="muted">Колонки: кадастровый номер, цена, площадь (единицы читаются из заголовка), ссылка.</small>
     </label>
+    <label>Что покупатель хочет делать на участке
+      <select name="purpose">
+        {% for value, label in purposes %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+      </select>
+      <small class="muted">Проверим на трёх уровнях: категория земель, ВРИ и территориальная зона ПЗЗ.</small>
+    </label>
     <div class="grid">
-      <label>Цель покупателя
-        <select name="purpose">
-          {% for value, label in purposes %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
-        </select>
-      </label>
       <label>Бюджет, ₽
         <input name="budget" placeholder="3 000 000 или 3 млн">
       </label>
-    </div>
-    <div class="grid">
       <label>Площадь от, сот.<input name="min_area" placeholder="8"></label>
       <label>Площадь до, сот.<input name="max_area" placeholder="15"></label>
     </div>
     <label>Запрос словами <small class="muted">(необязательно, уточняет цель, бюджет и площадь)</small>
-      <input name="query" placeholder="Семье под ИЖС до 3 млн, 8–12 соток, Истра">
+      <input name="query" placeholder="Построить дом для семьи до 3 млн, 8–12 соток, Истра">
     </label>
     <button type="submit">Проверить подборку</button>
   </form>

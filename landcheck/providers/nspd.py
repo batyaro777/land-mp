@@ -80,7 +80,13 @@ class LiveNspdProvider:
             payload["errors"].append(f"НСПД заблокировал IP (403): {e}")
             return payload
         except perr.PynspdError as e:
-            payload["errors"].append(f"ошибка НСПД при поиске: {e}")
+            # 597 Forbidden — файрвол НСПД режет адрес целиком (зафиксировано 12.10.2026 на VPS).
+            if "597" in str(e):
+                payload["errors"].append(
+                    "НСПД закрыл доступ с этого адреса (597 Forbidden): нужен другой выход в сеть"
+                )
+            else:
+                payload["errors"].append(f"ошибка НСПД при поиске: {e}")
             return payload
         except Exception as e:  # noqa: BLE001 — сеть/прокси; не валим пакет
             payload["errors"].append(f"сбой запроса к НСПД: {type(e).__name__}: {e}")

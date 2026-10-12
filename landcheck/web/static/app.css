@@ -42,3 +42,9 @@ table.facts td, table.facts th { padding: 0.3em 0.5em; font-size: 0.9em; }
 }
 .photos { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.4rem; }
 .photos img { width: 100%; aspect-ratio: 4/3; object-fit: cover; border-radius: 6px; }
+
+/* цель на трёх уровнях: категория · ВРИ · терзона */
+.badge.mini { font-size: 0.7em; padding: 0.05em 0.45em; margin-right: 0.15em; }
+td.goal-cell { white-space: nowrap; }
+article.goal { border-left: 4px solid #2E75B6; }
+table.goal-table th { width: 32%; }

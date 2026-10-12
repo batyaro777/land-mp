@@ -39,7 +39,10 @@ def test_moscow_parcel_normalizes_and_flags():
     assert flags["R05"].level is Level.CHECK  # ВРИ «под кафе» не подтверждает ИЖС
     assert flags["R10"].level is Level.CHECK
     assert flags["R12"].level is Level.OK  # пустая форма собственности — справочно
-    assert "R03" not in flags and "R11" in flags and flags["R11"].level is Level.OK
+    assert "R03" not in flags
+    # НСПД отдаёт по терзоне только реестровый номер — честно просим сверить с ПЗЗ
+    assert flags["R11"].level is Level.CHECK and "ПЗЗ" in flags["R11"].message
+    assert flags["R11"].details["classes"] == [None]
     assert r.verdict is Level.CHECK
 
 

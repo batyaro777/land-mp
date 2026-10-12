@@ -4,14 +4,18 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from landcheck.models import SOTKA_M2, Flag, Level
+from landcheck.models import SOTKA_M2, Flag, Level, Purpose
 from landcheck.rules.engine import RuleContext, rule
 from landcheck.rules.purpose import (
     CATEGORY_CLASS_LABEL,
     CATEGORY_MATRIX,
+    SRC_217,
     category_class,
+    house_possible_on_agri,
     vri_match,
+    vri_verdict,
 )
+from landcheck.rules.zones import SRC_GRK, SRC_GRK_36, zone_class, zone_verdict
 
 SRC_NSPD = "НСПД, карточка участка (слой «Земельные участки из ЕГРН»)"
 SRC_NSPD_SEARCH = "НСПД, поиск по кадастровому номеру"
@@ -119,11 +123,16 @@ def r04_category(ctx: RuleContext):
     if hit is None:
         return None
     level, text = hit
+    source = SRC_ZK7
+    if cls == "agri" and ctx.request.purpose is Purpose.IZHS:
+        exception = house_possible_on_agri(p.permitted_use_all)
+        if exception:
+            level, text, source = Level.CHECK, exception, SRC_217
     return Flag(
         "R04",
         level,
         f"цель «{ctx.request.purpose.label}»: " + text.format(cat=CATEGORY_CLASS_LABEL[cls]),
-        SRC_ZK7,
+        source,
         {"category": p.category, "category_class": cls},
     )
 
@@ -131,11 +140,16 @@ def r04_category(ctx: RuleContext):
 @rule("R05", "ВРИ против цели", "Вид разрешённого использования не соответствует цели")
 def r05_vri(ctx: RuleContext):
     p = ctx.parcel
-    if not p.found or ctx.request.purpose.value == "any":
+    if not p.found or ctx.request.purpose is Purpose.ANY:
         return None
-    res = vri_match(ctx.request.purpose, p.permitted_use_all)
-    label = ctx.request.purpose.label
+    purpose = ctx.request.purpose
+    label = purpose.label
     vri = p.permitted_use or (p.permitted_use_tab[0] if p.permitted_use_tab else "—")
+    special = vri_verdict(purpose, p.permitted_use_all, category_class(p.category))
+    if special is not None:
+        level, text, source = special
+        return Flag("R05", level, text, source, {"vri": p.permitted_use_all, "nuance": True})
+    res = vri_match(purpose, p.permitted_use_all)
     if res == "match":
         return None
     if res == "empty":
@@ -326,7 +340,7 @@ def r10_zouit(ctx: RuleContext):
     )
 
 
-@rule("R11", "Территориальная зона", "Зона ПЗЗ не опубликована в НСПД")
+@rule("R11", "Территориальная зона против цели", "Зона ПЗЗ: что здесь можно строить")
 def r11_territorial_zone(ctx: RuleContext):
     p = ctx.parcel
     if not p.found or not p.territorial_zone_checked:
@@ -338,14 +352,32 @@ def r11_territorial_zone(ctx: RuleContext):
             "территориальная зона в НСПД не найдена: ПЗЗ не опубликованы, уточнять в администрации",
             SRC_PZZ,
         )
-    names = "; ".join(z.describe() for z in p.territorial_zones[:3])
-    return Flag(
-        "R11",
-        Level.OK,
-        f"территориальная зона по НСПД: {names}",
-        SRC_NSPD_TZ,
-        {"zones": [z.describe() for z in p.territorial_zones]},
-    )
+    purpose = ctx.request.purpose
+    zones = [(z, zone_class(z)) for z in p.territorial_zones]
+    names = "; ".join(z.describe() for z, _ in zones[:3])
+    details = {
+        "zones": [z.describe() for z, _ in zones],
+        "classes": [cls for _, cls in zones],
+    }
+    if purpose is Purpose.ANY:
+        return Flag("R11", Level.OK, f"территориальная зона по НСПД: {names}", SRC_NSPD_TZ, details)
+    # Участок может лежать в нескольких зонах: берём худшую для цели, пояснения — по каждой.
+    worst = Level.OK
+    notes: list[str] = []
+    for z, cls in zones:
+        verdict = zone_verdict(purpose, cls)
+        if verdict is None:
+            continue
+        level, text = verdict
+        if level.rank > worst.rank:
+            worst = level
+        prefix = z.describe(60) if cls is not None else (z.reg_number or z.layer_short)
+        notes.append(f"{prefix} — {text}")
+    message = "; ".join(notes) if notes else f"территориальная зона по НСПД: {names}"
+    source = SRC_GRK_36 if any(c == "sx_ugodia" for _, c in zones) else SRC_GRK
+    if all(c is None for _, c in zones):
+        source = SRC_NSPD_TZ
+    return Flag("R11", worst, message, source, details)
 
 
 @rule("R12", "Форма собственности", "Публичная или неразграниченная собственность")

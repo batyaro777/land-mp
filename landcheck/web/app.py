@@ -30,7 +30,7 @@ from landcheck.web.auth import (
     too_many_attempts,
 )
 from landcheck.web.config import settings
-from landcheck.web.content import CHECKLIST, price_orientation
+from landcheck.web.content import CHECKLIST, goal_summary, price_orientation
 from landcheck.web.db import Check, CheckItem, User, init_db, redeem_invite, session
 from landcheck.web.serialize import (
     LEVEL_RANK,
@@ -55,7 +55,7 @@ templates.env.globals.update(
     brand=settings.brand, version=__version__, Purpose=Purpose, disclaimer=DISCLAIMER
 )
 
-PURPOSES = [(p.value, p.label) for p in Purpose]
+PURPOSES = [(p.value, p.activity) for p in Purpose]
 VERDICT_ORDER = ["ок", "проверить", "стоп"]
 
 
@@ -307,6 +307,8 @@ def check_page(
         hist = [i.data.get("history") or {} for i in check.items]
         new_count = sum(1 for h in hist if h.get("is_new"))
         changed_count = sum(1 for h in hist if h.get("changed"))
+        purpose = _check_purpose(check)
+        goals = {i.id: goal_summary(i.data, purpose) for i in items}
         return render(
             request,
             "check.html",
@@ -314,6 +316,8 @@ def check_page(
             items=items,
             verdict=verdict,
             sort=sort,
+            purpose=purpose,
+            goals=goals,
             counts=(check.stats or {}).get("counts") or {},
             new_count=new_count,
             changed_count=changed_count,
@@ -385,13 +389,23 @@ def check_export(user: UserDep, check_id: int, fmt: str):
 
 
 # --- reports ------------------------------------------------------------------------------
+def _check_purpose(check: Check) -> Purpose:
+    try:
+        return Purpose((check.request or {}).get("purpose") or "any")
+    except ValueError:
+        return Purpose.ANY
+
+
 def _report_ctx(check: Check, item: CheckItem, public: bool) -> dict[str, Any]:
     data = item.data
+    purpose = _check_purpose(check)
     return {
         "check": check,
         "item": item,
         "d": data,
         "by_level": flags_by_level(data),
+        "purpose": purpose,
+        "goal": goal_summary(data, purpose),
         "checklist": CHECKLIST,
         "price": price_orientation(data, (check.stats or {}).get("median_price_per_sotka")),
         "public": public,

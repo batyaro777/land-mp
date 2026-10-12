@@ -7,7 +7,7 @@
   </hgroup>
   <form method="post" action="/single">
     <label>Кадастровый номер<input name="cad_num" placeholder="50:09:0060202:101" required autofocus></label>
-    <label>Цель
+    <label>Что хотите делать на участке
       <select name="purpose">{% for value, label in purposes %}<option value="{{ value }}">{{ label }}</option>{% endfor %}</select>
     </label>
     <div class="grid">

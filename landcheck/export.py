@@ -23,6 +23,7 @@ COLUMNS = [
     "Вердикт",
     "Причины (стоп / проверить)",
     "Справочно",
+    "Цель: категория · ВРИ · зона",
     "Цена, ₽",
     "Площадь в объявлении, сот.",
     "Площадь ЕГРН, сот.",
@@ -56,6 +57,23 @@ def _join(items: list[str]) -> str:
     return "\n".join(items)
 
 
+def _goal_cell(r: CheckResult) -> str | None:
+    """Три уровня цели одной строкой: категория · ВРИ · зона → ок / проверить / стоп."""
+    if not r.parcel.found:
+        return None
+    levels = {f.rule_id: f.level.value for f in r.flags}
+    zone_checked = r.parcel.territorial_zone_checked
+    if not any(k in levels for k in ("R04", "R05", "R11")) and not zone_checked:
+        return None
+    zone_default = "ок" if zone_checked else "не проверялась"
+    parts = [
+        f"категория: {levels.get('R04', 'ок')}",
+        f"ВРИ: {levels.get('R05', 'ок')}",
+        f"зона: {levels.get('R11', zone_default)}",
+    ]
+    return " · ".join(parts)
+
+
 def row_for(i: int, r: CheckResult) -> list:
     p, lst = r.parcel, r.listing
     reasons = [f"[{f.level.value}] {f.message}" for f in r.flags if f.level is not Level.OK]
@@ -66,6 +84,7 @@ def row_for(i: int, r: CheckResult) -> list:
         r.verdict.value,
         _join(reasons),
         _join(infos),
+        _goal_cell(r),
         _money(lst.price_rub),
         _sotka(lst.declared_area_m2),
         _sotka(p.best_area_m2),

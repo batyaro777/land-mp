@@ -15,27 +15,54 @@ SOTKA_M2 = 100.0  # 1 сотка = 100 м²
 class Purpose(StrEnum):
     """Цель покупателя. Значения совпадают с аргументом CLI --purpose."""
 
-    IZHS = "izhs"  # индивидуальное жилищное строительство
-    LPH = "lph"  # личное подсобное хозяйство
-    SNT = "snt"  # садоводство / дача
+    IZHS = "izhs"  # построить жилой дом для постоянного проживания
+    LPH = "lph"  # личное подсобное хозяйство: огород, животные, птица
+    SNT = "snt"  # дача: садовый дом, огород, сезонное проживание
+    FARMING = "farming"  # сельхозпроизводство: культуры, скот, ферма (КФХ)
     RECREATION = "recreation"  # рекреация, туризм
     COMMERCE = "commerce"  # торговля, услуги, офисы
     INDUSTRY = "industry"  # производство, склады
+    MULTIFAMILY = "multifamily"  # многоквартирный дом, таунхаусы
     ANY = "any"  # цель не задана — только проверка данных
 
     @property
     def label(self) -> str:
+        """Короткая подпись для таблиц и выгрузок."""
         return PURPOSE_LABELS[self]
+
+    @property
+    def activity(self) -> str:
+        """Цель словами покупателя: что он хочет делать на участке (запрос брокеров 13.10)."""
+        return PURPOSE_ACTIVITY[self]
+
+    @property
+    def residential(self) -> bool:
+        """Цель предполагает жильё — для жилья действуют санитарные и зональные запреты."""
+        return self in (Purpose.IZHS, Purpose.LPH, Purpose.SNT, Purpose.MULTIFAMILY)
 
 
 PURPOSE_LABELS: dict[Purpose, str] = {
-    Purpose.IZHS: "ИЖС",
-    Purpose.LPH: "ЛПХ",
-    Purpose.SNT: "Садоводство / дача",
-    Purpose.RECREATION: "Рекреация",
-    Purpose.COMMERCE: "Коммерция",
-    Purpose.INDUSTRY: "Промышленность",
+    Purpose.IZHS: "Жилой дом (ИЖС)",
+    Purpose.LPH: "Личное хозяйство (ЛПХ)",
+    Purpose.SNT: "Дача, садоводство",
+    Purpose.FARMING: "Сельхозпроизводство, ферма",
+    Purpose.RECREATION: "Отдых, туризм",
+    Purpose.COMMERCE: "Торговля, услуги, офис",
+    Purpose.INDUSTRY: "Производство, склад",
+    Purpose.MULTIFAMILY: "Многоквартирный дом",
     Purpose.ANY: "Без цели",
+}
+
+PURPOSE_ACTIVITY: dict[Purpose, str] = {
+    Purpose.IZHS: "Построить жилой дом для постоянного проживания",
+    Purpose.LPH: "Вести личное хозяйство: огород, животные, птица",
+    Purpose.SNT: "Дача: садовый дом, огород, сезонное проживание",
+    Purpose.FARMING: "Выращивать культуры, разводить скот, ферма (КФХ)",
+    Purpose.RECREATION: "База отдыха, глэмпинг, туризм",
+    Purpose.COMMERCE: "Магазин, кафе, офис, услуги",
+    Purpose.INDUSTRY: "Производство, склад, завод",
+    Purpose.MULTIFAMILY: "Построить многоквартирный дом или таунхаусы",
+    Purpose.ANY: "Только проверить данные участка",
 }
 
 
