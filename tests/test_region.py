@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from landcheck.models import Purpose
 from landcheck.region import locality_from_address, locality_key, parse_response
 from tests.test_web import client, login  # noqa: F401 — фикстура клиента кабинета
 
@@ -90,3 +91,20 @@ def test_region_block_in_report(client, monkeypatch):  # noqa: F811 — фикс
         "Чуйского тракта" in report2
         and 'hx-get="' + url + '/items/50:09:0060202:101/region"' not in report2
     )
+
+
+def test_research_falls_back_on_overload(monkeypatch):
+    from landcheck import region
+
+    calls: list[str] = []
+
+    def fake_once(locality, purpose, *, api_key, model, timeout):
+        calls.append(model)
+        if model == "gemini-3.8-flash":
+            return {**region._failed(model, "Gemini UNAVAILABLE (503)"), "retry_next": True}
+        return parse_response(SAMPLE, model=model)
+
+    monkeypatch.setattr(region, "_research_once", fake_once)
+    r = region.research_region("Алтайский край, г. Белокуриха", Purpose.RECREATION, api_key="k")
+    assert r["error"] is None and r["model"] == "gemini-3.7-flash"
+    assert calls == ["gemini-3.8-flash", "gemini-3.7-flash"] and r["tried"] == calls

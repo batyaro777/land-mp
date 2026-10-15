@@ -20,6 +20,8 @@ from landcheck.models import Purpose
 
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 DEFAULT_MODEL = "gemini-3.8-flash"
+# Запасные модели, если основная перегружена (503) или без квоты (429): проверено 15.10.2026.
+FALLBACK_MODELS = ("gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite")
 SECTIONS = (
     "Развитие и инвестиции",
     "Дороги и инфраструктура",
@@ -127,8 +129,29 @@ def research_region(
     api_key: str,
     model: str = DEFAULT_MODEL,
     timeout: float = 120.0,
+    fallbacks: tuple[str, ...] = FALLBACK_MODELS,
 ) -> dict[str, Any]:
-    """Один запрос к Gemini с google_search. Ошибки — в поле error, исключений наружу нет."""
+    """Запрос к Gemini с google_search; при 503/429 пробуем запасные модели по очереди.
+
+    Ошибки — в поле error, исключений наружу нет.
+    """
+    tried: list[str] = []
+    result: dict[str, Any] | None = None
+    for m in (model, *[f for f in fallbacks if f != model]):
+        result = _research_once(locality, purpose, api_key=api_key, model=m, timeout=timeout)
+        tried.append(m)
+        if not result.get("retry_next"):
+            break
+    assert result is not None
+    result.pop("retry_next", None)
+    if len(tried) > 1:
+        result["tried"] = tried
+    return result
+
+
+def _research_once(
+    locality: str, purpose: Purpose, *, api_key: str, model: str, timeout: float
+) -> dict[str, Any]:
     prompt = _PROMPT.format(locality=locality, activity=purpose.activity.lower())
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -154,7 +177,9 @@ def research_region(
             "PERMISSION_DENIED": "ключ отклонён",
             "INVALID_ARGUMENT": "ключ или запрос отклонены",
         }.get(status, "")
-        return _failed(model, f"Gemini {status} ({r.status_code}){': ' + hint if hint else ''}")
+        failed = _failed(model, f"Gemini {status} ({r.status_code}){': ' + hint if hint else ''}")
+        failed["retry_next"] = status in ("UNAVAILABLE", "RESOURCE_EXHAUSTED", "NOT_FOUND")
+        return failed
     data = r.json()
     parsed = parse_response(data, model=model)
     if not parsed["grounded"]:

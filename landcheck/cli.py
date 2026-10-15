@@ -386,6 +386,8 @@ def region(
     )
     if as_json:
         console.print_json(_json.dumps(res, ensure_ascii=False, default=str))
+        if res["error"]:
+            raise typer.Exit(code=2)
         return
     console.print(f"[bold]{escape(place)}[/] · {res['model']}")
     if res["error"]:
