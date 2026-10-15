@@ -38,6 +38,15 @@ class ParcelCache:
             )
             """
         )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS regions (
+                key TEXT PRIMARY KEY,
+                fetched_at TEXT NOT NULL,
+                payload TEXT NOT NULL
+            )
+            """
+        )
         self._conn.commit()
 
     def close(self) -> None:
@@ -100,5 +109,30 @@ class ParcelCache:
             self._conn.execute(
                 "INSERT OR REPLACE INTO locations (cad_num, fetched_at, payload) VALUES (?, ?, ?)",
                 (cad_num, fetched_at, body),
+            )
+            self._conn.commit()
+
+    # --- регион (модуль «Регион», ключ — локация + цель) ---------------------------------
+    def get_region(self, key: str, *, allow_stale: bool = False) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT fetched_at, payload FROM regions WHERE key = ?", (key,)
+            ).fetchone()
+        if row is None:
+            return None
+        fetched_at = datetime.fromisoformat(row[0])
+        if fetched_at.tzinfo is None:
+            fetched_at = fetched_at.replace(tzinfo=UTC)
+        if not allow_stale and datetime.now(UTC) - fetched_at > self.ttl:
+            return None
+        return json.loads(row[1])
+
+    def put_region(self, key: str, payload: dict[str, Any]) -> None:
+        fetched_at = payload.get("fetched_at") or datetime.now(UTC).isoformat()
+        body = json.dumps(payload, ensure_ascii=False, default=str)
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO regions (key, fetched_at, payload) VALUES (?, ?, ?)",
+                (key, fetched_at, body),
             )
             self._conn.commit()

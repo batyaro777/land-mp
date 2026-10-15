@@ -341,6 +341,66 @@ def location(
 
 
 @app.command()
+def region(
+    locality: Annotated[str, typer.Argument(help="Локация словами или кадастровый номер")],
+    purpose: Annotated[
+        Purpose, typer.Option("--purpose", "-p", help="Цель покупателя")
+    ] = Purpose.IZHS,
+    model: Annotated[str | None, typer.Option(help="Модель Gemini")] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Сводка в JSON")] = False,
+):
+    """Сводка по региону: инвестиции, дороги, риски, рынок — Gemini с поиском Google."""
+    import json as _json
+    import os
+
+    from landcheck.inputs import CAD_RE
+    from landcheck.region import DEFAULT_MODEL, locality_from_address, research_region
+
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        console.print("[red]Нет GEMINI_API_KEY в окружении.[/]")
+        raise typer.Exit(code=1)
+    place = locality
+    if CAD_RE.search(locality):
+        from landcheck.cache import ParcelCache
+        from landcheck.normalize import parcel_from_payload
+        from landcheck.pipeline import fetch_payload
+        from landcheck.providers.nspd import LiveNspdProvider
+
+        provider = LiveNspdProvider(with_zones=False)
+        pcache = ParcelCache(DEFAULT_CACHE, ttl_days=_DEFAULT_TTL)
+        try:
+            payload, _ = fetch_payload(CAD_RE.search(locality).group(0), provider, pcache)
+        finally:
+            pcache.close()
+            provider.close()
+        place = locality_from_address(parcel_from_payload(payload).address) or ""
+        if not place:
+            console.print("[red]У участка нет адреса в НСПД.[/]")
+            raise typer.Exit(code=1)
+    res = research_region(
+        place,
+        purpose,
+        api_key=api_key,
+        model=model or os.environ.get("LANDCHECK_GEMINI_MODEL") or DEFAULT_MODEL,
+    )
+    if as_json:
+        console.print_json(_json.dumps(res, ensure_ascii=False, default=str))
+        return
+    console.print(f"[bold]{escape(place)}[/] · {res['model']}")
+    if res["error"]:
+        console.print(f"[red]{escape(res['error'])}[/]")
+        raise typer.Exit(code=2)
+    for sec in res["sections"]:
+        console.print(f"[bold]{escape(sec['title'])}[/]")
+        for it in sec["items"]:
+            console.print(f"  - {escape(it)}")
+    console.print(f"[bold]Источники ({len(res['sources'])}):[/]")
+    for src in res["sources"][:15]:
+        console.print(f"  {escape(src['title'][:70])} — {escape(src['url'][:100])}")
+
+
+@app.command()
 def monitor(
     reference: Annotated[Path, typer.Option(help="Файл с эталонными номерами")] = DEFAULT_REFERENCE,
     snapshot: Annotated[Path, typer.Option(help="Снимок формата НСПД")] = DEFAULT_SNAPSHOT,

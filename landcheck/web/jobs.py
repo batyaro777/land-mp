@@ -246,3 +246,35 @@ def _fetch_osm_safe(parcel_geojson: dict[str, Any]) -> dict[str, Any]:
         return fetch_osm(lat, lon, OSM_RADIUS_M)
     except Exception as e:  # noqa: BLE001
         return {"elements": [], "error": f"{type(e).__name__}: {e}"}
+
+
+# --- модуль «Регион»: один запрос на локацию и цель, кэш 30 дней ------------------------
+def fetch_region(locality: str, purpose, *, refresh: bool = False) -> dict[str, Any]:
+    from landcheck.models import Purpose
+    from landcheck.region import locality_key, research_region
+
+    if not settings.gemini_api_key:
+        return {
+            "sections": [],
+            "sources": [],
+            "grounded": False,
+            "error": "модуль выключен: нет ключа Gemini (GEMINI_API_KEY)",
+            "model": settings.gemini_model,
+            "fetched_at": datetime.now(UTC).isoformat(),
+        }
+    purpose = purpose if isinstance(purpose, Purpose) else Purpose(purpose)
+    key = f"{locality_key(locality)}|{purpose.value}"
+    cache = ParcelCache(settings.cache_path, ttl_days=settings.cache_ttl_days)
+    try:
+        if not refresh:
+            cached = cache.get_region(key)
+            if cached is not None and not cached.get("error"):
+                return cached
+        result = research_region(
+            locality, purpose, api_key=settings.gemini_api_key, model=settings.gemini_model
+        )
+        if not result.get("error"):
+            cache.put_region(key, result)
+        return result
+    finally:
+        cache.close()

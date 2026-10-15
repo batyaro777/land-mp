@@ -43,6 +43,15 @@ class Settings:
     )
     base_url: str = field(default_factory=lambda: os.environ.get("LANDCHECK_BASE_URL", ""))
     debug: bool = field(default_factory=lambda: os.environ.get("LANDCHECK_DEBUG", "") == "1")
+    # Модуль «Регион»: Gemini с поиском Google. Без ключа блок честно говорит, что выключен.
+    gemini_api_key: str | None = field(
+        default_factory=lambda: (
+            os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or None
+        )
+    )
+    gemini_model: str = field(
+        default_factory=lambda: os.environ.get("LANDCHECK_GEMINI_MODEL") or "gemini-3.8-flash"
+    )
 
     def __post_init__(self) -> None:
         if not self.secret:

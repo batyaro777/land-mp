@@ -408,6 +408,9 @@ def _report_ctx(check: Check, item: CheckItem, public: bool) -> dict[str, Any]:
         "goal": goal_summary(data, purpose),
         "loc": data.get("location"),
         "location_url": f"/checks/{check.id}/items/{item.cad_num}/location",
+        "region": data.get("region"),
+        "region_url": f"/checks/{check.id}/items/{item.cad_num}/region",
+        "region_enabled": bool(settings.gemini_api_key),
         "checklist": CHECKLIST,
         "price": price_orientation(data, (check.stats or {}).get("median_price_per_sotka")),
         "public": public,
@@ -476,6 +479,46 @@ def report_location(request: Request, user: UserDep, check_id: int, cad_num: str
             loc=loc,
             public=False,
             location_url=f"/checks/{check.id}/items/{cad_num}/location",
+            user=user,
+        )
+
+
+@router.get("/checks/{check_id}/items/{cad_num}/region", response_class=HTMLResponse)
+def report_region(request: Request, user: UserDep, check_id: int, cad_num: str, refresh: int = 0):
+    """Блок «Регион» по запросу (HTMX): Gemini с поиском Google по локации участка."""
+    from landcheck.region import locality_from_address
+
+    with session() as db:
+        check = _own_check(db, user, check_id)
+        item = db.scalar(
+            select(CheckItem).where(CheckItem.check_id == check.id, CheckItem.cad_num == cad_num)
+        )
+        if item is None:
+            raise HTTPException(404)
+        data = dict(item.data)
+        parcel = data.get("parcel") or {}
+        region = data.get("region")
+        locality = locality_from_address(parcel.get("address"))
+        if region is None or refresh or region.get("error"):
+            if locality is None:
+                region = {
+                    "sections": [],
+                    "sources": [],
+                    "error": "у участка нет адреса в НСПД, локацию не определить",
+                    "locality": None,
+                }
+            else:
+                region = jobs.fetch_region(locality, _check_purpose(check), refresh=bool(refresh))
+                region["locality"] = locality
+            data["region"] = region
+            item.data = data
+            db.commit()
+        return render(
+            request,
+            "_region.html",
+            region=region,
+            public=False,
+            region_url=f"/checks/{check.id}/items/{cad_num}/region",
             user=user,
         )
 

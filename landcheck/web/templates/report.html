@@ -122,6 +122,15 @@
 </article>
 {% endif %}
 
+{% if region %}
+  {% include "_region.html" %}
+{% elif not public and region_enabled and p.address %}
+<article id="region" hx-get="{{ region_url }}" hx-trigger="load delay:1s" hx-swap="outerHTML">
+  <h4>Регион: планы, инфраструктура, рынок</h4>
+  <p class="muted small" aria-busy="true">Ищу по открытым источникам: инвестиции, дороги, риски, рынок земли. До двух минут…</p>
+</article>
+{% endif %}
+
 {% if price %}
 <article>
   <h4>Ценовой ориентир за сотку</h4>
