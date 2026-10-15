@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Annotated
@@ -27,7 +28,12 @@ app = typer.Typer(
     add_completion=False,
 )
 console = Console()
-DEFAULT_CACHE = Path.home() / ".landcheck" / "cache.sqlite"
+# Кэш и TTL — те же переменные окружения, что у кабинета (`landcheck web`), чтобы прогон
+# через CLI в контейнере попадал в кэш кабинета (урок 15.10: иначе кэшей два).
+DEFAULT_CACHE = Path(
+    os.environ.get("LANDCHECK_CACHE") or Path.home() / ".landcheck" / "cache.sqlite"
+)
+_DEFAULT_TTL = float(os.environ.get("LANDCHECK_TTL_DAYS") or DEFAULT_TTL_DAYS)
 DEFAULT_REFERENCE = Path("data/reference_cns.txt")
 DEFAULT_SNAPSHOT = Path("data/nspd_snapshot.json")
 
@@ -122,7 +128,7 @@ def check(
         Path | None, typer.Option(help="Папка JSON-фикстур вместо живого НСПД (офлайн)")
     ] = None,
     cache: Annotated[Path, typer.Option(help="SQLite-кэш ответов НСПД")] = DEFAULT_CACHE,
-    ttl_days: Annotated[float, typer.Option(help="Срок кэша, дней")] = DEFAULT_TTL_DAYS,
+    ttl_days: Annotated[float, typer.Option(help="Срок кэша, дней")] = _DEFAULT_TTL,
     refresh: Annotated[bool, typer.Option(help="Игнорировать кэш, запросить заново")] = False,
     workers: Annotated[int, typer.Option(help="Параллельных запросов к НСПД")] = 2,
     no_zones: Annotated[bool, typer.Option(help="Не проверять ЗОУИТ и терзоны (быстрее)")] = False,

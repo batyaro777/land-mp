@@ -187,3 +187,11 @@ def test_long_multiline_input_is_text_not_path():
     assert [item.cad_num for item in listings] == numbers
     # короткий путь к несуществующему файлу тоже читается как текст
     assert load_listings("50:09:0060202:101; 2 500 000; 10 сот")[0].price_rub == 2_500_000
+
+
+def test_public_use_vri_is_stop_for_any_goal():
+    for purpose in (Purpose.IZHS, Purpose.COMMERCE, Purpose.FARMING):
+        _, flags = run(
+            make_payload("x", category=SETTLEMENT, vri="Земли общего пользования"), purpose
+        )
+        assert flags["R05"].level is Level.STOP and "ст. 85" in flags["R05"].source
