@@ -325,7 +325,7 @@ def summarize_neighbors(
 def price_reference(
     neighbors: dict[str, Any], listing_price_rub: float | None, area_m2: float | None
 ) -> dict[str, Any] | None:
-    """Ориентир «за сотку / за гектар» по кадастровой ставке своей группы; цена объявления к нему."""
+    """Ориентир за сотку и гектар по кадастровой ставке своей группы; цена объявления к нему."""
     same = neighbors.get("same_category")
     med = same["median_rub_m2"] if same else None
     if not med:
