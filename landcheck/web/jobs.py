@@ -6,6 +6,7 @@ import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import select
 
@@ -184,3 +185,49 @@ def run_check(check_id: int) -> None:
     except Exception as e:  # noqa: BLE001 — любая ошибка должна попасть в карточку проверки
         log.exception("check %s failed", check_id)
         _set(check_id, status="error", error=f"{type(e).__name__}: {e}")
+
+
+# --- модуль «Локация»: окружение по запросу из отчёта -----------------------------------
+def fetch_location(
+    cad_num: str,
+    parcel_geojson: dict[str, Any] | None,
+    *,
+    refresh: bool = False,
+    with_osm: bool = True,
+) -> dict[str, Any]:
+    """Сырой ответ окружения: кэш → провайдер → OSM. Ошибки внутри, исключений наружу нет."""
+    from landcheck.location import OSM_RADIUS_M, centroid, empty_location_raw
+
+    cache = ParcelCache(settings.cache_path, ttl_days=settings.cache_ttl_days)
+    provider = build_provider()
+    try:
+        if not refresh:
+            cached = cache.get_location(cad_num)
+            if cached is not None:
+                return cached
+        if parcel_geojson is None:
+            raw = empty_location_raw(cad_num)
+            raw["nspd"]["errors"].append("у участка нет контура, окружение не проверить")
+            return raw
+        fetch = getattr(provider, "fetch_location_raw", None)
+        if fetch is None:
+            raw = empty_location_raw(cad_num)
+            raw["nspd"]["errors"].append("провайдер не умеет окружение")
+            return raw
+        raw = fetch(cad_num, parcel_geojson)
+        if with_osm and raw.get("osm") is None and provider.name != "fixture":
+            from landcheck.osm import fetch_osm
+
+            try:
+                lat, lon = centroid(parcel_geojson)
+                raw["osm"] = fetch_osm(lat, lon, OSM_RADIUS_M)
+            except Exception as e:  # noqa: BLE001
+                raw["osm"] = {"elements": [], "error": f"{type(e).__name__}: {e}"}
+        if provider.name != "fixture" and not raw["nspd"].get("errors"):
+            cache.put_location(cad_num, raw)
+        return raw
+    finally:
+        cache.close()
+        close = getattr(provider, "close", None)
+        if close:
+            close()

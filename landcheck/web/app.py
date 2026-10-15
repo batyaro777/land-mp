@@ -406,6 +406,8 @@ def _report_ctx(check: Check, item: CheckItem, public: bool) -> dict[str, Any]:
         "by_level": flags_by_level(data),
         "purpose": purpose,
         "goal": goal_summary(data, purpose),
+        "loc": data.get("location"),
+        "location_url": f"/checks/{check.id}/items/{item.cad_num}/location",
         "checklist": CHECKLIST,
         "price": price_orientation(data, (check.stats or {}).get("median_price_per_sotka")),
         "public": public,
@@ -436,6 +438,46 @@ def report_public(request: Request, token: str):
         check = item.check
         _ = check.user
         return render(request, "report.html", **_report_ctx(check, item, public=True), user=None)
+
+
+@router.get("/checks/{check_id}/items/{cad_num}/location", response_class=HTMLResponse)
+def report_location(request: Request, user: UserDep, check_id: int, cad_num: str, refresh: int = 0):
+    """Блок «Локация» по запросу (HTMX): кэш → НСПД вокруг участка → OSM; результат в item.data."""
+    from landcheck.location import summarize_location
+
+    with session() as db:
+        check = _own_check(db, user, check_id)
+        item = db.scalar(
+            select(CheckItem).where(CheckItem.check_id == check.id, CheckItem.cad_num == cad_num)
+        )
+        if item is None:
+            raise HTTPException(404)
+        data = dict(item.data)
+        parcel = data.get("parcel") or {}
+        listing = data.get("listing") or {}
+        loc = data.get("location")
+        if loc is None or refresh:
+            raw = jobs.fetch_location(cad_num, parcel.get("geometry"), refresh=bool(refresh))
+            loc = summarize_location(
+                raw,
+                parcel_geojson=parcel.get("geometry"),
+                cad_num=cad_num,
+                category=parcel.get("category"),
+                cost_index=parcel.get("cost_index_rub_m2"),
+                listing_price_rub=listing.get("price_rub"),
+                area_m2=parcel.get("area_m2"),
+            )
+            data["location"] = loc
+            item.data = data
+            db.commit()
+        return render(
+            request,
+            "_location.html",
+            loc=loc,
+            public=False,
+            location_url=f"/checks/{check.id}/items/{cad_num}/location",
+            user=user,
+        )
 
 
 # --- single check ------------------------------------------------------------------------

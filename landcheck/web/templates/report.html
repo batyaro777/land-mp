@@ -113,6 +113,15 @@
 </article>
 {% endif %}
 
+{% if loc %}
+  {% include "_location.html" %}
+{% elif not public and p.geometry %}
+<article id="location" hx-get="{{ location_url }}" hx-trigger="load" hx-swap="outerHTML">
+  <h4>Локация: окружение и ориентир стоимости</h4>
+  <p class="muted small" aria-busy="true">Собираю окружение по НСПД и OpenStreetMap, до минуты…</p>
+</article>
+{% endif %}
+
 {% if price %}
 <article>
   <h4>Ценовой ориентир за сотку</h4>

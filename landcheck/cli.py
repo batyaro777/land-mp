@@ -219,6 +219,115 @@ def fetch(
 
 
 @app.command()
+def location(
+    cad_num: Annotated[str, typer.Argument(help="Кадастровый номер")],
+    purpose: Annotated[
+        Purpose, typer.Option("--purpose", "-p", help="Цель покупателя")
+    ] = Purpose.ANY,
+    price: Annotated[float | None, typer.Option(help="Цена в объявлении, ₽")] = None,
+    fixtures: Annotated[Path | None, typer.Option(help="Фикстуры вместо НСПД")] = None,
+    cache: Annotated[Path, typer.Option(help="SQLite-кэш ответов НСПД")] = DEFAULT_CACHE,
+    ttl_days: Annotated[float, typer.Option(help="Срок кэша, дней")] = _DEFAULT_TTL,
+    no_osm: Annotated[bool, typer.Option(help="Без OpenStreetMap")] = False,
+    refresh: Annotated[bool, typer.Option(help="Не брать окружение из кэша")] = False,
+    proxy: Annotated[str | None, typer.Option(help="Прокси для НСПД")] = None,
+    timeout: Annotated[int, typer.Option(help="Таймаут, с")] = 40,
+    as_json: Annotated[bool, typer.Option("--json", help="Сводка в JSON")] = False,
+):
+    """Окружение и ориентир стоимости одного участка (модуль «Локация»): НСПД вокруг + OSM."""
+    import json as _json
+
+    from landcheck.inputs import CAD_RE, normalize_cad_num
+    from landcheck.location import OSM_RADIUS_M, centroid, empty_location_raw, summarize_location
+    from landcheck.normalize import parcel_from_payload
+    from landcheck.pipeline import fetch_payload
+
+    m = CAD_RE.search(cad_num)
+    if not m:
+        console.print("[red]Не похоже на кадастровый номер.[/]")
+        raise typer.Exit(code=1)
+    cn = normalize_cad_num(m.group(0))
+    provider = _provider(fixtures, with_zones=True, proxy=proxy, timeout=timeout)
+    pcache = ParcelCache(cache, ttl_days=ttl_days) if fixtures is None else None
+    try:
+        payload, errors = fetch_payload(cn, provider, pcache)
+        parcel = parcel_from_payload(payload)
+        if not parcel.found or not parcel.geometry:
+            console.print(f"[red]{cn}: участок не найден или без контура[/] {'; '.join(errors)}")
+            raise typer.Exit(code=1)
+        raw = pcache.get_location(cn) if (pcache is not None and not refresh) else None
+        if raw is None:
+            fetch = getattr(provider, "fetch_location_raw", None)
+            raw = fetch(cn, parcel.geometry) if fetch else empty_location_raw(cn)
+            if not no_osm and provider.name != "fixture":
+                from landcheck.osm import fetch_osm
+
+                lat, lon = centroid(parcel.geometry)
+                raw["osm"] = fetch_osm(lat, lon, OSM_RADIUS_M)
+            if pcache is not None and not raw["nspd"].get("errors"):
+                pcache.put_location(cn, raw)
+        loc = summarize_location(
+            raw,
+            parcel_geojson=parcel.geometry,
+            cad_num=cn,
+            category=parcel.category,
+            cost_index=parcel.cost_index_rub_m2,
+            listing_price_rub=price,
+            area_m2=parcel.best_area_m2,
+        )
+    finally:
+        if pcache is not None:
+            pcache.close()
+        close = getattr(provider, "close", None)
+        if close:
+            close()
+    if as_json:
+        console.print_json(_json.dumps(loc, ensure_ascii=False, default=str))
+        return
+    console.print(f"[bold]{cn}[/] — {parcel.address or ''}")
+    console.print("[bold]Что рядом (НСПД):[/]")
+    for g in loc["zouit"]:
+        d = (
+            "внутри"
+            if g["min_distance_m"] == 0
+            else f"{g['min_distance_m']} м"
+            if g["min_distance_m"] is not None
+            else "?"
+        )
+        console.print(f"  [{g['severity']}] {g['label']} ×{g['count']}: {d}")
+    if loc["osm"]:
+        console.print("[bold]OpenStreetMap, 3 км:[/]")
+        for o in loc["osm"]:
+            console.print(
+                f"  [{o['severity']}] {o['label']} ×{o['count']}: "
+                f"{o['distance_m']} м {o['name'] or ''}"
+            )
+    elif loc["osm_error"]:
+        console.print(f"  OSM: {loc['osm_error']}")
+    console.print("[bold]Проекты межевания рядом:[/]")
+    for d in loc["plans"] or []:
+        uses = "; ".join(f"{u} ×{n}" for u, n in d["uses"]) or "ВРИ не указан"
+        console.print(
+            f"  {d['document'][:90]} — {d['parcels']} уч., {d['min_distance_m']} м: {uses}"
+        )
+    if not loc["plans"]:
+        console.print("  нет")
+    n = loc["neighbors"]
+    console.print(f"[bold]Соседи ({n['total']}):[/]")
+    for c in n["categories"]:
+        console.print(f"  {c['category']}: {c['count']} уч., медиана {c['median_rub_m2']} ₽/м²")
+    if n["position"]:
+        console.print(f"  Участок: {n['target_rub_m2']} ₽/м² — {n['position']}")
+    if loc["price"]:
+        p_ = loc["price"]
+        console.print(
+            f"  Ориентир: {p_['per_sotka']:,.0f} ₽/сот · {p_['per_ha']:,.0f} ₽/га".replace(",", " ")
+        )
+    if loc["errors"]:
+        console.print(f"[yellow]Ошибки: {'; '.join(loc['errors'])}[/]")
+
+
+@app.command()
 def monitor(
     reference: Annotated[Path, typer.Option(help="Файл с эталонными номерами")] = DEFAULT_REFERENCE,
     snapshot: Annotated[Path, typer.Option(help="Снимок формата НСПД")] = DEFAULT_SNAPSHOT,

@@ -1,0 +1,74 @@
+{# Блок «Локация»: окружение по НСПД и OSM, ориентир стоимости по соседям #}
+{% set sev = {'risk':'stop','plus':'ok','neutral':'check'} %}
+<article class="location" id="location">
+  <hgroup>
+    <h4>Локация: окружение и ориентир стоимости</h4>
+    <p class="muted small">НСПД в радиусе {{ loc.radius_m.nspd }} м и соседи в {{ loc.radius_m.neighbors }} м, OpenStreetMap в {{ loc.radius_m.osm }} м
+      {% if loc.fetched_at %}· собрано {{ loc.fetched_at|dt }}{% endif %}
+      {% if not public %}· <a href="{{ location_url }}?refresh=1" hx-get="{{ location_url }}?refresh=1" hx-target="#location" hx-swap="outerHTML" class="small">обновить</a>{% endif %}</p>
+  </hgroup>
+
+  <div class="grid two">
+  <div>
+    <strong>Что рядом</strong>
+    {% set z = loc.zouit %}
+    {% if z %}
+    <ul class="loc-list">
+      {% for g in z %}
+      <li><span class="badge mini v-{{ sev[g.severity] }}">{{ {'risk':'риск','plus':'плюс','neutral':'факт'}[g.severity] }}</span>
+        {{ g.label }}{% if g.count > 1 %} ×{{ g.count }}{% endif %}:
+        {% if g.min_distance_m is not none %}{% if g.min_distance_m == 0 %}участок внутри зоны{% else %}ближайшая в {{ g.min_distance_m }} м{% endif %}{% else %}расстояние не определено{% endif %}
+        {% if g.note %}<span class="muted small">— {{ g.note }}</span>{% endif %}
+        {% if g.nearest_name %}<div class="muted small">{{ g.nearest_name|truncate(110) }}</div>{% endif %}</li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="muted small">ЗОУИТ в радиусе не найдены{% if loc.errors %} ({{ loc.errors|join('; ') }}){% endif %}.</p>{% endif %}
+
+    {% if loc.osm %}
+    <ul class="loc-list">
+      {% for o in loc.osm %}
+      <li><span class="badge mini v-{{ sev[o.severity] }}">OSM</span> {{ o.label }}{% if o.count > 1 %} ×{{ o.count }}{% endif %}:
+        {% if o.distance_m is not none %}{{ o.distance_m }} м{% else %}рядом{% endif %}{% if o.name %} <span class="muted small">{{ o.name }}</span>{% endif %}</li>
+      {% endfor %}
+    </ul>
+    {% elif loc.osm_error %}<p class="muted small">OpenStreetMap: {{ loc.osm_error }}.</p>
+    {% else %}<p class="muted small">OpenStreetMap: объектов выбранных классов в радиусе нет.</p>{% endif %}
+    {% if loc.auction_parcels %}<p class="small">Участков, выставленных на аукцион рядом: {{ loc.auction_parcels }}.</p>{% endif %}
+  </div>
+
+  <div>
+    <strong>Что здесь планируют строить</strong>
+    {% if loc.plans %}
+    <ul class="loc-list">
+      {% for d in loc.plans %}
+      <li>{{ d.document|truncate(140) }}{% if d.issuer %} <span class="muted small">({{ d.issuer }})</span>{% endif %}
+        <div class="small">{{ d.parcels }} уч.{% if d.area_m2 %}, {{ (d.area_m2 / 10000)|round(1) }} га{% endif %}{% if d.min_distance_m is not none %}, {% if d.min_distance_m == 0 %}вплотную{% else %}в {{ d.min_distance_m }} м{% endif %}{% endif %}:
+          {% for use, n in d.uses %}{{ use|lower|truncate(50) }}{% if n > 1 %} ×{{ n }}{% endif %}{% if not loop.last %}; {% endif %}{% endfor %}</div></li>
+      {% endfor %}
+    </ul>
+    <p class="muted small">Источник: проекты межевания территории в НСПД. Генплан и планируемые дороги в НСПД не публикуются, их смотреть во ФГИС ТП и у администрации.</p>
+    {% else %}<p class="muted small">Проектов межевания в радиусе {{ loc.radius_m.nspd }} м в НСПД нет. Генплан и планируемые дороги в НСПД не публикуются.</p>{% endif %}
+  </div>
+  </div>
+
+  {% set n = loc.neighbors %}
+  <strong>Ориентир стоимости по соседям</strong>
+  {% if n.total %}
+  <table class="facts">
+    <tr><th>Категория</th><th class="num">Участков</th><th class="num">Медиана, ₽/м²</th><th class="num">25–75 %, ₽/м²</th><th class="num">Медиана площади</th></tr>
+    {% for c in n.categories %}
+    <tr><td>{{ c.category }}</td><td class="num">{{ c.count }}</td><td class="num">{{ c.median_rub_m2 or '—' }}</td>
+      <td class="num">{% if c.p25_rub_m2 %}{{ c.p25_rub_m2 }} – {{ c.p75_rub_m2 }}{% else %}—{% endif %}</td>
+      <td class="num">{{ (c.median_area_m2 / 100)|round(1) if c.median_area_m2 else '—' }} сот.</td></tr>
+    {% endfor %}
+  </table>
+  {% if n.position %}<p>Этот участок: {{ n.target_rub_m2 }} ₽/м², <strong>{{ n.position }}</strong> той же категории.</p>{% endif %}
+  {% if loc.price %}
+  <p class="small">Кадастровый ориентир ({{ loc.price.basis }}): {{ loc.price.per_sotka|money }} за сотку · {{ loc.price.per_10_sotka|money }} за 10 соток · {{ loc.price.per_ha|money }} за гектар.
+    {% if loc.price.listing_vs_gko %}Цена в объявлении: {{ loc.price.listing_rub_m2 }} ₽/м², это {{ loc.price.listing_vs_gko }}× кадастровой ставки соседей.{% endif %}</p>
+  {% endif %}
+  {% if n.uses %}<p class="muted small">Частые ВРИ рядом: {% for u in n.uses %}{{ u.vri|lower|truncate(45) }} ({{ u.count }}{% if u.median_rub_m2 %}, {{ u.median_rub_m2 }} ₽/м²{% endif %}){% if not loop.last %}; {% endif %}{% endfor %}.</p>{% endif %}
+  <p class="muted small">{{ n.note }}</p>
+  {% else %}<p class="muted small">Соседние участки не получены{% if loc.errors %}: {{ loc.errors|join('; ') }}{% endif %}.</p>{% endif %}
+  <p class="muted small">{{ loc.disclaimer }}</p>
+</article>

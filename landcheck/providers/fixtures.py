@@ -35,6 +35,19 @@ class FixtureProvider:
         payload.setdefault("found", payload.get("landplot") is not None)
         return payload
 
+    def fetch_location_raw(self, cad_num: str, parcel_geojson: dict[str, Any]) -> dict[str, Any]:
+        """Окружение из `<КН>.location.json`, если файл есть; иначе пустой ответ без ошибок."""
+        from landcheck.location import empty_location_raw
+
+        path = self.directory / (cad_num.replace(":", "_") + ".location.json")
+        if path.exists():
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            raw.setdefault("cad_num", cad_num)
+            return raw
+        raw = empty_location_raw(cad_num)
+        raw["nspd"]["errors"].append("фикстура окружения не найдена")
+        return raw
+
     def save(self, payload: dict[str, Any]) -> Path:
         self.directory.mkdir(parents=True, exist_ok=True)
         path = self.directory / fixture_filename(payload["cad_num"])

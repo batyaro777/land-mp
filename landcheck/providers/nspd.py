@@ -16,6 +16,9 @@ from landcheck.providers.base import empty_payload
 
 ZOUIT_LAYER_TITLE = "Иные ЗОУИТ"  # все 5 слоёв ЗОУИТ делят categoryId 36940 → один запрос
 TERRITORIAL_ZONES_TITLE = "Территориальные зоны"
+LANDPLOT_LAYER_ID = 36048  # Земельные участки из ЕГРН
+PMT_LAYER_ID = 36473  # ЗУ, образуемые по проекту межевания территории
+AUCTION_LAYER_ID = 37299  # ЗУ, выставленные на аукцион
 
 
 class LiveNspdProvider:
@@ -124,3 +127,47 @@ class LiveNspdProvider:
         except Exception as e:  # noqa: BLE001
             payload["errors"].append(f"терзоны не проверены: {type(e).__name__}: {e}")
         return payload
+
+    # --- окружение участка (модуль «Локация», по запросу из отчёта) ------------------------
+    def fetch_location_raw(self, cad_num: str, parcel_geojson: dict[str, Any]) -> dict[str, Any]:
+        """ЗОУИТ и проекты межевания в радиусе NSPD_RADIUS_M, соседи в NEIGHBORS_RADIUS_M.
+
+        Четыре запроса к НСПД на участок. Каждый шаг изолирован: ошибка пишется в errors.
+        """
+        from pynspd import NspdFeature
+        from pynspd import schemas as pschemas
+
+        from landcheck.location import (
+            NEIGHBORS_RADIUS_M,
+            NSPD_RADIUS_M,
+            bbox_polygon,
+            centroid,
+            empty_location_raw,
+        )
+
+        raw = empty_location_raw(cad_num)
+        nspd = self._client()
+        try:
+            lat, lon = centroid(parcel_geojson)
+        except Exception as e:  # noqa: BLE001
+            raw["nspd"]["errors"].append(f"нет контура участка: {type(e).__name__}: {e}")
+            return raw
+        wide = bbox_polygon(lat, lon, NSPD_RADIUS_M)
+        near = bbox_polygon(lat, lon, NEIGHBORS_RADIUS_M)
+
+        def layer(layer_id: int):
+            return getattr(pschemas, f"Layer{layer_id}Feature")
+
+        steps = (
+            ("zouit", wide, lambda: NspdFeature.by_title(ZOUIT_LAYER_TITLE)),
+            ("pmt", wide, lambda: layer(PMT_LAYER_ID)),
+            ("neighbors", near, lambda: layer(LANDPLOT_LAYER_ID)),
+            ("auction", wide, lambda: layer(AUCTION_LAYER_ID)),
+        )
+        for key, poly, layer_def in steps:
+            try:
+                hits = nspd.search_in_contour(poly, layer_def()) or []
+                raw["nspd"][key] = [h.model_dump(by_alias=True, mode="json") for h in hits]
+            except Exception as e:  # noqa: BLE001
+                raw["nspd"]["errors"].append(f"{key}: {type(e).__name__}: {e}")
+        return raw

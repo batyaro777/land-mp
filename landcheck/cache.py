@@ -29,6 +29,15 @@ class ParcelCache:
             )
             """
         )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS locations (
+                cad_num TEXT PRIMARY KEY,
+                fetched_at TEXT NOT NULL,
+                payload TEXT NOT NULL
+            )
+            """
+        )
         self._conn.commit()
 
     def close(self) -> None:
@@ -68,3 +77,28 @@ class ParcelCache:
             total = self._conn.execute("SELECT COUNT(*) FROM parcels").fetchone()[0]
             oldest = self._conn.execute("SELECT MIN(fetched_at) FROM parcels").fetchone()[0]
         return {"total": total, "oldest": oldest, "path": str(self.path)}
+
+    # --- окружение участка (модуль «Локация») -------------------------------------------
+    def get_location(self, cad_num: str, *, allow_stale: bool = False) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT fetched_at, payload FROM locations WHERE cad_num = ?", (cad_num,)
+            ).fetchone()
+        if row is None:
+            return None
+        fetched_at = datetime.fromisoformat(row[0])
+        if fetched_at.tzinfo is None:
+            fetched_at = fetched_at.replace(tzinfo=UTC)
+        if not allow_stale and datetime.now(UTC) - fetched_at > self.ttl:
+            return None
+        return json.loads(row[1])
+
+    def put_location(self, cad_num: str, raw: dict[str, Any]) -> None:
+        fetched_at = raw.get("fetched_at") or datetime.now(UTC).isoformat()
+        body = json.dumps(raw, ensure_ascii=False, default=str)
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO locations (cad_num, fetched_at, payload) VALUES (?, ?, ?)",
+                (cad_num, fetched_at, body),
+            )
+            self._conn.commit()
