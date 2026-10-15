@@ -130,6 +130,18 @@ def _zouit_kind(type_zone: str, name: str) -> tuple[str, str, str]:
     return "иная ЗОУИТ", "neutral", ""
 
 
+def _feature_distance(
+    feature: dict[str, Any], parcel_geojson: dict[str, Any] | None
+) -> float | None:
+    """Расстояние из кэша (посчитано при сохранении) или по геометрии, если она ещё есть."""
+    dist = feature.get("distance_m")
+    if dist is not None:
+        return dist
+    if parcel_geojson and feature.get("geometry"):
+        return distance_m(parcel_geojson, feature["geometry"])
+    return None
+
+
 def summarize_zouit(
     parcel_geojson: dict[str, Any] | None, features: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -140,9 +152,7 @@ def summarize_zouit(
         label, severity, note = _zouit_kind(
             str(_get(opts, "type_zone", default="")), str(_get(opts, "name_by_doc", default=""))
         )
-        dist = None
-        if parcel_geojson and f.get("geometry"):
-            dist = distance_m(parcel_geojson, f["geometry"])
+        dist = _feature_distance(f, parcel_geojson)
         g = groups.setdefault(
             label,
             {
@@ -200,10 +210,9 @@ def summarize_plans(
             d["uses"][str(vri)] = d["uses"].get(str(vri), 0) + 1
         if area:
             d["area_m2"] += area
-        if parcel_geojson and f.get("geometry"):
-            dist = distance_m(parcel_geojson, f["geometry"])
-            if dist is not None and (d["min_distance_m"] is None or dist < d["min_distance_m"]):
-                d["min_distance_m"] = dist
+        dist = _feature_distance(f, parcel_geojson)
+        if dist is not None and (d["min_distance_m"] is None or dist < d["min_distance_m"]):
+            d["min_distance_m"] = dist
     out = []
     for d in docs.values():
         d["uses"] = sorted(d["uses"].items(), key=lambda kv: -kv[1])
@@ -443,8 +452,10 @@ def summarize_osm(
         cls = osm_class(tags)
         if cls is None:
             continue
-        g = _osm_geojson(el)
-        dist = distance_m(parcel_geojson, g) if (parcel_geojson and g) else None
+        dist = el.get("distance_m")
+        if dist is None:
+            g = _osm_geojson(el)
+            dist = distance_m(parcel_geojson, g) if (parcel_geojson and g) else None
         name = tags.get("name") or tags.get("ref")
         label, severity = _OSM_LABEL[cls]
         cur = best.get(cls)
@@ -546,12 +557,26 @@ def slim_feature(
     return out
 
 
-def slim_raw(raw: dict[str, Any]) -> dict[str, Any]:
+def _with_distance(
+    feature: dict[str, Any], keep: tuple[str, ...], parcel_geojson: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Расстояние считается один раз при сохранении, геометрия зоны в кэш не идёт
+    (266 ЗОУИТ Белокурихи с контурами газопроводов весили 3,7 МБ на участок)."""
+    out = slim_feature(feature, keep, geometry=False)
+    dist = feature.get("distance_m")
+    if dist is None and parcel_geojson and feature.get("geometry"):
+        dist = distance_m(parcel_geojson, feature["geometry"])
+    if dist is not None:
+        out["distance_m"] = dist
+    return out
+
+
+def slim_raw(raw: dict[str, Any], parcel_geojson: dict[str, Any] | None = None) -> dict[str, Any]:
     nspd = raw.get("nspd") or {}
     nspd["zouit"] = [
-        slim_feature(f, _KEEP_ZONE_KEYS, geometry=True) for f in nspd.get("zouit") or []
+        _with_distance(f, _KEEP_ZONE_KEYS, parcel_geojson) for f in nspd.get("zouit") or []
     ]
-    nspd["pmt"] = [slim_feature(f, _KEEP_PMT_KEYS, geometry=True) for f in nspd.get("pmt") or []]
+    nspd["pmt"] = [_with_distance(f, _KEEP_PMT_KEYS, parcel_geojson) for f in nspd.get("pmt") or []]
     nspd["neighbors"] = [
         slim_feature(f, _KEEP_PLOT_KEYS, geometry=False) for f in nspd.get("neighbors") or []
     ]
@@ -565,11 +590,12 @@ def slim_raw(raw: dict[str, Any]) -> dict[str, Any]:
             tags = el.get("tags") or {}
             if osm_class(tags) is None:
                 continue
-            keep = {
-                k: el.get(k)
-                for k in ("type", "lat", "lon", "geometry", "center")
-                if el.get(k) is not None
-            }
+            keep = {k: el.get(k) for k in ("type", "lat", "lon", "center") if el.get(k) is not None}
+            g = _osm_geojson(el)
+            if parcel_geojson and g:
+                keep["distance_m"] = distance_m(parcel_geojson, g)
+            elif el.get("geometry") is not None:
+                keep["geometry"] = el["geometry"]
             keep["tags"] = {
                 k: v
                 for k, v in tags.items()

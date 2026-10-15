@@ -258,9 +258,13 @@ def test_slim_raw_drops_geometry_of_neighbors_and_keeps_zone_geometry():
     raw = raw_sample()
     raw["nspd"]["neighbors"][1]["geometry"] = _poly(37.001, 55.001)
     raw["nspd"]["zouit"][0]["properties"]["options"]["content_restrict_encumbrances"] = "x" * 5000
-    slim = slim_raw(raw)
+    slim = slim_raw(raw, PARCEL)
     assert "geometry" not in slim["nspd"]["neighbors"][1]
-    assert slim["nspd"]["zouit"][0]["geometry"] is not None
+    z0 = slim["nspd"]["zouit"][0]
+    assert "geometry" not in z0 and 250 <= z0["distance_m"] <= 350
+    assert slim["nspd"]["pmt"][0]["distance_m"] is not None
+    river = slim["osm"]["elements"][1]
+    assert "geometry" not in river and river["distance_m"] < 300
     assert "content_restrict_encumbrances" not in slim["nspd"]["zouit"][0]["properties"]["options"]
     # лишние OSM-элементы (лавочки) выброшены, нужные остались
     assert all(el["tags"] for el in slim["osm"]["elements"]) and len(slim["osm"]["elements"]) == 3

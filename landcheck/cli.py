@@ -273,7 +273,7 @@ def location(
             lat, lon = centroid(parcel.geometry)
             raw["osm"] = fetch_osm(lat, lon, OSM_RADIUS_M)
         if pcache is not None and not raw["nspd"].get("errors"):
-            pcache.put_location(cn, slim_raw(raw))
+            pcache.put_location(cn, slim_raw(raw, parcel.geometry))
         loc = summarize_location(
             raw,
             parcel_geojson=parcel.geometry,
@@ -293,30 +293,31 @@ def location(
         console.print_json(_json.dumps(loc, ensure_ascii=False, default=str))
         return
     console.print(f"[bold]{cn}[/] — {parcel.address or ''}")
+
+    def tag(severity: str) -> str:
+        word = {"risk": "риск", "plus": "плюс", "neutral": "факт"}[severity]
+        return escape(f"[{word}]")
+
     console.print("[bold]Что рядом (НСПД):[/]")
     for g in loc["zouit"]:
-        d = (
-            "внутри"
-            if g["min_distance_m"] == 0
-            else f"{g['min_distance_m']} м"
-            if g["min_distance_m"] is not None
-            else "?"
-        )
-        console.print(f"  [{g['severity']}] {g['label']} ×{g['count']}: {d}")
+        dist = g["min_distance_m"]
+        d = "внутри" if dist == 0 else f"{dist} м" if dist is not None else "?"
+        console.print(f"  {tag(g['severity'])} {escape(g['label'])} ×{g['count']}: {d}")
     if loc["osm"]:
         console.print("[bold]OpenStreetMap, 3 км:[/]")
         for o in loc["osm"]:
             console.print(
-                f"  [{o['severity']}] {o['label']} ×{o['count']}: "
-                f"{o['distance_m']} м {o['name'] or ''}"
+                f"  {tag(o['severity'])} {escape(o['label'])} ×{o['count']}: "
+                f"{o['distance_m']} м {escape(o['name'] or '')}"
             )
     elif loc["osm_error"]:
-        console.print(f"  OSM: {loc['osm_error']}")
+        console.print(f"  OSM: {escape(str(loc['osm_error']))}")
     console.print("[bold]Проекты межевания рядом:[/]")
     for d in loc["plans"] or []:
         uses = "; ".join(f"{u} ×{n}" for u, n in d["uses"]) or "ВРИ не указан"
         console.print(
-            f"  {d['document'][:90]} — {d['parcels']} уч., {d['min_distance_m']} м: {uses}"
+            f"  {escape(d['document'][:90])} — {d['parcels']} уч., {d['min_distance_m']} м: "
+            f"{escape(uses)}"
         )
     if not loc["plans"]:
         console.print("  нет")
@@ -333,6 +334,7 @@ def location(
         p_ = loc["price"]
         console.print(
             f"  Ориентир: {p_['per_sotka']:,.0f} ₽/сот · {p_['per_ha']:,.0f} ₽/га".replace(",", " ")
+            + f" ({escape(p_['basis'])})"
         )
     if loc["errors"]:
         console.print(f"[yellow]Ошибки: {'; '.join(loc['errors'])}[/]")

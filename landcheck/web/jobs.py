@@ -208,7 +208,7 @@ def fetch_location(
                 if with_osm and _osm_failed(cached) and parcel_geojson is not None:
                     cached["osm"] = _fetch_osm_safe(parcel_geojson)
                     if not _osm_failed(cached):
-                        cache.put_location(cad_num, slim_raw(cached))
+                        cache.put_location(cad_num, slim_raw(cached, parcel_geojson))
                 return cached
         if parcel_geojson is None:
             raw = empty_location_raw(cad_num)
@@ -223,7 +223,7 @@ def fetch_location(
         if with_osm and raw.get("osm") is None and provider.name != "fixture":
             raw["osm"] = _fetch_osm_safe(parcel_geojson)
         if provider.name != "fixture" and not raw["nspd"].get("errors"):
-            cache.put_location(cad_num, slim_raw(raw))
+            cache.put_location(cad_num, slim_raw(raw, parcel_geojson))
         return raw
     finally:
         cache.close()
