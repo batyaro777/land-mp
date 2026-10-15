@@ -196,7 +196,7 @@ def fetch_location(
     with_osm: bool = True,
 ) -> dict[str, Any]:
     """Сырой ответ окружения: кэш → провайдер → OSM. Ошибки внутри, исключений наружу нет."""
-    from landcheck.location import OSM_RADIUS_M, centroid, empty_location_raw
+    from landcheck.location import empty_location_raw, slim_raw
 
     cache = ParcelCache(settings.cache_path, ttl_days=settings.cache_ttl_days)
     provider = build_provider()
@@ -204,6 +204,11 @@ def fetch_location(
         if not refresh:
             cached = cache.get_location(cad_num)
             if cached is not None:
+                # НСПД-часть берём из кэша, а OSM, если тогда отказали зеркала, пробуем ещё раз.
+                if with_osm and _osm_failed(cached) and parcel_geojson is not None:
+                    cached["osm"] = _fetch_osm_safe(parcel_geojson)
+                    if not _osm_failed(cached):
+                        cache.put_location(cad_num, slim_raw(cached))
                 return cached
         if parcel_geojson is None:
             raw = empty_location_raw(cad_num)
@@ -216,18 +221,28 @@ def fetch_location(
             return raw
         raw = fetch(cad_num, parcel_geojson)
         if with_osm and raw.get("osm") is None and provider.name != "fixture":
-            from landcheck.osm import fetch_osm
-
-            try:
-                lat, lon = centroid(parcel_geojson)
-                raw["osm"] = fetch_osm(lat, lon, OSM_RADIUS_M)
-            except Exception as e:  # noqa: BLE001
-                raw["osm"] = {"elements": [], "error": f"{type(e).__name__}: {e}"}
+            raw["osm"] = _fetch_osm_safe(parcel_geojson)
         if provider.name != "fixture" and not raw["nspd"].get("errors"):
-            cache.put_location(cad_num, raw)
+            cache.put_location(cad_num, slim_raw(raw))
         return raw
     finally:
         cache.close()
         close = getattr(provider, "close", None)
         if close:
             close()
+
+
+def _osm_failed(raw: dict[str, Any]) -> bool:
+    osm = raw.get("osm")
+    return osm is None or bool(osm.get("error"))
+
+
+def _fetch_osm_safe(parcel_geojson: dict[str, Any]) -> dict[str, Any]:
+    from landcheck.location import OSM_RADIUS_M, centroid
+    from landcheck.osm import fetch_osm
+
+    try:
+        lat, lon = centroid(parcel_geojson)
+        return fetch_osm(lat, lon, OSM_RADIUS_M)
+    except Exception as e:  # noqa: BLE001
+        return {"elements": [], "error": f"{type(e).__name__}: {e}"}

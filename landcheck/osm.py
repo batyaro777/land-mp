@@ -40,7 +40,7 @@ out geom tags;
 def fetch_osm(lat: float, lon: float, radius_m: int, *, timeout: float = 45.0) -> dict[str, Any]:
     """{"elements": [...]} или {"elements": [], "error": "..."} — без исключений наружу."""
     query = _QUERY.format(r=int(radius_m), lat=lat, lon=lon)
-    last_error = "Overpass недоступен"
+    failures: list[str] = []
     for url in OVERPASS_URLS:
         try:
             r = httpx.post(
@@ -50,10 +50,14 @@ def fetch_osm(lat: float, lon: float, radius_m: int, *, timeout: float = 45.0) -
                 timeout=timeout,
             )
             if r.status_code != 200:
-                last_error = f"Overpass {url}: HTTP {r.status_code}"
+                failures.append(f"{_host(url)}: HTTP {r.status_code}")
                 continue
             data = r.json()
             return {"elements": data.get("elements") or [], "url": url}
         except Exception as e:  # noqa: BLE001 — сеть; окружение не должно валить отчёт
-            last_error = f"Overpass {url}: {type(e).__name__}: {e}"
-    return {"elements": [], "error": last_error}
+            failures.append(f"{_host(url)}: {type(e).__name__}")
+    return {"elements": [], "error": "все зеркала Overpass отказали (" + "; ".join(failures) + ")"}
+
+
+def _host(url: str) -> str:
+    return url.split("/")[2]

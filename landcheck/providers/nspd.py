@@ -143,6 +143,7 @@ class LiveNspdProvider:
             bbox_polygon,
             centroid,
             empty_location_raw,
+            slim_raw,
         )
 
         raw = empty_location_raw(cad_num)
@@ -170,4 +171,4 @@ class LiveNspdProvider:
                 raw["nspd"][key] = [h.model_dump(by_alias=True, mode="json") for h in hits]
             except Exception as e:  # noqa: BLE001
                 raw["nspd"]["errors"].append(f"{key}: {type(e).__name__}: {e}")
-        return raw
+        return slim_raw(raw)

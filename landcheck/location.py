@@ -327,11 +327,18 @@ def price_reference(
 ) -> dict[str, Any] | None:
     """Ориентир за сотку и гектар по кадастровой ставке своей группы; цена объявления к нему."""
     same = neighbors.get("same_category")
-    med = same["median_rub_m2"] if same else None
-    if not med:
-        return None
+    basis = "медиана кадастровой ставки соседей той же категории"
+    if not same or not same.get("median_rub_m2"):
+        # Категория участка не установлена или у своей группы нет ставки — берём самую
+        # многочисленную группу соседей и говорим об этом прямо.
+        candidates = [c for c in neighbors.get("categories") or [] if c.get("median_rub_m2")]
+        if not candidates:
+            return None
+        same = max(candidates, key=lambda c: c["count"])
+        basis = f"медиана ставки соседей категории «{same['category']}», своей группы у участка нет"
+    med = same["median_rub_m2"]
     out: dict[str, Any] = {
-        "basis": f"медиана кадастровой ставки соседей той же категории ({same['count']} участков)",
+        "basis": f"{basis} ({same['count']} участков)",
         "per_sotka": round(med * SOTKA_M2),
         "per_10_sotka": round(med * SOTKA_M2 * 10),
         "per_ha": round(med * 10_000),
@@ -498,6 +505,96 @@ def summarize_location(
             "не публикуются, сверяйте с генпланом и ПЗЗ муниципалитета."
         ),
     }
+
+
+_KEEP_ZONE_KEYS = ("reg_numb_border", "type_zone", "name_by_doc", "subcategory")
+_KEEP_PMT_KEYS = (
+    "nominal_number",
+    "area",
+    "land_use_text",
+    "document_name",
+    "document_number",
+    "document_date",
+    "document_issuer",
+)
+_KEEP_PLOT_KEYS = (
+    "cad_num",
+    "land_record_category_type",
+    "permitted_use_established_by_document",
+    "cost_index",
+    "cost_value",
+    "specified_area",
+    "declared_area",
+    "area",
+    "land_record_area",
+    "ownership_type",
+    "status",
+)
+
+
+def slim_feature(
+    feature: dict[str, Any], keep: tuple[str, ...], *, geometry: bool
+) -> dict[str, Any]:
+    """Оставить от GeoJSON-объекта НСПД только нужное: кэш окружения иначе ~1 МБ на участок."""
+    opts = (feature.get("properties") or {}).get("options") or {}
+    out: dict[str, Any] = {
+        "type": "Feature",
+        "properties": {"options": {k: opts.get(k) for k in keep if opts.get(k) not in (None, "")}},
+    }
+    if geometry:
+        out["geometry"] = feature.get("geometry")
+    return out
+
+
+def slim_raw(raw: dict[str, Any]) -> dict[str, Any]:
+    nspd = raw.get("nspd") or {}
+    nspd["zouit"] = [
+        slim_feature(f, _KEEP_ZONE_KEYS, geometry=True) for f in nspd.get("zouit") or []
+    ]
+    nspd["pmt"] = [slim_feature(f, _KEEP_PMT_KEYS, geometry=True) for f in nspd.get("pmt") or []]
+    nspd["neighbors"] = [
+        slim_feature(f, _KEEP_PLOT_KEYS, geometry=False) for f in nspd.get("neighbors") or []
+    ]
+    nspd["auction"] = [
+        slim_feature(f, _KEEP_PLOT_KEYS, geometry=False) for f in nspd.get("auction") or []
+    ]
+    osm = raw.get("osm")
+    if osm and osm.get("elements"):
+        slim_elements = []
+        for el in osm["elements"]:
+            tags = el.get("tags") or {}
+            if osm_class(tags) is None:
+                continue
+            keep = {
+                k: el.get(k)
+                for k in ("type", "lat", "lon", "geometry", "center")
+                if el.get(k) is not None
+            }
+            keep["tags"] = {
+                k: v
+                for k, v in tags.items()
+                if k
+                in (
+                    "name",
+                    "ref",
+                    "landuse",
+                    "amenity",
+                    "aeroway",
+                    "highway",
+                    "railway",
+                    "power",
+                    "natural",
+                    "waterway",
+                    "leisure",
+                    "boundary",
+                    "tourism",
+                    "shop",
+                    "military",
+                )
+            }
+            slim_elements.append(keep)
+        osm["elements"] = slim_elements
+    return raw
 
 
 def empty_location_raw(cad_num: str) -> dict[str, Any]:

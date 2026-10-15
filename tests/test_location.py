@@ -250,3 +250,35 @@ def test_location_block_in_report(client, fixtures_dir: Path):  # noqa: F811 —
     (fixtures_dir / "50_09_0060202_101.location.json").unlink()
     report2 = client.get(url + "/items/50:09:0060202:101").text
     assert "Ориентир стоимости по соседям" in report2 and 'hx-trigger="load"' not in report2
+
+
+def test_slim_raw_drops_geometry_of_neighbors_and_keeps_zone_geometry():
+    from landcheck.location import slim_raw
+
+    raw = raw_sample()
+    raw["nspd"]["neighbors"][1]["geometry"] = _poly(37.001, 55.001)
+    raw["nspd"]["zouit"][0]["properties"]["options"]["content_restrict_encumbrances"] = "x" * 5000
+    slim = slim_raw(raw)
+    assert "geometry" not in slim["nspd"]["neighbors"][1]
+    assert slim["nspd"]["zouit"][0]["geometry"] is not None
+    assert "content_restrict_encumbrances" not in slim["nspd"]["zouit"][0]["properties"]["options"]
+    # лишние OSM-элементы (лавочки) выброшены, нужные остались
+    assert all(el["tags"] for el in slim["osm"]["elements"]) and len(slim["osm"]["elements"]) == 3
+    loc = summarize_location(
+        slim,
+        parcel_geojson=PARCEL,
+        cad_num="50:09:0060202:101",
+        category=SETTLEMENT,
+        cost_index=270.0,
+    )
+    assert loc["zouit"][0]["label"] == "санитарно-защитная зона предприятия"
+
+
+def test_price_falls_back_to_dominant_category_when_parcel_category_unset():
+    from landcheck.location import price_reference
+
+    n = summarize_neighbors(
+        "50:09:0060202:101", "Категория не установлена", None, raw_sample()["nspd"]["neighbors"]
+    )
+    p = price_reference(n, None, None)
+    assert p is not None and p["per_sotka"] == 34_600 and "своей группы у участка нет" in p["basis"]

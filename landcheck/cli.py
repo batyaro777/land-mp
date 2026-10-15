@@ -10,6 +10,7 @@ from typing import Annotated
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from landcheck import __version__
@@ -238,7 +239,13 @@ def location(
     import json as _json
 
     from landcheck.inputs import CAD_RE, normalize_cad_num
-    from landcheck.location import OSM_RADIUS_M, centroid, empty_location_raw, summarize_location
+    from landcheck.location import (
+        OSM_RADIUS_M,
+        centroid,
+        empty_location_raw,
+        slim_raw,
+        summarize_location,
+    )
     from landcheck.normalize import parcel_from_payload
     from landcheck.pipeline import fetch_payload
 
@@ -259,13 +266,14 @@ def location(
         if raw is None:
             fetch = getattr(provider, "fetch_location_raw", None)
             raw = fetch(cn, parcel.geometry) if fetch else empty_location_raw(cn)
-            if not no_osm and provider.name != "fixture":
-                from landcheck.osm import fetch_osm
+        osm = raw.get("osm")
+        if not no_osm and provider.name != "fixture" and (osm is None or osm.get("error")):
+            from landcheck.osm import fetch_osm
 
-                lat, lon = centroid(parcel.geometry)
-                raw["osm"] = fetch_osm(lat, lon, OSM_RADIUS_M)
-            if pcache is not None and not raw["nspd"].get("errors"):
-                pcache.put_location(cn, raw)
+            lat, lon = centroid(parcel.geometry)
+            raw["osm"] = fetch_osm(lat, lon, OSM_RADIUS_M)
+        if pcache is not None and not raw["nspd"].get("errors"):
+            pcache.put_location(cn, slim_raw(raw))
         loc = summarize_location(
             raw,
             parcel_geojson=parcel.geometry,
@@ -315,7 +323,10 @@ def location(
     n = loc["neighbors"]
     console.print(f"[bold]Соседи ({n['total']}):[/]")
     for c in n["categories"]:
-        console.print(f"  {c['category']}: {c['count']} уч., медиана {c['median_rub_m2']} ₽/м²")
+        med = (
+            f"медиана {c['median_rub_m2']} ₽/м²" if c["median_rub_m2"] else "без кадастровой ставки"
+        )
+        console.print(f"  {escape(c['category'])}: {c['count']} уч., {med}")
     if n["position"]:
         console.print(f"  Участок: {n['target_rub_m2']} ₽/м² — {n['position']}")
     if loc["price"]:
