@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<article class="narrow">
+  <hgroup>
+    <h2>Проверить один участок</h2>
+    <p>Полный отчёт по кадастровому номеру: карточка, ЗОУИТ, территориальная зона, флаги, чек-лист.</p>
+  </hgroup>
+  <form method="post" action="/single">
+    <label>Кадастровый номер<input name="cad_num" placeholder="50:09:0060202:101" required autofocus></label>
+    <label>Что хотите делать на участке
+      <select name="purpose">{% for value, label in purposes %}<option value="{{ value }}">{{ label }}</option>{% endfor %}</select>
+    </label>
+    <div class="grid">
+      <label>Цена в объявлении, ₽<input name="price" placeholder="2 500 000"></label>
+      <label>Площадь в объявлении, сот.<input name="area" placeholder="10"></label>
+    </div>
+    <button type="submit">Получить отчёт</button>
+  </form>
+</article>
+{% endblock %}

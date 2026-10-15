@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Объявление {{ row.cad_num }} — {{ brand }}{% endblock %}
+{% block content %}
+<hgroup>
+  <h2>Объявление: <code>{{ row.cad_num }}</code></h2>
+  <p>{{ d.address or '' }}</p>
+</hgroup>
+{% if d.warnings %}
+<article class="flag check">
+  <strong>Выгрузка заблокирована, пока текст противоречит кадастру</strong>
+  <ul>{% for w in d.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+  <p class="small muted">Исправьте текст и нажмите «Сохранить правки» — проверка повторится.</p>
+</article>
+{% endif %}
+<div class="grid two">
+<article>
+  <form method="post" action="/listing/{{ row.id }}">
+    <label>Заголовок (до 50 знаков)<input name="title" value="{{ d.title }}" maxlength="50"></label>
+    <label>Текст объявления<textarea name="description" rows="16">{{ d.description }}</textarea></label>
+    <div class="grid">
+      <label>Цена, ₽<input name="price" value="{{ '%.0f'|format(d.price_rub) if d.price_rub else '' }}"></label>
+      <label>Телефон<input name="phone" value="{{ d.phone or '' }}"></label>
+    </div>
+    <button type="submit" class="outline">Сохранить правки</button>
+  </form>
+</article>
+<article>
+  <h4>Факты из НСПД в тексте</h4>
+  <ul class="small">{% for f in d.facts %}<li>{{ f }}</li>{% endfor %}</ul>
+  {% if d.zouit_notes %}<h4>ЗОУИТ</h4><ul class="small">{% for z in d.zouit_notes %}<li>{{ z }}</li>{% endfor %}</ul>{% endif %}
+  <p class="small"><strong>Тип для Avito:</strong> {{ d.object_type }} · <strong>Площадь:</strong> {{ d.land_area_sotka }} сот.</p>
+  {% if d.images %}
+  <h4>Фото ({{ d.images|length }})</h4>
+  <div class="photos">{% for img in d.images %}<img src="{{ img }}" alt="">{% endfor %}</div>
+  {% endif %}
+  <h4>Выгрузка</h4>
+  {% if d.skipped_photos %}<p class="small err">Не приняты файлы (не изображение или больше 10 МБ): {{ d.skipped_photos|join(', ') }}</p>{% endif %}
+  <p>{% if d.warnings %}<button class="sm" disabled title="Сначала уберите противоречия">Скачать Avito XML</button>{% else %}<a href="/listing/{{ row.id }}/avito.xml" role="button" class="sm">Скачать Avito XML</a>{% endif %}
+     <button class="outline sm" onclick="navigator.clipboard.writeText(document.querySelector('textarea[name=description]').value);this.textContent='Текст скопирован'">Скопировать текст</button></p>
+  <p class="muted small">Файл для автозагрузки Avito: нужен подключённый тариф, перед первой загрузкой прогоните файл через проверку XML в кабинете автозагрузки. Фото попадут в XML только при публичном адресе сервиса.</p>
+  <p class="small"><a href="/single">Полный отчёт по этому участку</a></p>
+</article>
+</div>
+{% endblock %}

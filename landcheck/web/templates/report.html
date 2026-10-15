@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% set p = d.parcel %}
+{% set vclass = {'стоп':'stop','проверить':'check','ок':'ok'}[d.verdict] %}
+{% block title %}Отчёт {{ p.cad_num }} — {{ brand }}{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
+{% endblock %}
+{% block content %}
+{% if public %}
+<div class="report-brand">
+  <strong>{{ owner.brand or owner.name }}</strong>
+  <span class="muted small">Отчёт по участку для клиента · {{ p.fetched_at|dt }}</span>
+</div>
+{% else %}
+<p class="no-print small"><a href="/checks/{{ check.id }}">← {{ check.title }}</a></p>
+{% endif %}
+
+<hgroup>
+  <h2><code>{{ p.cad_num }}</code> <span class="badge v-{{ vclass }} big">{{ d.verdict }}</span></h2>
+  <p>{{ p.address or 'Адрес в НСПД не указан' }}</p>
+</hgroup>
+
+{% if not public %}
+<div class="toolbar no-print">
+  <div><button class="outline sm" onclick="navigator.clipboard.writeText('{{ share_url }}');this.textContent='Ссылка скопирована'">Ссылка для клиента</button>
+    <a href="/r/{{ item.token }}" target="_blank" class="small">открыть</a></div>
+  <div><button class="outline sm" onclick="window.print()">Печать / PDF</button></div>
+</div>
+{% endif %}
+
+{% if goal %}
+<article class="goal">
+  <h4>Можно ли здесь: {{ goal.activity|lower }}? <span class="badge v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[goal.level] }}">{{ goal.level }}</span></h4>
+  <p>{{ goal.text }}.</p>
+  <table class="facts goal-table">
+    {% for r in goal.rows %}
+    <tr>
+      <th>{{ r.title }}<br><span class="muted small">{{ r.value|truncate(90) }}</span></th>
+      <td><span class="badge mini v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[r.level] }}">{{ r.level }}</span> {{ r.text }}{% if r.source %}<div class="muted small">Источник: {{ r.source }}</div>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="muted small">Три уровня: категория земель задаёт, что на земле бывает в принципе; ВРИ — что разрешено на этом участке; территориальная зона ПЗЗ — что и какой этажности можно строить именно здесь. Один и тот же ВРИ в разных зонах разрешает разное.</p>
+</article>
+{% endif %}
+
+{% if not p.found %}
+<article>
+{% if p.errors %}
+<p class="err">Данные НСПД по участку не получены: сбой запроса. Это не значит, что участка нет. Нажмите «Обновить данные» в подборке или повторите позже.</p>
+<p class="muted small">{{ p.errors|join('; ') }}</p>
+{% else %}
+<p class="err">Участок с таким номером в НСПД не найден.</p>
+{% endif %}
+{% for f in d.flags %}<p>{{ f.message }} <span class="muted small">— {{ f.source }}</span></p>{% endfor %}</article>
+{% else %}
+
+<div class="grid two">
+<article>
+  <h4>Карточка участка</h4>
+  <table class="facts">
+    <tr><th>Статус</th><td>{{ p.status or '—' }}</td></tr>
+    <tr><th>Категория земель</th><td>{{ p.category or '—' }}</td></tr>
+    <tr><th>Вид разрешённого использования</th><td>{{ p.permitted_use or '—' }}{% for v in p.permitted_use_tab if v != p.permitted_use %}<br><span class="muted small">{{ v }}</span>{% endfor %}</td></tr>
+    <tr><th>Площадь по ЕГРН</th><td>{{ p.area_m2|sotka }} ({{ '%.0f'|format(p.area_m2 or 0) }} м²){% if p.specified_area_m2 is none and p.declared_area_m2 %} <span class="muted small">декларированная</span>{% endif %}</td></tr>
+    {% if d.listing.declared_area_m2 %}<tr><th>Площадь в объявлении</th><td>{{ d.listing.declared_area_m2|sotka }}</td></tr>{% endif %}
+    <tr><th>Границы в ЕГРН</th><td>{{ 'установлены' if p.has_borders else 'не установлены' }}</td></tr>
+    <tr><th>Кадастровая стоимость</th><td>{{ p.cadastral_cost_rub|money }}{% if p.cost_index_rub_m2 %} <span class="muted small">({{ p.cost_index_rub_m2|money }}/м²)</span>{% endif %}</td></tr>
+    {% if d.listing.price_rub %}<tr><th>Цена в объявлении</th><td>{{ d.listing.price_rub|money }}{% if d.price_per_sotka %} <span class="muted small">({{ d.price_per_sotka|money }} за сотку)</span>{% endif %}</td></tr>{% endif %}
+    <tr><th>Форма собственности</th><td>{{ p.ownership_type or 'в карточке не указана' }}</td></tr>
+    <tr><th>Вид участка</th><td>{{ p.land_record_subtype or p.land_record_type or '—' }}</td></tr>
+    <tr><th>Дата постановки на учёт</th><td>{{ p.reg_date|day }}</td></tr>
+    <tr><th>Территориальная зона</th><td>{% if not p.territorial_zone_checked %}не проверялась{% elif p.territorial_zones %}{% for z in p.territorial_zones %}{{ z.describe }}{% if not loop.last %}; {% endif %}{% endfor %}{% else %}в НСПД не найдена: ПЗЗ не опубликованы{% endif %}</td></tr>
+    <tr><th>Источник</th><td class="small muted">{{ p.source }}, получено {{ p.fetched_at|dt }}</td></tr>
+  </table>
+</article>
+<article>
+  <h4>Карта</h4>
+  {% if p.geometry %}
+  <div id="map"></div>
+  <p class="muted small">Оранжевый контур — участок по ЕГРН, синие пунктиры — ЗОУИТ. Подложка © OpenStreetMap.</p>
+  {% else %}<p class="muted">Координат границ в НСПД нет, на карте показать нечего.</p>{% endif %}
+</article>
+</div>
+
+<article>
+  <h4>Риск-флаги</h4>
+  {% for level, cls in [('стоп','stop'),('проверить','check')] %}
+    {% for f in by_level[level] %}
+    <div class="flag {{ cls }}"><span class="badge v-{{ cls }}">{{ level }}</span> {{ f.message }}<div class="muted small">Источник: {{ f.source }}</div></div>
+    {% endfor %}
+  {% endfor %}
+  {% if by_level['ок'] %}
+  <details><summary class="small">Справочно ({{ by_level['ок']|length }})</summary>
+    {% for f in by_level['ок'] %}<div class="flag ok">{{ f.message }}<div class="muted small">Источник: {{ f.source }}</div></div>{% endfor %}
+  </details>
+  {% endif %}
+  {% if not d.flags %}<p class="muted">Замечаний нет.</p>{% endif %}
+</article>
+
+{% if p.zouit %}
+<article>
+  <h4>Зоны с особыми условиями использования ({{ p.zouit|length }})</h4>
+  {% for z in p.zouit %}
+  <details {% if loop.first %}open{% endif %}>
+    <summary><strong>{{ z.kind or 'ЗОУИТ' }}</strong>{% if z.name %} — {{ z.name }}{% endif %} <span class="muted small">{{ z.reg_number or '' }}</span></summary>
+    {% if z.restrictions %}<p class="small restrictions">{{ z.restrictions }}</p>{% else %}<p class="muted small">Текст ограничений в НСПД не приведён.</p>{% endif %}
+    {% set ex = z.extra %}
+    {% if ex.get('legal_act_document_name') %}<p class="muted small">Основание: {{ ex.get('legal_act_document_name') }} № {{ ex.get('legal_act_document_number') }} от {{ ex.get('legal_act_document_date') }}, {{ ex.get('legal_act_document_issuer') }}</p>{% endif %}
+  </details>
+  {% endfor %}
+</article>
+{% endif %}
+
+{% if loc %}
+  {% include "_location.html" %}
+{% elif not public and p.geometry %}
+<article id="location" hx-get="{{ location_url }}" hx-trigger="load" hx-swap="outerHTML">
+  <h4>Локация: окружение и ориентир стоимости</h4>
+  <p class="muted small" aria-busy="true">Собираю окружение по НСПД и OpenStreetMap, до минуты…</p>
+</article>
+{% endif %}
+
+{% if region %}
+  {% include "_region.html" %}
+{% elif not public and region_enabled and p.address %}
+<article id="region" hx-get="{{ region_url }}" hx-trigger="load delay:1s" hx-swap="outerHTML">
+  <h4>Регион: планы, инфраструктура, рынок</h4>
+  <p class="muted small" aria-busy="true">Ищу по открытым источникам: инвестиции, дороги, риски, рынок земли. До двух минут…</p>
+</article>
+{% endif %}
+
+{% if price %}
+<article>
+  <h4>Ценовой ориентир за сотку</h4>
+  <table class="facts">
+    {% for label, v in price.points %}<tr><th>{{ label }}</th><td>{{ v|money }}</td></tr>{% endfor %}
+  </table>
+  <p class="small muted">Диапазон {{ price.low|money }} – {{ price.high|money }}. {{ price.disclaimer }}</p>
+</article>
+{% endif %}
+
+<article>
+  <h4>Чек-лист перед сделкой</h4>
+  <div class="grid two">
+  {% for block in checklist %}
+    <div><strong>{{ block.title }}</strong>
+      <ul class="checklist">{% for i in block['items'] %}<li>{{ i }}</li>{% endfor %}</ul>
+    </div>
+  {% endfor %}
+  </div>
+</article>
+{% endif %}
+
+<p class="muted small">{{ disclaimer }}</p>
+
+{% if p.geometry %}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  const parcel = {{ p.geometry|tojson }};
+  const zones = {{ p.zouit_geometries|tojson }};
+  const map = L.map('map', { scrollWheelZoom: false });
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+  zones.forEach(z => L.geoJSON(z.geometry, { style: { color: '#2E75B6', weight: 1, dashArray: '4 4', fillOpacity: 0.05 } })
+    .bindPopup('<b>' + (z.kind || 'ЗОУИТ') + '</b><br>' + (z.name || '') + '<br><small>' + (z.reg_number || '') + '</small>').addTo(map));
+  const layer = L.geoJSON(parcel, { style: { color: '#C4663A', weight: 3, fillOpacity: 0.15 } }).addTo(map);
+  map.fitBounds(layer.getBounds().pad(0.6));
+});
+</script>
+{% endif %}
+{% endblock %}

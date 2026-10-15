@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+.landcheck/
+*.sqlite
+out/
+.env
+data/*.sqlite*
+data/uploads/
+.env
+data/.secret
+data/*.log
