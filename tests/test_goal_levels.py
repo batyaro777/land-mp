@@ -174,3 +174,16 @@ def test_goal_summary_three_rows_and_worst_level():
     assert g["rows"][1]["level"] == "проверить" and g["rows"][2]["level"] == "проверить"
     assert g["level"] == "проверить"
     assert goal_summary(result_to_dict(result), Purpose.ANY) is None
+
+
+# --- ввод: подборка из 30 номеров с CRLF не должна приниматься за путь к файлу --------------
+def test_long_multiline_input_is_text_not_path():
+    from landcheck.inputs import load_listings
+
+    numbers = [f"04:05:0{i:05d}:{100 + i}" for i in range(32)]
+    text = "\r\n".join(numbers) + " "
+    assert len(text) > 255
+    listings = load_listings(text)
+    assert [item.cad_num for item in listings] == numbers
+    # короткий путь к несуществующему файлу тоже читается как текст
+    assert load_listings("50:09:0060202:101; 2 500 000; 10 сот")[0].price_rub == 2_500_000

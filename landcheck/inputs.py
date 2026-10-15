@@ -274,10 +274,27 @@ def parse_xlsx(path: Path | IO[bytes], area_unit: AreaUnit = "sotka") -> list[Li
     return _rows_to_listings(rows, area_unit, name)
 
 
+def _as_file(source: str | Path) -> Path | None:
+    """Путь к существующему файлу или None. Многострочный или длинный текст — не путь:
+    ``Path.exists()`` на строке длиннее 255 байт падает с OSError «File name too long»
+    (пойман 14.10 на подборке из 30 номеров)."""
+    if isinstance(source, Path):
+        text = str(source)
+    else:
+        text = source
+        if "\n" in text or "\r" in text or len(text.encode("utf-8", "ignore")) > 255:
+            return None
+    try:
+        p = Path(text)
+        return p if p.exists() and p.is_file() else None
+    except (OSError, ValueError):
+        return None
+
+
 def load_listings(source: str | Path, area_unit: AreaUnit = "sotka") -> list[Listing]:
     """Файл .csv/.txt/.xlsx или строка с номерами."""
-    p = Path(str(source))
-    if p.exists() and p.is_file():
+    p = _as_file(source)
+    if p is not None:
         suffix = p.suffix.lower()
         if suffix in (".xlsx", ".xlsm"):
             return parse_xlsx(p, area_unit)
