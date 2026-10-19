@@ -272,6 +272,8 @@ def logout():
 def dashboard(request: Request, user: UserDep):
     if user.role == "seller":
         return RedirectResponse("/listings", status_code=303)
+    if user.role == "buyer":
+        return RedirectResponse("/search", status_code=303)
     with session() as db:
         checks = db.scalars(
             select(Check)
@@ -722,8 +724,10 @@ async def profile_save(
 
 # --- single check ------------------------------------------------------------------------
 @router.get("/single", response_class=HTMLResponse)
-def single_form(request: Request, user: UserDep):
-    return render(request, "single.html", purposes=PURPOSES, user=user)
+def single_form(request: Request, user: UserDep, cad_num: str = "", purpose: str = "any"):
+    return render(
+        request, "single.html", purposes=PURPOSES, cad_num=cad_num, purpose=purpose, user=user
+    )
 
 
 @router.post("/single")
@@ -780,13 +784,14 @@ def _image_kind(raw: bytes) -> str | None:
 
 def _listing_warnings(data: dict[str, Any]) -> list[str]:
     """Противоречия конечного текста с кадастром плюс предупреждения по участку."""
-    from landcheck.listing import ParcelFacts, contradictions, static_warnings
+    from landcheck.listing import ParcelFacts, contradictions, static_warnings, strip_facts
 
     pf_raw = data.get("parcel_facts")
     if not pf_raw:
         return list(data.get("warnings") or [])
     pf = ParcelFacts.from_dict(pf_raw)
     text = f"{data.get('title') or ''}\n{data.get('description') or ''}"
+    text = strip_facts(text, data.get("facts"), data.get("zouit_notes"))
     return contradictions(pf, text, data.get("price_rub")) + static_warnings(pf)
 
 
@@ -895,8 +900,12 @@ def listing_compose(user: UserDep, listing_id: int, notes: Annotated[str, Form()
         data = dict(row.data)
         data["notes"] = notes.strip() or data.get("notes") or ""
         row.data = _compose_with_ai(data)
+        unpublished = bool(row.published and row.data.get("warnings"))
+        if unpublished:
+            row.published = False
         db.commit()
-    return RedirectResponse(f"/listing/{listing_id}", status_code=303)
+    suffix = "?err=unpublished" if unpublished else ""
+    return RedirectResponse(f"/listing/{listing_id}{suffix}", status_code=303)
 
 
 @router.get("/listings", response_class=HTMLResponse)
@@ -920,11 +929,14 @@ def _compose_with_ai(data: dict[str, Any]) -> dict[str, Any]:
     if not settings.gemini_api_key:
         return data
     pf = data.get("parcel_facts") or {}
+    object_type = data.get("object_type") or ""
+    if not pf.get("category"):
+        object_type = "не определён: категория земель в ЕГРН не установлена, назначение не называть"
     res = compose_listing(
         facts=list(data.get("facts") or []),
         zouit_notes=list(data.get("zouit_notes") or []),
         notes=data.get("notes") or "",
-        object_type=data.get("object_type") or "",
+        object_type=object_type,
         price_rub=data.get("price_rub"),
         fetched=(pf.get("fetched_at") or "")[:10],
         api_key=settings.gemini_api_key,
@@ -962,6 +974,7 @@ def listing_page(request: Request, user: UserDep, listing_id: int):
             d=row.data,
             proofs=_proof_files(row.id),
             public_url=f"{settings.base_url}/l/{row.id}",
+            err=request.query_params.get("err"),
             user=user,
         )
 
@@ -1064,14 +1077,20 @@ def listing_proof(user: UserDep, listing_id: int, name: str):
 @router.post("/listing/{listing_id}/publish")
 def listing_publish(user: UserDep, listing_id: int, action: Annotated[str, Form()] = "on"):
     """Публикация в базу: только после подтверждения права и без противоречий с кадастром."""
+    err = None
     with session() as db:
         row = _own_listing(db, user, listing_id)
         if action == "off":
             row.published = False
-        elif row.status == "verified" and not _listing_warnings(row.data):
+        elif row.status != "verified":
+            err = "not_verified"
+        elif _listing_warnings(row.data):
+            err = "warnings"
+        else:
             row.published = True
         db.commit()
-    return RedirectResponse(f"/listing/{listing_id}", status_code=303)
+    suffix = f"?err={err}" if err else ""
+    return RedirectResponse(f"/listing/{listing_id}{suffix}", status_code=303)
 
 
 def _market_card(row, owner: User | None) -> dict[str, Any]:
@@ -1199,6 +1218,244 @@ def listing_public(request: Request, listing_id: int):
         )
 
 
+# --- кабинет покупателя (К1, М4): запрос → уточняющие вопросы → подборка из базы -----------
+def _request_ctx(db, user: User, req) -> dict[str, Any]:
+    """Подборка под запрос из базы верифицированных объявлений."""
+    from datetime import UTC, datetime
+
+    from landcheck.buyer import rank
+    from landcheck.web.db import Favorite
+    from landcheck.web.db import Listing as ListingRow
+
+    cards = _public_listings(db)
+    texts = {}
+    verified_at = {}
+    for r in db.scalars(
+        select(ListingRow).where(ListingRow.status == "verified", ListingRow.published.is_(True))
+    ).all():
+        d = r.data or {}
+        texts[r.id] = f"{d.get('description') or ''} {d.get('notes') or ''}"
+        verified_at[r.id] = r.verified_at
+    matches = rank(
+        cards,
+        texts,
+        purpose=_purpose_of(req.purpose),
+        budget_rub=req.budget_rub,
+        min_area_m2=req.min_area_m2,
+        max_area_m2=req.max_area_m2,
+        region=req.region,
+        answers=dict(req.answers or {}),
+    )
+    seen = req.seen_at
+    for m in matches:
+        v = verified_at.get(m["id"])
+        m["is_new"] = bool(seen and v and v > seen)
+    saved = {
+        f.listing_id for f in db.scalars(select(Favorite).where(Favorite.user_id == user.id)).all()
+    }
+    req.seen_at = datetime.now(UTC)
+    db.commit()
+    return {"matches": matches, "saved": saved}
+
+
+def _purpose_of(value: str | None) -> Purpose:
+    try:
+        return Purpose(value or "any")
+    except ValueError:
+        return Purpose.ANY
+
+
+@router.get("/search", response_class=HTMLResponse)
+def search_form(request: Request, user: UserDep):
+    from landcheck.web.db import BuyerRequest
+
+    with session() as db:
+        reqs = db.scalars(
+            select(BuyerRequest)
+            .where(BuyerRequest.user_id == user.id)
+            .order_by(BuyerRequest.created_at.desc())
+            .limit(20)
+        ).all()
+    return render(request, "search.html", purposes=PURPOSES, reqs=reqs, Purpose=Purpose, user=user)
+
+
+@router.post("/search")
+def search_create(
+    user: UserDep,
+    query: Annotated[str, Form()] = "",
+    purpose: Annotated[str, Form()] = "any",
+    budget: Annotated[str, Form()] = "",
+    min_area: Annotated[str, Form()] = "",
+    max_area: Annotated[str, Form()] = "",
+    region: Annotated[str, Form()] = "",
+):
+    from landcheck.buyer import region_from_text
+    from landcheck.inputs import parse_number
+    from landcheck.web.db import BuyerRequest
+
+    req = parse_request(query) if query.strip() else CheckRequest()
+    if purpose and purpose != Purpose.ANY.value:
+        req.purpose = _purpose_of(purpose)
+    if budget.strip():
+        v = parse_number(budget)
+        if v is not None and v < 1000:
+            v *= 1_000_000
+        req.budget_rub = v
+    for name, val in (("min_area_m2", min_area), ("max_area_m2", max_area)):
+        if val.strip():
+            try:
+                setattr(req, name, float(val.replace(",", ".")) * SOTKA_M2)
+            except ValueError:
+                pass
+    reg = region.strip() or (region_from_text(query) or "")
+    with session() as db:
+        row = BuyerRequest(
+            user_id=user.id,
+            text=query.strip(),
+            purpose=req.purpose.value,
+            budget_rub=req.budget_rub,
+            min_area_m2=req.min_area_m2,
+            max_area_m2=req.max_area_m2,
+            region=reg[:120] or None,
+            answers={},
+        )
+        db.add(row)
+        db.commit()
+        rid = row.id
+    return RedirectResponse(f"/search/{rid}", status_code=303)
+
+
+def _own_request(db, user: User, rid: int):
+    from landcheck.web.db import BuyerRequest
+
+    row = db.get(BuyerRequest, rid)
+    if row is None or (row.user_id != user.id and not user.is_admin):
+        raise HTTPException(404)
+    return row
+
+
+@router.get("/search/{rid}", response_class=HTMLResponse)
+def search_page(request: Request, user: UserDep, rid: int, edit: int = 0):
+    from landcheck.buyer import questions_for
+
+    with session() as db:
+        req = _own_request(db, user, rid)
+        purpose = _purpose_of(req.purpose)
+        qs = questions_for(purpose)
+        if edit or not req.answers:
+            return render(
+                request,
+                "search_questions.html",
+                req=req,
+                purpose=purpose,
+                questions=qs,
+                answers=dict(req.answers or {}),
+                user=user,
+            )
+        ctx = _request_ctx(db, user, req)
+        return render(
+            request,
+            "search_results.html",
+            req=req,
+            purpose=purpose,
+            questions=qs,
+            answers=dict(req.answers or {}),
+            user=user,
+            **ctx,
+        )
+
+
+@router.post("/search/{rid}/answers")
+async def search_answers(request: Request, user: UserDep, rid: int):
+    from landcheck.buyer import questions_for
+
+    form = await request.form()
+    with session() as db:
+        req = _own_request(db, user, rid)
+        allowed = {
+            q["key"]: {v for v, _ in q["options"]} for q in questions_for(_purpose_of(req.purpose))
+        }
+        answers = {}
+        for key, values in allowed.items():
+            v = form.get(key)
+            if isinstance(v, str) and v in values:
+                answers[key] = v
+        req.answers = answers or {"skipped": "1"}
+        db.commit()
+    return RedirectResponse(f"/search/{rid}", status_code=303)
+
+
+@router.post("/search/{rid}/delete")
+def search_delete(user: UserDep, rid: int):
+    with session() as db:
+        req = _own_request(db, user, rid)
+        db.delete(req)
+        db.commit()
+    return RedirectResponse("/search", status_code=303)
+
+
+@router.post("/favorites/{listing_id}")
+def favorite_toggle(user: UserDep, listing_id: int, back: Annotated[str, Form()] = "/saved"):
+    from landcheck.web.db import Favorite
+    from landcheck.web.db import Listing as ListingRow
+
+    with session() as db:
+        row = db.get(ListingRow, listing_id)
+        if row is None or not row.is_public:
+            raise HTTPException(404)
+        fav = db.scalar(
+            select(Favorite).where(Favorite.user_id == user.id, Favorite.listing_id == listing_id)
+        )
+        if fav is None:
+            db.add(Favorite(user_id=user.id, listing_id=listing_id))
+        else:
+            db.delete(fav)
+        db.commit()
+    target = back if back.startswith("/") and not back.startswith("//") else "/saved"
+    return RedirectResponse(target, status_code=303)
+
+
+@router.get("/saved", response_class=HTMLResponse)
+def saved_page(request: Request, user: UserDep, rid: int | None = None):
+    """Сохранённые объекты и сравнение: цена, ₽/сот., площадь, вердикт под цель, что важно."""
+    from landcheck.buyer import match_listing
+    from landcheck.web.db import BuyerRequest, Favorite
+    from landcheck.web.db import Listing as ListingRow
+
+    with session() as db:
+        favs = db.scalars(
+            select(Favorite).where(Favorite.user_id == user.id).order_by(Favorite.created_at)
+        ).all()
+        req = db.get(BuyerRequest, rid) if rid else None
+        if req is None:
+            req = db.scalar(
+                select(BuyerRequest)
+                .where(BuyerRequest.user_id == user.id)
+                .order_by(BuyerRequest.created_at.desc())
+            )
+        owners = {u.id: u for u in db.scalars(select(User)).all()}
+        rows = []
+        for f in favs:
+            lr = db.get(ListingRow, f.listing_id)
+            if lr is None or not lr.is_public:
+                continue
+            card = _market_card(lr, owners.get(lr.user_id))
+            d = lr.data or {}
+            m = match_listing(
+                card,
+                purpose=_purpose_of(req.purpose) if req else Purpose.ANY,
+                budget_rub=None,
+                min_area_m2=None,
+                max_area_m2=None,
+                region=None,
+                answers=dict(req.answers or {}) if req else {},
+                text=f"{d.get('description') or ''} {d.get('notes') or ''}",
+            )
+            rows.append(m or card)
+        purpose = _purpose_of(req.purpose) if req else Purpose.ANY
+    return render(request, "saved.html", rows=rows, req=req, purpose=purpose, user=user)
+
+
 def require_admin(request: Request) -> User:
     user = require_user(request)
     if not user.is_admin:
@@ -1292,8 +1549,12 @@ def listing_update(
         data["phone"] = phone.strip()
         data["warnings"] = _listing_warnings(data)
         row.data = data
+        unpublished = bool(row.published and data["warnings"])
+        if unpublished:
+            row.published = False
         db.commit()
-    return RedirectResponse(f"/listing/{listing_id}", status_code=303)
+    suffix = "?err=unpublished" if unpublished else ""
+    return RedirectResponse(f"/listing/{listing_id}{suffix}", status_code=303)
 
 
 @router.get("/listing/{listing_id}/avito.xml")

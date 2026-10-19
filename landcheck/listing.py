@@ -91,11 +91,27 @@ def _short_locality(address: str | None) -> str | None:
     return ", ".join(parts[:3]) if parts else address
 
 
+MIN_AREA_M2 = 50  # меньше полусотки — ошибка данных ЕГРН (1 м² встречается), не площадь участка
+
+
 def _fmt_sotka(m2: float | None) -> str | None:
     if not m2:
         return None
     v = m2 / SOTKA_M2
+    if v < 1:
+        return f"{v:.2f}".rstrip("0").rstrip(".")
     return f"{v:.0f}" if abs(v - round(v)) < 0.05 else f"{v:.1f}"
+
+
+def strip_facts(text: str, facts: list[str] | None, zouit_notes: list[str] | None) -> str:
+    """Убрать из текста дословные факты ЕГРН и ЗОУИТ: название терзоны «Зона застройки ИЖС»
+    или ВРИ из НСПД — факт, а не обещание продавца, и в контроле противоречий участвовать
+    не должно (на фикстуре Ж-1 такой факт блокировал публикацию честного объявления)."""
+    out = text or ""
+    for chunk in [*(facts or []), *(zouit_notes or [])]:
+        if chunk:
+            out = out.replace(chunk, " ")
+    return out
 
 
 def contradictions(f: ParcelFacts, text: str, price_rub: float | None) -> list[str]:
@@ -111,11 +127,11 @@ def contradictions(f: ParcelFacts, text: str, price_rub: float | None) -> list[s
         and vri_match(Purpose.IZHS, f.permitted_use_all) == "conflict"
     ):
         out.append(f"в тексте ИЖС, а ВРИ по НСПД «{f.permitted_use}» — указать фактический ВРИ")
-    if f.best_area_m2:
+    if f.best_area_m2 and f.best_area_m2 >= MIN_AREA_M2:
         actual = f.best_area_m2 / SOTKA_M2
         for m in re.finditer(r"(\d+(?:[.,]\d+)?)\s*сот", t):
             claimed = float(m.group(1).replace(",", "."))
-            if actual and abs(claimed - actual) / actual > 0.1:
+            if claimed and actual and abs(claimed - actual) / actual > 0.1:
                 out.append(
                     f"в тексте {claimed:g} сот., по ЕГРН {actual:.1f} сот. — в объявление идёт площадь ЕГРН"
                 )
@@ -139,6 +155,11 @@ def static_warnings(f: ParcelFacts) -> list[str]:
     if not f.has_borders:
         out.append(
             "без межевания сделку не зарегистрируют (487-ФЗ) — сначала межевание, потом продажа"
+        )
+    if f.best_area_m2 and f.best_area_m2 < MIN_AREA_M2:
+        out.append(
+            f"площадь по ЕГРН {f.best_area_m2:g} м² — похоже на ошибку данных или долю; "
+            "уточнить по выписке, в объявлении площадь не обещать"
         )
     return out
 
@@ -217,7 +238,8 @@ def build_draft(
     description = "\n\n".join(paragraphs)
 
     pf = ParcelFacts.from_parcel(parcel)
-    warnings = contradictions(pf, description, price_rub) + static_warnings(pf)
+    warnings = contradictions(pf, strip_facts(description, facts, zouit_notes), price_rub)
+    warnings += static_warnings(pf)
     return Draft(
         cad_num=parcel.cad_num,
         title=title[:50] if len(title) > 50 else title,

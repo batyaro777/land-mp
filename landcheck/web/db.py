@@ -173,6 +173,35 @@ class Listing(Base):
         return self.status == "verified" and bool(self.published)
 
 
+class BuyerRequest(Base):
+    """Запрос покупателя (К1): текст, разобранные параметры, ответы на уточняющие вопросы."""
+
+    __tablename__ = "buyer_requests"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    text: Mapped[str] = mapped_column(Text, default="")
+    purpose: Mapped[str] = mapped_column(String(16), default="any")
+    budget_rub: Mapped[float | None] = mapped_column(Float, nullable=True)
+    min_area_m2: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_area_m2: Mapped[float | None] = mapped_column(Float, nullable=True)
+    region: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    answers: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Favorite(Base):
+    """Сохранённый объект покупателя для сравнения."""
+
+    __tablename__ = "favorites"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    listing_id: Mapped[int] = mapped_column(ForeignKey("listings.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 _engine = None
 SessionLocal: sessionmaker[Session] | None = None
 

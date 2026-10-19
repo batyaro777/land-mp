@@ -71,3 +71,59 @@ def test_publish_and_market(client):  # noqa: F811
     client.post(url1 + "/publish", data={"action": "off"})
     client.post("/logout")
     assert client.get(f"/l/{id1}").status_code == 404
+
+
+def test_publish_errors_are_visible_and_edits_unpublish(client):  # noqa: F811
+    url = _verified_listing(client, "s9@example.com", "50:09:0060202:101", "2500000")
+    lid = int(url.rsplit("/", 1)[1])
+    client.post("/login/password", data={"email": "s9@example.com", "password": "12345678"})
+    r = client.post(url + "/publish", data={"action": "on"})
+    assert r.headers["location"].endswith("?err=not_verified")
+    assert "сначала подтвердите право" in client.get(r.headers["location"]).text
+    client.post("/logout")
+    _register(client, "adm9@example.com", role="broker")
+    _make_admin("adm9@example.com")
+    client.post(f"/admin/listings/{lid}/decide", data={"decision": "approve"})
+    client.post("/logout")
+    client.post("/login/password", data={"email": "s9@example.com", "password": "12345678"})
+    assert client.post(url + "/publish", data={"action": "on"}).headers["location"] == url
+    assert client.get(f"/l/{lid}").status_code == 200
+    # правка с обещанием «без обременений» для участка без ЗОУИТ — противоречий нет, остаётся
+    r = client.post(url, data={"description": "Продаётся участок 10 сот. ИЖС, газ рядом."})
+    assert r.headers["location"] == url and client.get(f"/l/{lid}").status_code == 200
+    # правка с ложной площадью — снимается с публикации с сообщением
+    r = client.post(url, data={"description": "Продаётся участок 25 сот. ИЖС."})
+    assert r.headers["location"].endswith("?err=unpublished")
+    assert "снято с публикации" in client.get(r.headers["location"]).text
+    assert client.get(f"/l/{lid}").status_code == 404
+
+
+def test_zone_name_from_nspd_is_not_a_seller_claim():
+    from landcheck.listing import ParcelFacts, contradictions, static_warnings, strip_facts
+
+    pf = ParcelFacts(
+        cad_num="x",
+        category="Земли сельскохозяйственного назначения",
+        permitted_use="Для сельскохозяйственного производства",
+        permitted_use_all="Для сельскохозяйственного производства",
+        best_area_m2=1000.0,
+        has_borders=True,
+        zouit_count=0,
+        cadastral_cost_rub=300_000,
+    )
+    facts = ["Территориальная зона по ПЗЗ: Ж-1 · Зона застройки ИЖС (50:09-7.1)"]
+    text = "Продаётся участок. По данным ЕГРН: " + facts[0] + ". Ровный."
+    assert contradictions(pf, text, None)  # без очистки факт выглядит как обещание ИЖС
+    assert contradictions(pf, strip_facts(text, facts, None), None) == []
+    tiny = ParcelFacts(
+        cad_num="y",
+        category=None,
+        permitted_use=None,
+        permitted_use_all="",
+        best_area_m2=1.0,
+        has_borders=True,
+        zouit_count=0,
+        cadastral_cost_rub=None,
+    )
+    assert contradictions(tiny, "участок 0 сот.", None) == []
+    assert any("ошибку данных" in w for w in static_warnings(tiny))

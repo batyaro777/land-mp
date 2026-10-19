@@ -26,5 +26,6 @@
   {% if d.images %}<div class="photos">{% for img in d.images %}<img src="{{ img }}" alt="">{% endfor %}</div>{% endif %}
 </article>
 </div>
-<p class="small"><a href="/market">← все участки с подтверждённым правом</a></p>
+<p class="small"><a href="/market">← все участки с подтверждённым правом</a>
+  {% if user %} · <form method="post" action="/favorites/{{ row.id }}" class="inline"><input type="hidden" name="back" value="/saved"><button class="outline sm">Сохранить для сравнения</button></form>{% endif %}</p>
 {% endblock %}

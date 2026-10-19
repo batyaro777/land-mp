@@ -22,11 +22,13 @@
       <li><a href="/listings">Мои объявления</a></li>
       <li><a href="/single">Проверить участок</a></li>
       {% elif user.role == 'buyer' %}
+      <li><a href="/search">Поиск</a></li>
+      <li><a href="/saved">Сохранённое</a></li>
       <li><a href="/single">Проверить участок</a></li>
-      <li><a href="/">Подборки</a></li>
       {% else %}
       <li><a href="/">Подборки</a></li>
       <li><a href="/single">Один участок</a></li>
+      <li><a href="/search">Поиск</a></li>
       <li><a href="/listings">Объявления</a></li>
       {% endif %}
       <li><details class="dropdown">

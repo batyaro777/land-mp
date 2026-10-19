@@ -86,3 +86,8 @@ form.filters input, form.filters select { flex: 1 1 160px; margin-bottom: 0; }
 .card { margin: 0; }
 .card-img { width: 100%; aspect-ratio: 4/3; object-fit: cover; border-radius: 6px; margin-bottom: 0.5rem; }
 .card h4 { margin-bottom: 0.3rem; }
+
+/* вопросы покупателя */
+fieldset { margin-bottom: 1rem; }
+fieldset legend { margin-bottom: 0.3rem; }
+fieldset label { display: inline-block; margin-right: 1.2rem; }

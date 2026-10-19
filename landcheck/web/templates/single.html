@@ -6,9 +6,9 @@
     <p>Полный отчёт по кадастровому номеру: карточка, ЗОУИТ, территориальная зона, флаги, чек-лист.</p>
   </hgroup>
   <form method="post" action="/single">
-    <label>Кадастровый номер<input name="cad_num" placeholder="50:09:0060202:101" required autofocus></label>
+    <label>Кадастровый номер<input name="cad_num" value="{{ cad_num or '' }}" placeholder="50:09:0060202:101" required autofocus></label>
     <label>Что хотите делать на участке
-      <select name="purpose">{% for value, label in purposes %}<option value="{{ value }}">{{ label }}</option>{% endfor %}</select>
+      <select name="purpose">{% for value, label in purposes %}<option value="{{ value }}" {{ 'selected' if value == purpose else '' }}>{{ label }}</option>{% endfor %}</select>
     </label>
     <div class="grid">
       <label>Цена в объявлении, ₽<input name="price" placeholder="2 500 000"></label>
