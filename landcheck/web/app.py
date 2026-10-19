@@ -1006,6 +1006,8 @@ async def asr(user: UserDep, audio: Annotated[UploadFile, File()]):
     if result.get("error"):
         log.warning("asr failed for user %s: %s", user.id, result["error"])
         return JSONResponse({"text": "", "error": result["error"]}, status_code=502)
+    if result.get("silent"):
+        return {"text": "", "model": result["model"], "silent": True}
     return {"text": result["text"], "model": result["model"]}
 
 

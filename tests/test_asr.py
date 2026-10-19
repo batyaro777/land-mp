@@ -78,6 +78,42 @@ def test_transcribe_permission_denied_is_final(monkeypatch):
     assert r["error"].startswith("Gemini PERMISSION_DENIED") and len(calls) == 1
 
 
+def _wav(samples, rate: int = 16000) -> bytes:
+    import io
+    import wave
+
+    import numpy as np
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes((np.asarray(samples) * 32767).astype("<i2").tobytes())
+    return buf.getvalue()
+
+
+def test_silence_is_not_sent_to_gemini(monkeypatch):
+    import numpy as np
+
+    calls: list[int] = []
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: calls.append(1) or _ok("выдумка"))
+    silent = _wav(np.zeros(16000 * 2))
+    r = transcribe(silent, "audio/wav", api_key="k")
+    assert r["text"] == "" and r.get("silent") and r["error"] is None and calls == []
+    quiet = _wav(np.random.default_rng(1).normal(0, 0.002, 16000 * 2).clip(-1, 1))
+    assert transcribe(quiet, "audio/wav", api_key="k").get("silent") and calls == []
+    short = _wav(np.random.default_rng(1).normal(0, 0.1, 4000).clip(-1, 1))
+    assert transcribe(short, "audio/wav", api_key="k").get("silent") and calls == []
+    speech = _wav(np.random.default_rng(1).normal(0, 0.05, 16000 * 2).clip(-1, 1))
+    r = transcribe(speech, "audio/wav", api_key="k")
+    assert r["text"] == "выдумка" and calls == [1]
+    # ответ «[нет речи]» превращается в пустую строку
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _ok("[нет речи]"))
+    assert transcribe(speech, "audio/wav", api_key="k")["text"] == ""
+    assert asr.wav_stats(b"not a wav") is None
+
+
 def test_helpers():
     assert normalize_mime("audio/x-wav; rate=16000") == "audio/wav"
     assert normalize_mime(None) == ""
@@ -102,6 +138,13 @@ def test_asr_route(client, monkeypatch):  # noqa: F811
         )
         r = client.post("/asr", files={"audio": ("v.wav", io.BytesIO(b"RIFF"), "audio/wav")})
         assert r.status_code == 200 and r.json() == {"text": "построить дом", "model": "m"}
+        monkeypatch.setattr(
+            asr,
+            "transcribe",
+            lambda *a, **k: {"text": "", "model": "m", "error": None, "silent": True},
+        )
+        r = client.post("/asr", files={"audio": ("v.wav", io.BytesIO(b"RIFF"), "audio/wav")})
+        assert r.status_code == 200 and r.json() == {"text": "", "model": "m", "silent": True}
         monkeypatch.setattr(
             asr, "transcribe", lambda *a, **k: {"text": "", "model": "m", "error": "Gemini 500"}
         )

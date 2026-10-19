@@ -34,6 +34,16 @@ def test_price_position_labels_and_parts():
     assert pp["text"] == "×2.0 к кадастровой · ×1.4 к ставке соседей"
     assert price_position(_item(None), 250_000) is None
     assert price_position(_item(300_000, cost=None), None) is None
+    # площадь ЕГРН 1 м² (ошибка данных) — ориентир не считаем, чтобы не показать ×14615
+    assert price_position(_item(500_000_000, area=1.0), 250_000) is None
+
+
+def test_price_reference_ignores_micro_area():
+    from landcheck.location import price_reference
+
+    nb = {"same_category": {"median_rub_m2": 346.0, "count": 10}, "categories": []}
+    assert "listing_vs_gko" not in price_reference(nb, 5_000_000, 1.0)
+    assert price_reference(nb, 5_000_000, 1000.0)["listing_vs_gko"] == 14.45
 
 
 def test_batch_median_needs_three_prices():

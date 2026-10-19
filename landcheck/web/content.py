@@ -81,6 +81,7 @@ def price_orientation(item: dict[str, Any], median_pps: float | None) -> dict[st
 
 MEDIAN_BAND = 0.15  # ±15 % к медиане подборки считаем «в медиане»
 MEDIAN_MIN_PRICED = 3  # медиану показываем, когда цен в подборке хотя бы три
+MIN_AREA_M2 = 50  # площадь ЕГРН 1 м² (бывает в данных) делает любую цену за сотку абсурдной
 
 
 def price_position(item: dict[str, Any], median_pps: float | None) -> dict[str, Any] | None:
@@ -94,6 +95,8 @@ def price_position(item: dict[str, Any], median_pps: float | None) -> dict[str, 
         return None
     p = item.get("parcel") or {}
     area = p.get("area_m2")
+    if area is not None and area < MIN_AREA_M2:
+        return None
     parts: list[str] = []
     out: dict[str, Any] = {
         "pps": pps,

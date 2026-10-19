@@ -30,8 +30,13 @@
     src.buffer = decoded; src.connect(off.destination); src.start();
     const rendered = await off.startRendering();
     ctx.close && ctx.close();
-    return encodeWav(rendered.getChannelData(0), rate);
+    const data = rendered.getChannelData(0);
+    let sum = 0;
+    for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
+    const rms = data.length ? Math.sqrt(sum / data.length) : 0;
+    return { blob: encodeWav(data, rate), rms: rms, seconds: data.length / rate };
   }
+  const SILENCE_RMS = 0.005; // как на сервере: ниже — микрофон не слышит голос
 
   function setStatus(btn, text, busy) {
     const s = btn.parentElement.querySelector('.mic-status');
@@ -65,14 +70,19 @@
       try {
         const raw = new Blob(chunks, { type: rec.mimeType || 'audio/webm' });
         const wav = await toWav16k(raw);
+        if (wav.seconds < 0.5 || wav.rms < SILENCE_RMS) {
+          setStatus(btn, 'Тишина: микрофон не слышит голос. Проверьте устройство и говорите ближе', false);
+          return;
+        }
         const fd = new FormData();
-        fd.append('audio', wav, 'voice.wav');
+        fd.append('audio', wav.blob, 'voice.wav');
         const r = await fetch('/asr', { method: 'POST', body: fd });
         const data = await r.json();
         if (!r.ok || data.error) {
           setStatus(btn, 'Не распознано: ' + (data.error || r.status), false);
           return;
         }
+        if (data.silent) { setStatus(btn, 'Тишина: голос не слышен, попробуйте ещё раз', false); return; }
         if (!data.text) { setStatus(btn, 'Речь не распознана, попробуйте ещё раз', false); return; }
         target.value = target.value.trim() ? target.value.trim() + ' ' + data.text : data.text;
         target.dispatchEvent(new Event('input', { bubbles: true }));

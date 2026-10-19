@@ -9,10 +9,13 @@
 from __future__ import annotations
 
 import base64
+import io
 import re
+import wave
 from typing import Any
 
 import httpx
+import numpy as np
 
 from landcheck.region import DEFAULT_MODEL, FALLBACK_MODELS, GEMINI_URL
 
@@ -30,12 +33,35 @@ ALLOWED_MIME = {
     "audio/flac",
 }
 
+# Тишина: на пустой записи модель выдумывает текст («Да, добрый день», «277» — проверено на
+# проде 19.10.2026), поэтому до запроса меряем уровень сигнала. Речь в реальной записи даёт
+# RMS 0,02–0,13 по секундам, комнатный шум микрофона — тысячные.
+SILENCE_RMS = 0.005
+MIN_SECONDS = 0.5
+NO_SPEECH = "[нет речи]"
+
 _PROMPT = (
     "Расшифруй речь дословно на русском языке. Верни только текст расшифровки, без пояснений, "
     "без кавычек и без заголовков. Убери междометия и запинки («э-э», «ну вот»). Числа пиши "
     "цифрами; кадастровые номера — цифрами через двоеточия, например 50:09:0060202:101; "
-    "суммы — числом с единицей (2,5 млн). Если речи нет или она неразборчива, верни пустую строку."
+    f"суммы — числом с единицей (2,5 млн). Если речи нет, она неразборчива или это не русская "
+    f"речь, верни ровно {NO_SPEECH} и ничего больше."
 )
+
+
+def wav_stats(audio: bytes) -> tuple[float, float] | None:
+    """(длительность, RMS 0..1) для WAV PCM 16 бит; None — не WAV или не разобрать."""
+    try:
+        with wave.open(io.BytesIO(audio)) as w:
+            if w.getsampwidth() != 2:
+                return None
+            rate, frames = w.getframerate(), w.readframes(w.getnframes())
+    except (wave.Error, EOFError, ValueError):
+        return None
+    samples = np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32768.0
+    if samples.size == 0 or rate <= 0:
+        return (0.0, 0.0)
+    return (samples.size / rate, float(np.sqrt(np.mean(samples**2))))
 
 
 def normalize_mime(mime: str | None) -> str:
@@ -68,6 +94,18 @@ def transcribe(
         return _failed(model, "пустая запись")
     if len(audio) > MAX_AUDIO_BYTES:
         return _failed(model, f"запись больше {MAX_AUDIO_BYTES // (1024 * 1024)} МБ")
+    if mime == "audio/wav":
+        stats = wav_stats(audio)
+        if stats is not None and (stats[0] < MIN_SECONDS or stats[1] < SILENCE_RMS):
+            return {
+                "text": "",
+                "model": model,
+                "error": None,
+                "usage": None,
+                "silent": True,
+                "seconds": round(stats[0], 2),
+                "rms": round(stats[1], 4),
+            }
     result: dict[str, Any] | None = None
     for m in (model, *[f for f in fallbacks if f != model]):
         result = _once(audio, mime, api_key=api_key, model=m, timeout=timeout)
@@ -116,6 +154,8 @@ def parse_response(data: dict[str, Any], *, model: str) -> dict[str, Any]:
     cand = (data.get("candidates") or [{}])[0]
     parts = (cand.get("content") or {}).get("parts") or []
     text = clean_text("".join(p.get("text", "") for p in parts if isinstance(p, dict)))
+    if text.strip("[]«» ").lower() in ("нет речи", "no speech"):
+        text = ""
     return {"text": text, "model": model, "error": None, "usage": data.get("usageMetadata")}
 
 

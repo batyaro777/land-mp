@@ -25,6 +25,7 @@ from shapely.geometry import box, shape
 from landcheck.models import SOTKA_M2
 
 SCHEMA_VERSION = 1
+MIN_AREA_M2 = 50  # площадь ЕГРН меньше полусотки — ошибка данных, цену за м² по ней не считаем
 NSPD_RADIUS_M = 1000  # ЗОУИТ и проекты межевания
 NEIGHBORS_RADIUS_M = 400  # соседи по кадастровой стоимости: ближний круг, иначе сотни участков
 OSM_RADIUS_M = 3000  # ТЗ М2.2
@@ -353,7 +354,7 @@ def price_reference(
         "per_ha": round(med * 10_000),
         "source": SRC_GKO,
     }
-    if listing_price_rub and area_m2:
+    if listing_price_rub and area_m2 and area_m2 >= MIN_AREA_M2:
         listing_rub_m2 = listing_price_rub / area_m2
         out["listing_rub_m2"] = round(listing_rub_m2)
         out["listing_vs_gko"] = round(listing_rub_m2 / med, 2)
