@@ -15,6 +15,7 @@
 
   {% if tab == 'register' %}
   <form method="post" action="/register">
+    {% if ref %}<input type="hidden" name="ref" value="{{ ref }}"><p class="small muted">Вы пришли по партнёрской ссылке.</p>{% endif %}
     <label>Email<input type="email" name="email" placeholder="you@example.com" required autofocus></label>
     <label>Пароль <small class="muted">(не короче 8 знаков)</small><input type="password" name="password" minlength="8" required></label>
     <label>Как вас называть<input name="name" placeholder="Имя" required></label>

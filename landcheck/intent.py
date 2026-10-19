@@ -68,7 +68,12 @@ PURPOSE_KEYWORDS: dict[Purpose, tuple[str, ...]] = {
         "хозяйств",
         "коз",
         "овец",
-        "кур",
+        "куры",
+        "кур ",
+        "кур,",
+        "курей",
+        "куриц",
+        "курят",
         "кроли",
         "скот",
         "пасти",
@@ -98,14 +103,21 @@ _BUDGET_RE = re.compile(
     r"(?:до|бюджет|не дороже|максимум|в пределах|за)\s*([\d\s .,]+\s*(?:млн|тыс|руб|₽|р\.|k)?)",
     re.IGNORECASE,
 )
-_AREA_RANGE_RE = re.compile(r"от\s*([\d.,]+)\s*до\s*([\d.,]+)\s*(?:сот|га|м2|м²|кв)", re.IGNORECASE)
+_AREA_RANGE_RE = re.compile(
+    r"(?:от\s*)?([\d.,]+)\s*(?:до|[-–—])\s*([\d.,]+)\s*(сот|га|м2|м²|кв)", re.IGNORECASE
+)
 _AREA_RE = re.compile(r"([\d.,]+)\s*(сот|га|м2|м²|кв\.?\s*м)", re.IGNORECASE)
+
+
+def _has_keyword(text: str, key: str) -> bool:
+    """Ключ должен начинаться на границе слова: «кур» в «Белокуриха» — не куры (прод, 19.10)."""
+    return re.search(r"(?<![а-яёa-z])" + re.escape(key), text) is not None
 
 
 def detect_purpose(text: str) -> Purpose:
     t = text.lower()
     for purpose, keys in PURPOSE_KEYWORDS.items():
-        if any(k in t for k in keys):
+        if any(_has_keyword(t, k) for k in keys):
             return purpose
     return Purpose.ANY
 
@@ -134,10 +146,11 @@ def parse_request(text: str) -> Request:
     min_area = max_area = None
     rm = _AREA_RANGE_RE.search(t)
     if rm:
-        unit_m = re.search(r"(сот|га|м2|м²|кв)", t[rm.start() :], re.I)
-        unit = unit_m.group(1) if unit_m else "сот"
+        unit = rm.group(3)
         min_area = _area_to_m2(float(rm.group(1).replace(",", ".")), unit)
         max_area = _area_to_m2(float(rm.group(2).replace(",", ".")), unit)
+        if min_area > max_area:
+            min_area, max_area = max_area, min_area
     else:
         am = _AREA_RE.search(t)
         if am:

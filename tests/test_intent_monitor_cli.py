@@ -93,3 +93,27 @@ def test_cli_rules_and_monitor(fixtures_dir: Path, tmp_path: Path):
         ],
     )
     assert r2.exit_code == 2  # 999 не найден → дрейф
+
+
+def test_area_range_with_dash_and_ot_do():
+    from landcheck.intent import parse_request
+    from landcheck.models import SOTKA_M2
+
+    r = parse_request("Построить дом для семьи до 3 млн, 8–12 соток, Истра")
+    assert r.budget_rub == 3_000_000
+    assert (r.min_area_m2, r.max_area_m2) == (8 * SOTKA_M2, 12 * SOTKA_M2)
+    r = parse_request("участок 10-15 сот под дачу")
+    assert (r.min_area_m2, r.max_area_m2) == (10 * SOTKA_M2, 15 * SOTKA_M2)
+    r = parse_request("ферма от 2 до 5 га")
+    assert (r.min_area_m2, r.max_area_m2) == (20_000, 50_000)
+
+
+def test_purpose_keywords_respect_word_boundaries():
+    from landcheck.intent import detect_purpose
+    from landcheck.models import Purpose
+
+    assert detect_purpose("Построить дом для семьи, Белокуриха") is Purpose.IZHS
+    assert detect_purpose("дача в Курске") is Purpose.SNT
+    assert detect_purpose("держать кур и коз") is Purpose.LPH
+    assert detect_purpose("куры, огород и дом") is Purpose.LPH
+    assert detect_purpose("глэмпинг у курорта") is Purpose.RECREATION

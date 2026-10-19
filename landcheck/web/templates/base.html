@@ -35,6 +35,8 @@
         <summary>{{ user.brand or user.name }} <small class="muted">· {{ user.role_label|lower }}</small></summary>
         <ul dir="rtl">
           <li><a href="/profile">Профиль и логотип</a></li>
+          <li><a href="/partner">Партнёрская ссылка</a></li>
+          <li><a href="/connections">Запросы контакта</a></li>
           {% if user.is_admin %}<li><a href="/admin/listings">Модерация</a></li>{% endif %}
           <li><form method="post" action="/logout"><button class="outline secondary">Выйти</button></form></li>
         </ul>

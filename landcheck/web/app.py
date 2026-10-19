@@ -51,11 +51,13 @@ from landcheck.web.db import (
     CheckItem,
     User,
     authenticate,
+    ensure_ref_code,
     init_db,
     normalize_email,
     redeem_invite,
     register_user,
     session,
+    user_by_ref,
 )
 from landcheck.web.serialize import (
     LEVEL_RANK,
@@ -168,11 +170,24 @@ def _batch_from_check(check: Check) -> BatchResult:
 
 
 # --- auth -------------------------------------------------------------------------------
+REF_COOKIE = "lc_ref"
+
+
+def _remember_ref(request: Request, resp, ref: str) -> None:
+    """Партнёрский код из ссылки живёт в cookie 30 дней: регистрация может быть позже."""
+    if ref:
+        resp.set_cookie(REF_COOKIE, ref.strip().lower()[:16], max_age=MAX_AGE, samesite="lax")
+
+
 @router.get("/login", response_class=HTMLResponse)
-def login_form(request: Request, error: str | None = None, tab: str = "password"):
+def login_form(request: Request, error: str | None = None, tab: str = "password", ref: str = ""):
     if current_user(request):
         return RedirectResponse("/", status_code=303)
-    return render(request, "login.html", error=error, tab=tab, user=None)
+    if ref:
+        tab = "register"
+    resp = render(request, "login.html", error=error, tab=tab, ref=ref, user=None)
+    _remember_ref(request, resp, ref)
+    return resp
 
 
 def _login_response(user: User) -> RedirectResponse:
@@ -248,16 +263,24 @@ def register(
     name: Annotated[str, Form()] = "",
     role: Annotated[str, Form()] = "buyer",
     brand_name: Annotated[str, Form()] = "",
+    ref: Annotated[str, Form()] = "",
 ):
-    """Регистрация без кода (ТЗ v2, R3): email, пароль, имя, роль."""
+    """Регистрация без кода (ТЗ v2, R3): email, пароль, имя, роль; партнёрский код из формы
+    или cookie привязывает пришедшего к инфопартнёру (К4)."""
     if (resp := _throttled(request)) is not None:
         return resp
+    code = ref or request.cookies.get(REF_COOKIE, "")
     with session() as db:
-        user, error = register_user(db, email, password, name, role, brand_name)
+        partner = user_by_ref(db, code)
+        user, error = register_user(
+            db, email, password, name, role, brand_name, referred_by=partner.id if partner else None
+        )
     if user is None:
         record_failed_attempt(request.client.host if request.client else "?")
-        return render(request, "login.html", error=error, tab="register", user=None)
-    return _login_response(user)
+        return render(request, "login.html", error=error, tab="register", ref=code, user=None)
+    resp = _login_response(user)
+    resp.delete_cookie(REF_COOKIE)
+    return resp
 
 
 @router.post("/logout")
@@ -967,6 +990,12 @@ def _own_listing(db, user: User, listing_id: int):
 def listing_page(request: Request, user: UserDep, listing_id: int):
     with session() as db:
         row = _own_listing(db, user, listing_id)
+        # Контроль противоречий пересчитывается при каждом просмотре: правила меняются,
+        # а сохранённый список мог устареть (Клавдий, прод 19.10).
+        fresh = _listing_warnings(row.data)
+        if fresh != list(row.data.get("warnings") or []):
+            row.data = {**row.data, "warnings": fresh}
+            db.commit()
         return render(
             request,
             "listing.html",
@@ -1162,6 +1191,7 @@ def market(
     price_max: str = "",
     area_min: str = "",
     area_max: str = "",
+    ref: str = "",
 ):
     """Витрина: только объявления с подтверждённым правом, публично, без входа."""
     from landcheck.inputs import parse_number
@@ -1182,7 +1212,7 @@ def market(
             area_min=num(area_min),
             area_max=num(area_max),
         )
-    return render(
+    resp = render(
         request,
         "market.html",
         cards=cards,
@@ -1195,6 +1225,8 @@ def market(
             "area_max": area_max,
         },
     )
+    _remember_ref(request, resp, ref)
+    return resp
 
 
 @router.get("/l/{listing_id}", response_class=HTMLResponse)
@@ -1207,6 +1239,16 @@ def listing_public(request: Request, listing_id: int):
         if row is None or not row.is_public:
             raise HTTPException(404)
         owner = db.get(User, row.user_id)
+        me = current_user(request)
+        my_conn = None
+        if me is not None and me.id != row.user_id:
+            from landcheck.web.db import Connection
+
+            my_conn = db.scalar(
+                select(Connection).where(
+                    Connection.listing_id == row.id, Connection.from_user_id == me.id
+                )
+            )
         return render(
             request,
             "listing_public.html",
@@ -1215,6 +1257,8 @@ def listing_public(request: Request, listing_id: int):
             card=_market_card(row, owner),
             owner=owner,
             logo_url=logo_url(row.user_id) if owner else None,
+            my_conn=my_conn,
+            is_owner=bool(me is not None and me.id == row.user_id),
         )
 
 
@@ -1454,6 +1498,132 @@ def saved_page(request: Request, user: UserDep, rid: int | None = None):
             rows.append(m or card)
         purpose = _purpose_of(req.purpose) if req else Purpose.ANY
     return render(request, "saved.html", rows=rows, req=req, purpose=purpose, user=user)
+
+
+# --- инфопартнёр (К4): ссылка, два уровня, статистика ------------------------------------
+@router.get("/partner", response_class=HTMLResponse)
+def partner_page(request: Request, user: UserDep):
+    from landcheck.web.db import Listing as ListingRow
+
+    with session() as db:
+        u = db.get(User, user.id)
+        assert u is not None
+        code = ensure_ref_code(db, u)
+        level1 = db.scalars(select(User).where(User.referred_by == u.id)).all()
+        l1_ids = [x.id for x in level1]
+        level2 = (
+            db.scalars(select(User).where(User.referred_by.in_(l1_ids))).all() if l1_ids else []
+        )
+        ids = l1_ids + [x.id for x in level2]
+        checks = 0
+        listings_verified = 0
+        if ids:
+            checks = db.scalar(select(func.count(Check.id)).where(Check.user_id.in_(ids))) or 0
+            listings_verified = (
+                db.scalar(
+                    select(func.count(ListingRow.id)).where(
+                        ListingRow.user_id.in_(ids), ListingRow.status == "verified"
+                    )
+                )
+                or 0
+            )
+
+        def by_role(users):
+            out: dict[str, int] = {}
+            for x in users:
+                out[x.role_label] = out.get(x.role_label, 0) + 1
+            return out
+
+        return render(
+            request,
+            "partner.html",
+            code=code,
+            link=f"{settings.base_url}/login?ref={code}",
+            market_link=f"{settings.base_url}/market?ref={code}",
+            level1=by_role(level1),
+            level2=by_role(level2),
+            n1=len(level1),
+            n2=len(level2),
+            checks=checks,
+            listings_verified=listings_verified,
+            user=user,
+        )
+
+
+# --- межагентский контур (К3): запрос контакта по объявлению ------------------------------
+@router.post("/l/{listing_id}/connect")
+def connection_create(user: UserDep, listing_id: int, note: Annotated[str, Form()] = ""):
+    from landcheck.web.db import Connection
+    from landcheck.web.db import Listing as ListingRow
+
+    with session() as db:
+        row = db.get(ListingRow, listing_id)
+        if row is None or not row.is_public:
+            raise HTTPException(404)
+        if row.user_id == user.id:
+            return RedirectResponse(f"/l/{listing_id}", status_code=303)
+        exists = db.scalar(
+            select(Connection).where(
+                Connection.listing_id == listing_id, Connection.from_user_id == user.id
+            )
+        )
+        if exists is None:
+            db.add(
+                Connection(
+                    listing_id=listing_id,
+                    from_user_id=user.id,
+                    to_user_id=row.user_id,
+                    note=note.strip()[:1000],
+                )
+            )
+            db.commit()
+    return RedirectResponse(f"/l/{listing_id}", status_code=303)
+
+
+@router.post("/connections/{conn_id}/decide")
+def connection_decide(user: UserDep, conn_id: int, decision: Annotated[str, Form()]):
+    from datetime import UTC, datetime
+
+    from landcheck.web.db import Connection
+
+    with session() as db:
+        conn = db.get(Connection, conn_id)
+        if conn is None or conn.to_user_id != user.id:
+            raise HTTPException(404)
+        if decision in ("accepted", "declined"):
+            conn.status = decision
+            conn.decided_at = datetime.now(UTC)
+            db.commit()
+    return RedirectResponse("/connections", status_code=303)
+
+
+@router.get("/connections", response_class=HTMLResponse)
+def connections_page(request: Request, user: UserDep):
+    from landcheck.web.db import Connection
+    from landcheck.web.db import Listing as ListingRow
+
+    with session() as db:
+        incoming = db.scalars(
+            select(Connection)
+            .where(Connection.to_user_id == user.id)
+            .order_by(Connection.created_at.desc())
+        ).all()
+        outgoing = db.scalars(
+            select(Connection)
+            .where(Connection.from_user_id == user.id)
+            .order_by(Connection.created_at.desc())
+        ).all()
+        users = {u.id: u for u in db.scalars(select(User)).all()}
+        listings = {r.id: r for r in db.scalars(select(ListingRow)).all()}
+        return render(
+            request,
+            "connections.html",
+            incoming=incoming,
+            outgoing=outgoing,
+            users=users,
+            listings=listings,
+            user=user,
+        )
 
 
 def require_admin(request: Request) -> User:

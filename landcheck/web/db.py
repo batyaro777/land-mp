@@ -69,6 +69,9 @@ class User(Base):
     email: Mapped[str | None] = mapped_column(String(200), nullable=True)
     password_hash: Mapped[str | None] = mapped_column(String(200), nullable=True)
     role: Mapped[str] = mapped_column(String(16), default="broker", server_default="broker")
+    # Инфопартнёр (К4): своя ссылка у каждого, два уровня привлечения.
+    ref_code: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    referred_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     checks: Mapped[list[Check]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
@@ -191,6 +194,22 @@ class BuyerRequest(Base):
     seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class Connection(Base):
+    """Межагентский контур (К3): запрос контакта по объявлению от брокера или покупателя
+    владельцу объявления. Раздел комиссии платформа не ведёт — стороны договариваются сами."""
+
+    __tablename__ = "connections"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    listing_id: Mapped[int] = mapped_column(ForeignKey("listings.id"), index=True)
+    from_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    to_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    note: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(16), default="new")  # new|accepted|declined
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class Favorite(Base):
     """Сохранённый объект покупателя для сравнения."""
 
@@ -230,6 +249,8 @@ _NEW_COLUMNS: dict[str, dict[str, str]] = {
         "email": "VARCHAR(200)",
         "password_hash": "VARCHAR(200)",
         "role": "VARCHAR(16) NOT NULL DEFAULT 'broker'",
+        "ref_code": "VARCHAR(16)",
+        "referred_by": "INTEGER",
     },
     "listings": {
         "status": "VARCHAR(16) NOT NULL DEFAULT 'draft'",
@@ -240,7 +261,10 @@ _NEW_COLUMNS: dict[str, dict[str, str]] = {
         "moderation_note": "TEXT",
     },
 }
-_NEW_INDEXES = ("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email ON users(email)",)
+_NEW_INDEXES = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email ON users(email)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_ref_code ON users(ref_code)",
+)
 
 
 def _migrate(engine) -> None:
@@ -318,8 +342,33 @@ def normalize_email(email: str) -> str:
     return (email or "").strip().lower()
 
 
+def ensure_ref_code(db: Session, user: User) -> str:
+    """Код партнёрской ссылки выдаётся при первом обращении."""
+    if not user.ref_code:
+        while True:
+            code = secrets.token_hex(4)
+            if db.scalar(select(User.id).where(User.ref_code == code)) is None:
+                break
+        user.ref_code = code
+        db.commit()
+    return user.ref_code
+
+
+def user_by_ref(db: Session, code: str | None) -> User | None:
+    code = (code or "").strip().lower()
+    if not code:
+        return None
+    return db.scalar(select(User).where(User.ref_code == code))
+
+
 def register_user(
-    db: Session, email: str, password: str, name: str, role: str, brand: str | None = None
+    db: Session,
+    email: str,
+    password: str,
+    name: str,
+    role: str,
+    brand: str | None = None,
+    referred_by: int | None = None,
 ) -> tuple[User | None, str | None]:
     """Новый пользователь по email: (user, None) или (None, текст ошибки)."""
     email = normalize_email(email)
@@ -338,6 +387,7 @@ def register_user(
         email=email,
         password_hash=hash_password(password),
         role=role,
+        referred_by=referred_by,
     )
     db.add(user)
     db.commit()

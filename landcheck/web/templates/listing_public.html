@@ -26,6 +26,21 @@
   {% if d.images %}<div class="photos">{% for img in d.images %}<img src="{{ img }}" alt="">{% endfor %}</div>{% endif %}
 </article>
 </div>
+{% if user and not is_owner %}
+<article>
+  <h4>Связаться через платформу</h4>
+  {% if my_conn %}
+    <p>Запрос контакта отправлен {{ my_conn.created_at|dt }}: <span class="badge {{ {'new':'v-check','accepted':'v-ok','declined':'v-stop'}[my_conn.status] }}">{{ {'new':'ждёт ответа','accepted':'принят','declined':'отклонён'}[my_conn.status] }}</span>. Статус и контакты — в <a href="/connections">запросах контакта</a>.</p>
+  {% else %}
+    <form method="post" action="/l/{{ row.id }}/connect">
+      <label>Сообщение продавцу или его брокеру <small class="muted">(кто вы, для кого ищете, условия сотрудничества между брокерами)</small>
+        <textarea name="note" rows="3" placeholder="Брокер покупателя, клиент ищет под дом, готов к связке по стандартным условиям"></textarea></label>
+      <button type="submit" class="outline sm">Запросить контакт</button>
+    </form>
+    <p class="muted small">Платформа фиксирует связку и открывает контакты после согласия второй стороны. Раздел комиссии между брокерами — ваша договорённость.</p>
+  {% endif %}
+</article>
+{% endif %}
 <p class="small"><a href="/market">← все участки с подтверждённым правом</a>
   {% if user %} · <form method="post" action="/favorites/{{ row.id }}" class="inline"><input type="hidden" name="back" value="/saved"><button class="outline sm">Сохранить для сравнения</button></form>{% endif %}</p>
 {% endblock %}
