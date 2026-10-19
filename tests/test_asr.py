@@ -75,7 +75,7 @@ def test_transcribe_permission_denied_is_final(monkeypatch):
 
     monkeypatch.setattr(httpx, "post", fake_post)
     r = transcribe(b"x", "audio/wav", api_key="bad")
-    assert r["error"].startswith("Gemini PERMISSION_DENIED") and len(calls) == 1
+    assert "Gemini PERMISSION_DENIED" in r["error"] and len(calls) == 1
 
 
 def _wav(samples, rate: int = 16000) -> bytes:
@@ -160,3 +160,34 @@ def test_asr_route(client, monkeypatch):  # noqa: F811
         ).status_code
         == 307
     )
+
+
+def test_groq_provider_first_then_gemini(monkeypatch):
+    import numpy as np
+
+    speech = _wav(np.random.default_rng(2).normal(0, 0.05, 16000 * 2).clip(-1, 1))
+    monkeypatch.setenv("GROQ_API_KEY", "g")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    calls: list[str] = []
+
+    def fake_post(url, *a, **k):
+        calls.append(url)
+        if "groq" in url:
+            assert k["data"]["model"] == "whisper-large-v3-turbo" and k["data"]["language"] == "ru"
+            return _Resp(200, {"text": "  Построить дом до 3 млн. "})
+        raise AssertionError("gemini не должен вызываться")
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    assert asr.providers_available() == ["groq"]
+    r = transcribe(speech, "audio/wav", api_key="gem")
+    assert r["text"] == "Построить дом до 3 млн." and r["model"] == "groq/whisper-large-v3-turbo"
+    # Groq упал — запасной Gemini по переданному ключу
+    seq = iter([_Resp(503, {}), _ok("дача у реки")])
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: next(seq))
+    r = transcribe(speech, "audio/wav", api_key="gem", model="m")
+    assert r["text"] == "дача у реки" and r["model"] == "m"
+    # без ключей вообще — честная ошибка без сетевых вызовов
+    monkeypatch.delenv("GROQ_API_KEY")
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: (_ for _ in ()).throw(AssertionError))
+    r = transcribe(speech, "audio/wav")
+    assert "нет провайдера" in r["error"]

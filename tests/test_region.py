@@ -62,7 +62,8 @@ def test_locality_from_address_strips_street_and_parcel():
     )
 
 
-def test_region_block_in_report(client, monkeypatch):  # noqa: F811 — фикстура
+def test_region_block_in_report(client, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("LANDCHECK_REGION", "gemini")
     from landcheck.web.config import settings
 
     login(client)
@@ -94,6 +95,7 @@ def test_region_block_in_report(client, monkeypatch):  # noqa: F811 — фикс
 
 
 def test_research_falls_back_on_overload(monkeypatch):
+    monkeypatch.setenv("LANDCHECK_REGION", "gemini")
     from landcheck import region
 
     calls: list[str] = []

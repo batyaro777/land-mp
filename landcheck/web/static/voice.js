@@ -1,9 +1,64 @@
-/* Голосовой ввод: кнопка .mic[data-target=<id поля>] пишет до 60 с, переводит запись в WAV
-   16 кГц моно и отправляет на /asr; текст попадает в поле для правки перед отправкой формы. */
+/* Голосовой ввод (бесплатный стек, 19.10.2026).
+   1) Web Speech API браузера (Chrome, Edge, Safari): распознаёт сам, серверу ничего не стоит.
+   2) Запасной путь: запись до 60 с → WAV 16 кГц → POST /asr (Groq Whisper / локальный whisper).
+   Кнопка .mic[data-target=<id поля>]; текст попадает в поле для правки перед отправкой формы. */
 (function () {
   const MAX_SECONDS = 60;
-  const supported = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
+  const SILENCE_RMS = 0.005; // как на сервере: ниже — микрофон не слышит голос
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const canRecord = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
+  const serverAsr = document.documentElement.dataset.asrServer === '1';
 
+  function setStatus(btn, text, busy) {
+    const s = btn.parentElement.querySelector('.mic-status');
+    if (s) { s.textContent = text || ''; }
+    btn.setAttribute('aria-busy', busy ? 'true' : 'false');
+  }
+  function putText(target, text) {
+    target.value = target.value.trim() ? target.value.trim() + ' ' + text : text;
+    target.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  function idle(btn) {
+    btn.classList.remove('recording');
+    btn.textContent = btn.dataset.labelIdle || '🎙';
+    btn.onclick = () => start(btn);
+  }
+
+  /* --- путь 1: распознавание в браузере --- */
+  function recognizeInBrowser(btn, target) {
+    const rec = new SR();
+    rec.lang = 'ru-RU'; rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 1;
+    let finals = '', interim = '', failed = null, stoppedByUser = false;
+    const started = Date.now();
+    const timer = setInterval(() => {
+      const sec = Math.round((Date.now() - started) / 1000);
+      setStatus(btn, 'Слушаю ' + sec + ' с из ' + MAX_SECONDS + (interim ? '… ' + interim : '') + ' — нажмите «Стоп», когда закончите', false);
+      if (sec >= MAX_SECONDS) { stoppedByUser = true; rec.stop(); }
+    }, 500);
+    rec.onresult = (e) => {
+      interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) finals += (finals ? ' ' : '') + t.trim(); else interim += t;
+      }
+    };
+    rec.onerror = (e) => { failed = e.error || 'error'; };
+    rec.onend = () => {
+      clearInterval(timer);
+      idle(btn);
+      if (finals) { putText(target, finals); setStatus(btn, 'Готово: проверьте текст и поправьте при необходимости', false); return; }
+      if (failed === 'not-allowed' || failed === 'service-not-allowed') { setStatus(btn, 'Нет доступа к микрофону: разрешите его в браузере', false); return; }
+      // Сервис браузера недоступен (network, aborted) или не услышал — запасной путь через сервер.
+      if (serverAsr && canRecord && !stoppedByUser) { record(btn, target); return; }
+      setStatus(btn, failed === 'no-speech' || !failed ? 'Речь не распознана, попробуйте ещё раз' : 'Распознавание недоступно: ' + failed, false);
+    };
+    try { rec.start(); } catch (e) { clearInterval(timer); idle(btn); if (serverAsr && canRecord) record(btn, target); else setStatus(btn, 'Распознавание недоступно', false); return; }
+    btn.classList.add('recording');
+    btn.textContent = btn.dataset.labelStop || '■ Стоп';
+    btn.onclick = () => { stoppedByUser = true; rec.stop(); };
+  }
+
+  /* --- путь 2: запись и сервер --- */
   function encodeWav(samples, rate) {
     const buf = new ArrayBuffer(44 + samples.length * 2);
     const v = new DataView(buf);
@@ -19,7 +74,6 @@
     }
     return new Blob([buf], { type: 'audio/wav' });
   }
-
   async function toWav16k(blob) {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
@@ -36,17 +90,7 @@
     const rms = data.length ? Math.sqrt(sum / data.length) : 0;
     return { blob: encodeWav(data, rate), rms: rms, seconds: data.length / rate };
   }
-  const SILENCE_RMS = 0.005; // как на сервере: ниже — микрофон не слышит голос
-
-  function setStatus(btn, text, busy) {
-    const s = btn.parentElement.querySelector('.mic-status');
-    if (s) { s.textContent = text || ''; }
-    btn.setAttribute('aria-busy', busy ? 'true' : 'false');
-  }
-
-  async function record(btn) {
-    const target = document.getElementById(btn.dataset.target);
-    if (!target) return;
+  async function record(btn, target) {
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -63,9 +107,7 @@
     rec.onstop = async () => {
       clearInterval(timer);
       stream.getTracks().forEach(t => t.stop());
-      btn.classList.remove('recording');
-      btn.textContent = btn.dataset.labelIdle || '🎙';
-      btn.onclick = () => record(btn);
+      idle(btn);
       setStatus(btn, 'Распознаю…', true);
       try {
         const raw = new Blob(chunks, { type: rec.mimeType || 'audio/webm' });
@@ -78,14 +120,10 @@
         fd.append('audio', wav.blob, 'voice.wav');
         const r = await fetch('/asr', { method: 'POST', body: fd });
         const data = await r.json();
-        if (!r.ok || data.error) {
-          setStatus(btn, 'Не распознано: ' + (data.error || r.status), false);
-          return;
-        }
+        if (!r.ok || data.error) { setStatus(btn, 'Не распознано: ' + (data.error || r.status), false); return; }
         if (data.silent) { setStatus(btn, 'Тишина: голос не слышен, попробуйте ещё раз', false); return; }
         if (!data.text) { setStatus(btn, 'Речь не распознана, попробуйте ещё раз', false); return; }
-        target.value = target.value.trim() ? target.value.trim() + ' ' + data.text : data.text;
-        target.dispatchEvent(new Event('input', { bubbles: true }));
+        putText(target, data.text);
         setStatus(btn, 'Готово: проверьте текст и поправьте при необходимости', false);
       } catch (e) {
         setStatus(btn, 'Ошибка: ' + e.message, false);
@@ -103,11 +141,18 @@
     }, 500);
   }
 
+  function start(btn) {
+    const target = document.getElementById(btn.dataset.target);
+    if (!target) return;
+    if (SR && !btn.dataset.forceServer) recognizeInBrowser(btn, target); else record(btn, target);
+  }
+
   document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('button.mic').forEach(btn => {
-      if (!supported) { btn.closest('.mic-wrap') ? btn.closest('.mic-wrap').remove() : btn.remove(); return; }
+      const usable = SR || (serverAsr && canRecord);
+      if (!usable) { btn.closest('.mic-wrap') ? btn.closest('.mic-wrap').remove() : btn.remove(); return; }
       btn.dataset.labelIdle = btn.textContent;
-      btn.onclick = () => record(btn);
+      btn.onclick = () => start(btn);
     });
   });
 })();

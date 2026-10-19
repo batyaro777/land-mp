@@ -122,7 +122,10 @@ UserDep = Annotated[User, Depends(require_user)]
 
 def render(request: Request, name: str, status_code: int = 200, **ctx: Any) -> HTMLResponse:
     ctx.setdefault("user", current_user(request))
-    ctx.setdefault("voice_enabled", bool(settings.gemini_api_key))
+    # Кнопка «Голосом» есть всегда: в браузере распознаёт Web Speech API (бесплатно),
+    # серверный путь (Groq Whisper / локальный whisper / Gemini) — запасной.
+    ctx.setdefault("voice_enabled", True)
+    ctx.setdefault("asr_server", settings.asr_server_enabled)
     ctx["request"] = request
     return templates.TemplateResponse(request, name, ctx, status_code=status_code)
 
@@ -562,7 +565,7 @@ def _report_ctx(check: Check, item: CheckItem, public: bool) -> dict[str, Any]:
         "location_url": f"/checks/{check.id}/items/{item.cad_num}/location",
         "region": region,
         "region_url": f"/checks/{check.id}/items/{item.cad_num}/region",
-        "region_enabled": bool(settings.gemini_api_key),
+        "region_enabled": settings.region_enabled,
         "checklist": CHECKLIST,
         "price": price_orientation(data, (check.stats or {}).get("median_price_per_sotka")),
         "price_pos": price_position(data, median),
@@ -949,7 +952,7 @@ def _compose_with_ai(data: dict[str, Any]) -> dict[str, Any]:
     """Заголовок и текст через Gemini по фактам ЕГРН и заметкам; при ошибке данные не меняются."""
     from landcheck.packager import compose_listing
 
-    if not settings.gemini_api_key:
+    if not settings.llm_enabled:
         return data
     pf = data.get("parcel_facts") or {}
     object_type = data.get("object_type") or ""
@@ -1785,9 +1788,14 @@ async def asr(user: UserDep, audio: Annotated[UploadFile, File()]):
 
     from landcheck.asr import MAX_AUDIO_BYTES, transcribe
 
-    if not settings.gemini_api_key:
+    if not settings.asr_server_enabled:
         return JSONResponse(
-            {"text": "", "error": "голосовой ввод выключен: нет ключа Gemini"}, status_code=503
+            {
+                "text": "",
+                "error": "серверное распознавание выключено: нет ключа GROQ_API_KEY "
+                "(бесплатно) и локальной модели",
+            },
+            status_code=503,
         )
     raw = await audio.read(MAX_AUDIO_BYTES + 1)
     if len(raw) > MAX_AUDIO_BYTES:

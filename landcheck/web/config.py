@@ -53,6 +53,28 @@ class Settings:
         default_factory=lambda: os.environ.get("LANDCHECK_GEMINI_MODEL") or "gemini-3.8-flash"
     )
 
+    @property
+    def llm_enabled(self) -> bool:
+        """Есть хотя бы один бесплатный провайдер (Groq, OpenRouter, Mistral) или ключ Gemini."""
+        from landcheck import llm
+
+        return bool(llm.providers_from_env()) or bool(self.gemini_api_key)
+
+    @property
+    def region_enabled(self) -> bool:
+        from landcheck import llm
+        from landcheck.region import region_mode
+
+        if region_mode() == "gemini":
+            return bool(self.gemini_api_key)
+        return bool(llm.providers_from_env())
+
+    @property
+    def asr_server_enabled(self) -> bool:
+        from landcheck.asr import providers_available
+
+        return bool(providers_available()) or bool(self.gemini_api_key)
+
     def __post_init__(self) -> None:
         if not self.secret:
             # Без секрета сессии не переживут перезапуск, но для локального запуска это допустимо.

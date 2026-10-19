@@ -6,12 +6,13 @@
 
 from __future__ import annotations
 
-import json
 import re
 from typing import Any
 
 import httpx
 
+from landcheck import llm
+from landcheck.llm import parse_json_text
 from landcheck.region import DEFAULT_MODEL, FALLBACK_MODELS, GEMINI_URL
 
 TITLE_MAX = 50
@@ -69,17 +70,9 @@ def build_prompt(
     )
 
 
-def parse_json_text(text: str) -> dict[str, Any] | None:
-    """JSON из ответа модели, в том числе внутри ```json … ```."""
-    t = text.strip()
-    m = re.search(r"\{.*\}", t, re.S)
-    if not m:
-        return None
-    try:
-        data = json.loads(m.group(0))
-    except ValueError:
-        return None
-    return data if isinstance(data, dict) else None
+def _finish(title: str, desc: str, model: str) -> dict[str, Any]:
+    title = re.sub(r"\s+", " ", title).strip()[:TITLE_MAX].rstrip(" ,.;—-")
+    return {"title": title, "description": desc.strip(), "model": model, "error": None}
 
 
 def compose_listing(
@@ -90,12 +83,16 @@ def compose_listing(
     object_type: str,
     price_rub: float | None,
     fetched: str,
-    api_key: str,
+    api_key: str | None = None,
     model: str = DEFAULT_MODEL,
     timeout: float = 60.0,
     fallbacks: tuple[str, ...] = FALLBACK_MODELS,
+    providers: list[llm.Provider] | None = None,
 ) -> dict[str, Any]:
-    """{"title", "description", "model", "error"} — исключений наружу нет."""
+    """{"title", "description", "model", "error"} — исключений наружу нет.
+
+    Сначала бесплатные провайдеры (`landcheck.llm`), Gemini — только если других нет и ключ есть.
+    """
     prompt = build_prompt(
         facts=facts,
         zouit_notes=zouit_notes,
@@ -104,6 +101,40 @@ def compose_listing(
         price_rub=price_rub,
         fetched=fetched,
     )
+    providers = llm.providers_from_env() if providers is None else providers
+    if providers:
+        res = llm.chat(
+            [{"role": "user", "content": prompt}],
+            providers=providers,
+            json_object=True,
+            temperature=0.4,
+            timeout=timeout,
+        )
+        if res.get("error") or not res.get("json"):
+            return {
+                "title": "",
+                "description": "",
+                "model": "",
+                "error": res.get("error") or "не JSON",
+            }
+        data = res["json"]
+        if not str(data.get("description", "")).strip():
+            return {"title": "", "description": "", "model": res["model"], "error": "пустой текст"}
+        return _finish(
+            str(data.get("title", "")),
+            str(data["description"]),
+            f"{res['provider']}/{res['model']}",
+        )
+    if not api_key:
+        return {"title": "", "description": "", "model": "", "error": "нет провайдера LLM"}
+    return _compose_gemini(
+        prompt, api_key=api_key, model=model, timeout=timeout, fallbacks=fallbacks
+    )
+
+
+def _compose_gemini(
+    prompt: str, *, api_key: str, model: str, timeout: float, fallbacks: tuple[str, ...]
+) -> dict[str, Any]:
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": 0.4, "responseMimeType": "application/json"},
@@ -130,7 +161,5 @@ def compose_listing(
         data = parse_json_text("".join(p.get("text", "") for p in parts if isinstance(p, dict)))
         if not data or not str(data.get("description", "")).strip():
             return {"title": "", "description": "", "model": m, "error": "модель вернула не JSON"}
-        title = re.sub(r"\s+", " ", str(data.get("title", ""))).strip()[:TITLE_MAX].rstrip(" ,.;—-")
-        desc = str(data["description"]).strip()
-        return {"title": title, "description": desc, "model": m, "error": None}
+        return _finish(str(data.get("title", "")), str(data["description"]), m)
     return last

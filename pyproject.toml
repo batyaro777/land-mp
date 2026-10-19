@@ -19,12 +19,18 @@ dependencies = [
     "python-multipart>=0.0.9",
     "sqlalchemy>=2.0",
     "itsdangerous>=2.2",
+    "ddgs>=9",
+    "trafilatura>=2",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8",
     "ruff>=0.6",
+]
+# Локальное распознавание речи на сервере (CPU): pip install ".[asr-local]"
+asr-local = [
+    "faster-whisper>=1.2",
 ]
 
 [project.scripts]

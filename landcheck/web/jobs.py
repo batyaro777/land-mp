@@ -253,13 +253,14 @@ def fetch_region(locality: str, purpose, *, refresh: bool = False) -> dict[str, 
     from landcheck.models import Purpose
     from landcheck.region import locality_key, research_region
 
-    if not settings.gemini_api_key:
+    if not settings.region_enabled:
         return {
             "sections": [],
             "sources": [],
             "grounded": False,
-            "error": "модуль выключен: нет ключа Gemini (GEMINI_API_KEY)",
-            "model": settings.gemini_model,
+            "error": "модуль выключен: нет ключа ни одного провайдера LLM "
+            "(бесплатно: GROQ_API_KEY) и нет ключа Gemini",
+            "model": None,
             "fetched_at": datetime.now(UTC).isoformat(),
         }
     purpose = purpose if isinstance(purpose, Purpose) else Purpose(purpose)
