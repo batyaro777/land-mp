@@ -7,12 +7,11 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
 {% endblock %}
 {% block content %}
-{% if public %}
-<div class="report-brand">
-  <strong>{{ owner.brand or owner.name }}</strong>
-  <span class="muted small">Отчёт по участку для клиента · {{ p.fetched_at|dt }}</span>
+<div class="report-brand{% if not public %} print-only{% endif %}">
+  <div class="brand-line">{% if logo_url %}<img src="{{ logo_url }}" alt="" class="brand-logo">{% endif %}<strong>{{ owner.brand or owner.name }}</strong></div>
+  <span class="muted small">Отчёт по участку для клиента · данные НСПД от {{ p.fetched_at|dt }}</span>
 </div>
-{% else %}
+{% if not public %}
 <p class="no-print small"><a href="/checks/{{ check.id }}">← {{ check.title }}</a></p>
 {% endif %}
 
@@ -25,9 +24,20 @@
 <div class="toolbar no-print">
   <div><button class="outline sm" onclick="navigator.clipboard.writeText('{{ share_url }}');this.textContent='Ссылка скопирована'">Ссылка для клиента</button>
     <a href="/r/{{ item.token }}" target="_blank" class="small">открыть</a></div>
-  <div><button class="outline sm" onclick="window.print()">Печать / PDF</button></div>
+  <div><button class="outline sm" onclick="window.print()" title="В окне печати выберите «Сохранить как PDF»: шапка с вашим логотипом, все разделы раскрыты">Скачать PDF</button></div>
 </div>
 {% endif %}
+<script>
+  // Для печати и PDF раскрываем все свёрнутые разделы, после — возвращаем как было.
+  (function () {
+    let opened = [];
+    window.addEventListener('beforeprint', () => {
+      opened = Array.from(document.querySelectorAll('details:not([open])'));
+      opened.forEach(d => d.setAttribute('open', ''));
+    });
+    window.addEventListener('afterprint', () => { opened.forEach(d => d.removeAttribute('open')); opened = []; });
+  })();
+</script>
 
 {% if goal %}
 <article class="goal">

@@ -57,6 +57,7 @@ templates.env.filters["money"] = fmt_money
 templates.env.filters["sotka"] = fmt_sotka
 templates.env.filters["dt"] = fmt_date
 templates.env.filters["day"] = fmt_day
+templates.env.filters["ucfirst"] = lambda s: (s[:1].upper() + s[1:]) if s else s
 templates.env.globals.update(
     brand=settings.brand, version=__version__, Purpose=Purpose, disclaimer=DISCLAIMER
 )
@@ -100,6 +101,29 @@ def render(request: Request, name: str, status_code: int = 200, **ctx: Any) -> H
     ctx.setdefault("voice_enabled", bool(settings.gemini_api_key))
     ctx["request"] = request
     return templates.TemplateResponse(request, name, ctx, status_code=status_code)
+
+
+LOGO_EXTS = ("png", "jpg", "webp")
+MAX_LOGO_BYTES = 2 * 1024 * 1024
+
+
+def _logos_dir() -> Path:
+    return settings.db_path.parent / "uploads" / "logos"
+
+
+def logo_url(user_id: int) -> str | None:
+    """Логотип брокера лежит файлом uploads/logos/<id>.<ext>; схема БД не трогается."""
+    for ext in LOGO_EXTS:
+        if (_logos_dir() / f"{user_id}.{ext}").exists():
+            return f"/uploads/logos/{user_id}.{ext}"
+    return None
+
+
+def _remove_logo(user_id: int) -> None:
+    for ext in LOGO_EXTS:
+        p = _logos_dir() / f"{user_id}.{ext}"
+        if p.exists():
+            p.unlink()
 
 
 def _own_check(db, user: User, check_id: int) -> Check:
@@ -435,6 +459,7 @@ def _report_ctx(check: Check, item: CheckItem, public: bool) -> dict[str, Any]:
         "checklist": CHECKLIST,
         "price": price_orientation(data, (check.stats or {}).get("median_price_per_sotka")),
         "price_pos": price_position(data, median),
+        "logo_url": logo_url(check.user_id),
         **_loc_extras(loc, region),
         "public": public,
         "owner": check.user,
@@ -546,6 +571,50 @@ def report_region(request: Request, user: UserDep, check_id: int, cad_num: str, 
             region_url=f"/checks/{check.id}/items/{cad_num}/region",
             user=user,
         )
+
+
+# --- профиль брокера: имя, бренд, контакт, логотип для отчётов (ТЗ v2, R2) ---------------
+@router.get("/profile", response_class=HTMLResponse)
+def profile_form(request: Request, user: UserDep, saved: int = 0, error: str | None = None):
+    return render(
+        request, "profile.html", user=user, logo_url=logo_url(user.id), saved=saved, error=error
+    )
+
+
+@router.post("/profile")
+async def profile_save(
+    request: Request,
+    user: UserDep,
+    name: Annotated[str, Form()] = "",
+    brand_name: Annotated[str, Form()] = "",
+    contact: Annotated[str, Form()] = "",
+    remove_logo: Annotated[str, Form()] = "",
+    logo: Annotated[UploadFile | None, File()] = None,
+):
+    error = None
+    if remove_logo:
+        _remove_logo(user.id)
+    if logo is not None and logo.filename:
+        raw = await logo.read(MAX_LOGO_BYTES + 1)
+        kind = _image_kind(raw)
+        if kind is None:
+            error = "Логотип не загружен: нужен файл PNG, JPG или WebP."
+        elif len(raw) > MAX_LOGO_BYTES:
+            error = "Логотип не загружен: файл больше 2 МБ."
+        else:
+            _remove_logo(user.id)
+            _logos_dir().mkdir(parents=True, exist_ok=True)
+            (_logos_dir() / f"{user.id}.{kind}").write_bytes(raw)
+    with session() as db:
+        u = db.get(User, user.id)
+        assert u is not None
+        u.name = name.strip()[:120] or u.name
+        u.brand = brand_name.strip()[:120] or None
+        u.contact = contact.strip()[:200] or None
+        db.commit()
+    if error:
+        return RedirectResponse(f"/profile?error={quote(error)}", status_code=303)
+    return RedirectResponse("/profile?saved=1", status_code=303)
 
 
 # --- single check ------------------------------------------------------------------------

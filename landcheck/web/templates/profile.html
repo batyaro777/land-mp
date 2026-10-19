@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Профиль — {{ brand }}{% endblock %}
+{% block content %}
+<article class="narrow">
+  <hgroup>
+    <h2>Профиль и логотип</h2>
+    <p>Имя, бренд и логотип идут в шапку отчётов для клиентов: публичная ссылка и PDF.</p>
+  </hgroup>
+  {% if saved %}<p class="ok-msg">Сохранено.</p>{% endif %}
+  {% if error %}<p class="err">{{ error }}</p>{% endif %}
+  <form method="post" action="/profile" enctype="multipart/form-data">
+    <label>Как вас называть<input name="name" value="{{ user.name }}" required></label>
+    <label>Название компании или бренда <small class="muted">(в шапке отчётов)</small>
+      <input name="brand_name" value="{{ user.brand or '' }}" placeholder="Например, Земля Подмосковья"></label>
+    <label>Контакт <small class="muted">(телефон или Telegram; в отчёты пока не выводится)</small>
+      <input name="contact" value="{{ user.contact or '' }}" placeholder="@username"></label>
+    <label>Логотип <small class="muted">(PNG, JPG или WebP до 2 МБ; в отчёте высота 40 px)</small>
+      <input type="file" name="logo" accept=".png,.jpg,.jpeg,.webp"></label>
+    {% if logo_url %}
+    <p><img src="{{ logo_url }}" alt="логотип" class="brand-logo"> <label class="inline-check"><input type="checkbox" name="remove_logo" value="1"> удалить логотип</label></p>
+    {% endif %}
+    <button type="submit">Сохранить</button>
+  </form>
+</article>
+{% endblock %}
