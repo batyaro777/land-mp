@@ -518,6 +518,159 @@ def summarize_location(
     }
 
 
+# --- разделы «Вода» и «Негативные факторы» поверх сводки (ТЗ v2, М2.2–2.3) ----------------
+WATER_RISK_LABELS = ("зона затопления", "зона подтопления")
+WATER_NEUTRAL_LABELS = ("водоохранная зона", "прибрежная защитная полоса")
+FLOOD_NEAR_M = 300
+WATER_NEAR_M = 1000
+_WATER_LOCATIVE = {
+    "зона затопления": "зоне затопления",
+    "зона подтопления": "зоне подтопления",
+    "водоохранная зона": "водоохранной зоне",
+    "прибрежная защитная полоса": "прибрежной защитной полосе",
+}
+
+
+def water_summary(loc: dict[str, Any]) -> dict[str, Any]:
+    """Вода одним разделом: зоны затопления и подтопления, водоохранные зоны, водоёмы по OSM.
+
+    Антон М. смотрит их первыми после проверки категории и ВРИ. Уровень: risk — участок в зоне
+    затопления или она рядом; neutral — водоохранная зона; plus — вода рядом без зон риска;
+    none — ничего не найдено.
+    """
+    items: list[dict[str, Any]] = []
+    for g in loc.get("zouit") or []:
+        label = g.get("label")
+        if label in WATER_RISK_LABELS or label in WATER_NEUTRAL_LABELS:
+            items.append(
+                {
+                    "label": label,
+                    "distance_m": g.get("min_distance_m"),
+                    "count": g.get("count", 1),
+                    "severity": "risk" if label in WATER_RISK_LABELS else "neutral",
+                    "name": g.get("nearest_name"),
+                    "note": g.get("note"),
+                    "source": g.get("source"),
+                }
+            )
+    for o in loc.get("osm") or []:
+        if o.get("kind") == "water":
+            items.append(
+                {
+                    "label": "водоём или река",
+                    "distance_m": o.get("distance_m"),
+                    "count": o.get("count", 1),
+                    "severity": "plus",
+                    "name": o.get("name"),
+                    "note": None,
+                    "source": o.get("source"),
+                }
+            )
+    items.sort(key=lambda i: (i["distance_m"] is None, i["distance_m"] or 0))
+
+    def near(sev: str, limit: float | None) -> list[dict[str, Any]]:
+        return [
+            i
+            for i in items
+            if i["severity"] == sev
+            and i["distance_m"] is not None
+            and (limit is None or i["distance_m"] <= limit)
+        ]
+
+    flood_in = [i for i in near("risk", 0)]
+    flood_near = [i for i in near("risk", FLOOD_NEAR_M) if i["distance_m"] > 0]
+    protect_in = near("neutral", 0)
+    water_near = near("plus", WATER_NEAR_M)
+    if flood_in:
+        level = "risk"
+        text = (
+            f"участок в {_WATER_LOCATIVE[flood_in[0]['label']]}: паводковый риск, "
+            "страховка, дренаж и фундамент дороже; запросить отметки и историю паводков"
+        )
+    elif flood_near:
+        level = "risk"
+        text = (
+            f"{flood_near[0]['label']} в {flood_near[0]['distance_m']} м: уточнить отметки "
+            "участка относительно уреза воды и историю паводков"
+        )
+    elif protect_in:
+        level = "neutral"
+        where = _WATER_LOCATIVE[protect_in[0]["label"]]
+        text = (
+            f"участок в {where}: берег рядом (плюс к спросу), ограничения на стоки, "
+            "стоянку техники и застройку у воды"
+        )
+    elif water_near:
+        w = water_near[0]
+        level = "plus"
+        text = (
+            f"вода в {w['distance_m']} м{(' (' + w['name'] + ')') if w.get('name') else ''}: "
+            "плюс к спросу; зон затопления рядом в НСПД нет, весной проверить подтопление на месте"
+        )
+    elif items:
+        level = "neutral"
+        text = "водные зоны есть, но дальше порогов риска; подробности в списке"
+    else:
+        level = "none"
+        text = "зон затопления, водоохранных зон и водоёмов рядом не найдено"
+    return {"level": level, "text": text, "items": items}
+
+
+def negative_factors(
+    loc: dict[str, Any], region: dict[str, Any] | None = None
+) -> list[dict[str, Any]]:
+    """Свод негативных факторов с расстояниями и датами источников: ЗОУИТ-риски из НСПД,
+    объекты риска из OSM и пункты раздела «Негативные факторы» блока «Регион»."""
+    out: list[dict[str, Any]] = []
+    for g in loc.get("zouit") or []:
+        if g.get("severity") == "risk":
+            out.append(
+                {
+                    "label": g["label"],
+                    "distance_m": g.get("min_distance_m"),
+                    "count": g.get("count", 1),
+                    "name": g.get("nearest_name"),
+                    "note": g.get("note"),
+                    "source": "НСПД",
+                    "date": loc.get("fetched_at"),
+                }
+            )
+    for o in loc.get("osm") or []:
+        if o.get("severity") == "risk":
+            out.append(
+                {
+                    "label": o["label"],
+                    "distance_m": o.get("distance_m"),
+                    "count": o.get("count", 1),
+                    "name": o.get("name"),
+                    "note": None,
+                    "source": "OpenStreetMap",
+                    "date": loc.get("fetched_at"),
+                }
+            )
+    out.sort(key=lambda i: (i["distance_m"] is None, i["distance_m"] or 0))
+    if region and not region.get("error"):
+        for sec in region.get("sections") or []:
+            if not str(sec.get("title", "")).lower().startswith("негативн"):
+                continue
+            for it in sec.get("items") or []:
+                low = it.lower()
+                if "не найдено" in low or "нет данных" in low or "данных нет" in low:
+                    continue
+                out.append(
+                    {
+                        "label": it,
+                        "distance_m": None,
+                        "count": 1,
+                        "name": None,
+                        "note": None,
+                        "source": "открытые источники, блок «Регион»",
+                        "date": region.get("fetched_at"),
+                    }
+                )
+    return out
+
+
 _KEEP_ZONE_KEYS = ("reg_numb_border", "type_zone", "name_by_doc", "subcategory")
 _KEEP_PMT_KEYS = (
     "nominal_number",

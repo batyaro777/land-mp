@@ -8,6 +8,35 @@
       {% if not public %}· <a href="{{ location_url }}?refresh=1" hx-get="{{ location_url }}?refresh=1" hx-target="#location" hx-swap="outerHTML" class="small">обновить</a>{% endif %}</p>
   </hgroup>
 
+  {% if water %}
+  <div class="grid two">
+  <div>
+    <strong>Вода</strong> {% if water.level != 'none' %}<span class="badge mini v-{{ sev[water.level] }}">{{ {'risk':'риск','plus':'плюс','neutral':'факт'}[water.level] }}</span>{% endif %}
+    <p class="small">{{ water.text|capitalize }}.</p>
+    {% if water['items'] %}
+    <ul class="loc-list">
+      {% for i in water['items'] %}
+      <li>{{ i.label|capitalize }}{% if i.count > 1 %} ×{{ i.count }}{% endif %}:
+        {% if i.distance_m == 0 %}участок внутри{% elif i.distance_m is not none %}в {{ i.distance_m }} м{% else %}расстояние не определено{% endif %}{% if i.name %} <span class="muted small">{{ i.name|truncate(80) }}</span>{% endif %}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+  <div>
+    <strong>Негативные факторы</strong>
+    {% if negatives %}
+    <ul class="loc-list">
+      {% for n in negatives %}
+      <li><span class="badge mini v-stop">риск</span> {{ n.label|capitalize }}{% if n.count > 1 %} ×{{ n.count }}{% endif %}{% if n.distance_m == 0 %}: участок внутри{% elif n.distance_m is not none %}: в {{ n.distance_m }} м{% endif %}{% if n.name %} <span class="muted small">{{ n.name|truncate(80) }}</span>{% endif %}
+        <div class="muted small">{{ n.source }}{% if n.date %}, {{ n.date|dt }}{% endif %}{% if n.note %} — {{ n.note }}{% endif %}</div></li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="muted small">Объектов с риском в радиусе {{ loc.radius_m.nspd }} м (НСПД) и {{ loc.radius_m.osm }} м (OSM) не найдено.</p>{% endif %}
+    {% if region is not defined or not region %}<p class="muted small">Планируемые негативные объекты по региону добавятся из блока «Регион» после его загрузки.</p>{% endif %}
+  </div>
+  </div>
+  {% endif %}
+
   <div class="grid two">
   <div>
     <strong>Что рядом</strong>

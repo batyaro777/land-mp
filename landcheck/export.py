@@ -28,6 +28,8 @@ COLUMNS = [
     "Площадь в объявлении, сот.",
     "Площадь ЕГРН, сот.",
     "Цена за сотку, ₽",
+    "Цена к кадастровой, ×",
+    "Цена к медиане подборки, %",
     "Кадастровая стоимость, ₽",
     "Кад. стоимость за сотку, ₽",
     "Категория земель",
@@ -74,7 +76,18 @@ def _goal_cell(r: CheckResult) -> str | None:
     return " · ".join(parts)
 
 
-def row_for(i: int, r: CheckResult) -> list:
+MEDIAN_MIN_PRICED = 3
+
+
+def _ratio(a: float | None, b: float | None) -> float | None:
+    return round(a / b, 2) if a and b else None
+
+
+def _pct(a: float | None, b: float | None) -> int | None:
+    return round((a / b - 1) * 100) if a and b else None
+
+
+def row_for(i: int, r: CheckResult, median_pps: float | None = None) -> list:
     p, lst = r.parcel, r.listing
     reasons = [f"[{f.level.value}] {f.message}" for f in r.flags if f.level is not Level.OK]
     infos = [f.message for f in r.flags if f.level is Level.OK]
@@ -89,6 +102,8 @@ def row_for(i: int, r: CheckResult) -> list:
         _sotka(lst.declared_area_m2),
         _sotka(p.best_area_m2),
         _money(r.price_per_sotka),
+        _ratio(r.price_per_sotka, p.cadastral_cost_per_sotka),
+        _pct(r.price_per_sotka, median_pps),
         _money(p.cadastral_cost_rub),
         _money(p.cadastral_cost_per_sotka),
         p.category,
@@ -109,7 +124,9 @@ def row_for(i: int, r: CheckResult) -> list:
 
 
 def to_rows(batch: BatchResult) -> list[list]:
-    return [row_for(i, r) for i, r in enumerate(batch.results, start=1)]
+    priced = sum(1 for r in batch.results if r.price_per_sotka)
+    median = batch.median_price_per_sotka if priced >= MEDIAN_MIN_PRICED else None
+    return [row_for(i, r, median) for i, r in enumerate(batch.results, start=1)]
 
 
 def to_csv(batch: BatchResult, path: str | Path | None = None) -> str:
@@ -188,7 +205,7 @@ def to_xlsx(batch: BatchResult, path: str | Path) -> Path:
         ws.append(row)
         verdict_cell = ws.cell(row=ws.max_row, column=3)
         verdict_cell.fill = fills[str(row[2])]
-        for col in (4, 5, 13, 17, 18):
+        for col in (4, 5, 15, 19, 20):
             ws.cell(row=ws.max_row, column=col).alignment = Alignment(
                 wrap_text=True, vertical="top"
             )
@@ -203,6 +220,8 @@ def to_xlsx(batch: BatchResult, path: str | Path) -> Path:
         12,
         14,
         16,
+        12,
+        12,
         14,
         28,
         40,

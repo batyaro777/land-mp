@@ -79,6 +79,61 @@ def price_orientation(item: dict[str, Any], median_pps: float | None) -> dict[st
     }
 
 
+MEDIAN_BAND = 0.15  # ±15 % к медиане подборки считаем «в медиане»
+MEDIAN_MIN_PRICED = 3  # медиану показываем, когда цен в подборке хотя бы три
+
+
+def price_position(item: dict[str, Any], median_pps: float | None) -> dict[str, Any] | None:
+    """Цена за сотку к ориентирам одной строкой (ТЗ v2, М1.4): кадастровая стоимость участка,
+    медиана подборки и, если блок «Локация» уже собран, кадастровая ставка соседей.
+
+    Рынка здесь нет: это честные ориентиры по открытым данным, не оценка.
+    """
+    pps = item.get("price_per_sotka")
+    if not pps:
+        return None
+    p = item.get("parcel") or {}
+    area = p.get("area_m2")
+    parts: list[str] = []
+    out: dict[str, Any] = {
+        "pps": pps,
+        "vs_cadastral": None,
+        "vs_median": None,
+        "vs_neighbors": None,
+        "label": None,
+        "parts": parts,
+    }
+    if p.get("cadastral_cost_rub") and area:
+        ratio = pps / (p["cadastral_cost_rub"] / (area / SOTKA_M2))
+        out["vs_cadastral"] = round(ratio, 2)
+        parts.append(f"×{ratio:.1f} к кадастровой")
+    if median_pps:
+        diff = pps / median_pps - 1
+        out["vs_median"] = round(diff, 3)
+        if abs(diff) <= MEDIAN_BAND:
+            out["label"] = "в медиане подборки"
+        elif diff > 0:
+            out["label"] = f"дороже подборки на {diff:.0%}"
+        else:
+            out["label"] = f"дешевле подборки на {-diff:.0%}"
+    loc_price = (item.get("location") or {}).get("price") or {}
+    if loc_price.get("listing_vs_gko"):
+        out["vs_neighbors"] = loc_price["listing_vs_gko"]
+        parts.append(f"×{loc_price['listing_vs_gko']:.1f} к ставке соседей")
+    if not parts and out["label"] is None:
+        return None
+    out["text"] = " · ".join(([out["label"]] if out["label"] else []) + parts)
+    return out
+
+
+def batch_median(check_stats: dict[str, Any] | None, items: list[dict[str, Any]]) -> float | None:
+    """Медиана подборки для сравнения: только если цен в подборке не меньше трёх."""
+    priced = sum(1 for d in items if d.get("price_per_sotka"))
+    if priced < MEDIAN_MIN_PRICED:
+        return None
+    return (check_stats or {}).get("median_price_per_sotka")
+
+
 # --- «Можно ли здесь то, что хочет покупатель»: категория × ВРИ × терзона ----------------
 _GOAL_ROWS: tuple[tuple[str, str], ...] = (
     ("R04", "Категория земель"),

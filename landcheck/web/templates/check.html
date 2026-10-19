@@ -41,7 +41,7 @@
   <div class="table-wrap">
   <table class="results">
     <thead><tr>
-      <th>№</th><th>Кадастровый номер</th><th>Вердикт</th>{% if purpose.value != 'any' %}<th title="Категория · ВРИ · терзона">Цель</th>{% endif %}<th>Причины</th><th class="num">Цена</th><th class="num">ЕГРН, сот.</th><th class="num">₽/сот.</th><th>Категория · ВРИ</th>
+      <th>№</th><th>Кадастровый номер</th><th>Вердикт</th>{% if purpose.value != 'any' %}<th title="Категория · ВРИ · терзона">Цель</th>{% endif %}<th>Причины</th><th class="num">Цена</th><th class="num">ЕГРН, сот.</th><th class="num">₽/сот.</th><th title="Цена за сотку к кадастровой стоимости участка, к медиане подборки и к кадастровой ставке соседей (после сбора «Локации»)">Цена к ориентиру</th><th>Категория · ВРИ</th>
     </tr></thead>
     <tbody>
     {% for it in items %}
@@ -71,6 +71,7 @@
         <td class="num">{{ d.listing.price_rub|money }}</td>
         <td class="num">{{ d.parcel.area_m2|sotka }}</td>
         <td class="num">{{ d.price_per_sotka|money }}</td>
+        <td class="small pricepos">{% set pp = prices.get(it.id) %}{% if pp %}{% if pp.label %}<span class="badge mini">{{ pp.label }}</span>{% endif %}{% if pp.parts %}<div class="muted">{{ pp.parts|join(' · ') }}</div>{% endif %}{% else %}<span class="muted">—</span>{% endif %}</td>
         <td class="small">{{ d.parcel.category or '—' }}<br><span class="muted">{{ (d.parcel.permitted_use or '—')|truncate(70) }}</span></td>
       </tr>
     {% endfor %}

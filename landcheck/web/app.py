@@ -30,7 +30,13 @@ from landcheck.web.auth import (
     too_many_attempts,
 )
 from landcheck.web.config import settings
-from landcheck.web.content import CHECKLIST, goal_summary, price_orientation
+from landcheck.web.content import (
+    CHECKLIST,
+    batch_median,
+    goal_summary,
+    price_orientation,
+    price_position,
+)
 from landcheck.web.db import Check, CheckItem, User, init_db, redeem_invite, session
 from landcheck.web.serialize import (
     LEVEL_RANK,
@@ -310,6 +316,8 @@ def check_page(
         changed_count = sum(1 for h in hist if h.get("changed"))
         purpose = _check_purpose(check)
         goals = {i.id: goal_summary(i.data, purpose) for i in items}
+        median = batch_median(check.stats, [i.data for i in check.items])
+        prices = {i.id: price_position(i.data, median) for i in items}
         return render(
             request,
             "check.html",
@@ -319,6 +327,7 @@ def check_page(
             sort=sort,
             purpose=purpose,
             goals=goals,
+            prices=prices,
             counts=(check.stats or {}).get("counts") or {},
             new_count=new_count,
             changed_count=changed_count,
@@ -397,9 +406,20 @@ def _check_purpose(check: Check) -> Purpose:
         return Purpose.ANY
 
 
+def _loc_extras(loc: dict[str, Any] | None, region: dict[str, Any] | None) -> dict[str, Any]:
+    """Разделы «Вода» и «Негативные факторы» поверх собранной «Локации» (ТЗ v2, М2.2–2.3)."""
+    from landcheck.location import negative_factors, water_summary
+
+    if not loc:
+        return {"water": None, "negatives": []}
+    return {"water": water_summary(loc), "negatives": negative_factors(loc, region)}
+
+
 def _report_ctx(check: Check, item: CheckItem, public: bool) -> dict[str, Any]:
     data = item.data
     purpose = _check_purpose(check)
+    median = batch_median(check.stats, [i.data for i in check.items])
+    loc, region = data.get("location"), data.get("region")
     return {
         "check": check,
         "item": item,
@@ -407,13 +427,15 @@ def _report_ctx(check: Check, item: CheckItem, public: bool) -> dict[str, Any]:
         "by_level": flags_by_level(data),
         "purpose": purpose,
         "goal": goal_summary(data, purpose),
-        "loc": data.get("location"),
+        "loc": loc,
         "location_url": f"/checks/{check.id}/items/{item.cad_num}/location",
-        "region": data.get("region"),
+        "region": region,
         "region_url": f"/checks/{check.id}/items/{item.cad_num}/region",
         "region_enabled": bool(settings.gemini_api_key),
         "checklist": CHECKLIST,
         "price": price_orientation(data, (check.stats or {}).get("median_price_per_sotka")),
+        "price_pos": price_position(data, median),
+        **_loc_extras(loc, region),
         "public": public,
         "owner": check.user,
         "share_url": f"{settings.base_url}/r/{item.token}",
@@ -480,7 +502,9 @@ def report_location(request: Request, user: UserDep, check_id: int, cad_num: str
             loc=loc,
             public=False,
             location_url=f"/checks/{check.id}/items/{cad_num}/location",
+            region=data.get("region"),
             user=user,
+            **_loc_extras(loc, data.get("region")),
         )
 
 

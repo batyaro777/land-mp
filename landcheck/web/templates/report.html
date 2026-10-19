@@ -137,6 +137,7 @@
   <table class="facts">
     {% for label, v in price.points %}<tr><th>{{ label }}</th><td>{{ v|money }}</td></tr>{% endfor %}
   </table>
+  {% if price_pos %}<p><strong>Цена к ориентиру:</strong> {{ price_pos.text }}.</p>{% endif %}
   <p class="small muted">Диапазон {{ price.low|money }} – {{ price.high|money }}. {{ price.disclaimer }}</p>
 </article>
 {% endif %}
