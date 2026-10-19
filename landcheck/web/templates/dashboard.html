@@ -10,12 +10,15 @@
     <label>Название подборки
       <input name="title" placeholder="Истра, ИЖС, октябрь">
     </label>
-    <label>Кадастровые номера
-      <textarea name="numbers" rows="8" placeholder="50:09:0060202:101; 2 500 000; 10 сот; https://avito.ru/...
+    <label for="numbers">Кадастровые номера</label>
+    <div class="mic-wrap">
+      <textarea id="numbers" name="numbers" rows="8" placeholder="50:09:0060202:101; 2 500 000; 10 сот; https://avito.ru/...
 50:09:0060202:102; 1,2 млн; 8 сот
 50:09:0060202:103"></textarea>
-      <small class="muted">По одному участку в строке: номер, цена, площадь, ссылка — в любом порядке и разделителе. Площадь без подписи — в сотках.</small>
-    </label>
+      {% if voice_enabled %}<button type="button" class="mic outline sm" data-target="numbers" title="Продиктовать номера и цены, до 60 секунд">🎙 Голосом</button>{% endif %}
+      <small class="mic-status muted"></small>
+    </div>
+    <small class="muted">По одному участку в строке: номер, цена, площадь, ссылка — в любом порядке и разделителе. Площадь без подписи — в сотках.</small>
     <label>Или файл CSV / XLSX
       <input type="file" name="file" accept=".csv,.xlsx,.txt">
       <small class="muted">Колонки: кадастровый номер, цена, площадь (единицы читаются из заголовка), ссылка.</small>
@@ -33,9 +36,12 @@
       <label>Площадь от, сот.<input name="min_area" placeholder="8"></label>
       <label>Площадь до, сот.<input name="max_area" placeholder="15"></label>
     </div>
-    <label>Запрос словами <small class="muted">(необязательно, уточняет цель, бюджет и площадь)</small>
-      <input name="query" placeholder="Построить дом для семьи до 3 млн, 8–12 соток, Истра">
-    </label>
+    <label for="query">Запрос словами <small class="muted">(необязательно, уточняет цель, бюджет и площадь; можно надиктовать)</small></label>
+    <div class="mic-wrap">
+      <input id="query" name="query" placeholder="Построить дом для семьи до 3 млн, 8–12 соток, Истра">
+      {% if voice_enabled %}<button type="button" class="mic outline sm" data-target="query" title="Надиктовать запрос, до 60 секунд">🎙 Голосом</button>{% endif %}
+      <small class="mic-status muted"></small>
+    </div>
     <button type="submit">Проверить подборку</button>
   </form>
 </article>

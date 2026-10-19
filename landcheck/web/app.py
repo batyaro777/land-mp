@@ -91,6 +91,7 @@ UserDep = Annotated[User, Depends(require_user)]
 
 def render(request: Request, name: str, status_code: int = 200, **ctx: Any) -> HTMLResponse:
     ctx.setdefault("user", current_user(request))
+    ctx.setdefault("voice_enabled", bool(settings.gemini_api_key))
     ctx["request"] = request
     return templates.TemplateResponse(request, name, ctx, status_code=status_code)
 
@@ -775,6 +776,37 @@ def listing_xml(request: Request, user: UserDep, listing_id: int):
             "Content-Disposition": f"attachment; filename=avito-{row.cad_num.replace(':', '_')}.xml"
         },
     )
+
+
+# --- голосовой ввод (ТЗ v2, М1.3) -------------------------------------------------------
+@router.post("/asr")
+async def asr(user: UserDep, audio: Annotated[UploadFile, File()]):
+    """Расшифровка записи с микрофона: WAV/WebM/OGG до 60 с → текст для поля формы.
+
+    Тот же ключ Gemini, что у модуля «Регион»; без ключа честно отвечаем, что выключено.
+    Ответ всегда JSON {"text", "error"} — клиент показывает ошибку рядом с кнопкой.
+    """
+    from fastapi.responses import JSONResponse
+
+    from landcheck.asr import MAX_AUDIO_BYTES, transcribe
+
+    if not settings.gemini_api_key:
+        return JSONResponse(
+            {"text": "", "error": "голосовой ввод выключен: нет ключа Gemini"}, status_code=503
+        )
+    raw = await audio.read(MAX_AUDIO_BYTES + 1)
+    if len(raw) > MAX_AUDIO_BYTES:
+        return JSONResponse({"text": "", "error": "запись слишком длинная"}, status_code=413)
+    result = transcribe(
+        raw,
+        audio.content_type or "",
+        api_key=settings.gemini_api_key,
+        model=settings.gemini_model,
+    )
+    if result.get("error"):
+        log.warning("asr failed for user %s: %s", user.id, result["error"])
+        return JSONResponse({"text": "", "error": result["error"]}, status_code=502)
+    return {"text": result["text"], "model": result["model"]}
 
 
 @router.get("/healthz")

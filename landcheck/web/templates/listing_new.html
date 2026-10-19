@@ -14,9 +14,12 @@
         {% for key, label in object_types.items() %}<option value="{{ label }}">{{ label }}</option>{% endfor %}
       </select>
     </label>
-    <label>Заметки продавца <small class="muted">(что есть на участке и рядом: свет, газ, дорога, лес, река, соседи — своими словами или расшифровка голосового)</small>
-      <textarea name="notes" rows="6" placeholder="Электричество 15 кВт по границе, газ по улице, круглогодичный подъезд, рядом лес и река, до Истры 10 минут"></textarea>
-    </label>
+    <label for="notes">Заметки продавца <small class="muted">(что есть на участке и рядом: свет, газ, дорога, лес, река, соседи — своими словами или голосом)</small></label>
+    <div class="mic-wrap">
+      <textarea id="notes" name="notes" rows="6" placeholder="Электричество 15 кВт по границе, газ по улице, круглогодичный подъезд, рядом лес и река, до Истры 10 минут"></textarea>
+      {% if voice_enabled %}<button type="button" class="mic outline sm" data-target="notes" title="Надиктовать описание, до 60 секунд">🎙 Голосом</button>{% endif %}
+      <small class="mic-status muted"></small>
+    </div>
     <label>Фото участка <small class="muted">(jpg/png, до 10 штук, порядок как в файлах)</small>
       <input type="file" name="photos" accept=".jpg,.jpeg,.png,.webp" multiple>
     </label>
