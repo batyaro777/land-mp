@@ -87,7 +87,8 @@
     btn.onclick = stop;
     timer = setInterval(() => {
       const sec = Math.round((Date.now() - started) / 1000);
-      setStatus(btn, 'Запись ' + sec + ' с из ' + MAX_SECONDS + '… нажмите «Стоп», когда закончите', true);
+      // aria-busy здесь нельзя: Pico отключает клики у занятых кнопок, а «Стоп» должен нажиматься.
+      setStatus(btn, 'Запись ' + sec + ' с из ' + MAX_SECONDS + '… нажмите «Стоп», когда закончите', false);
       if (sec >= MAX_SECONDS) stop();
     }, 500);
   }
