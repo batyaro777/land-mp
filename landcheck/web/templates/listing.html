@@ -18,6 +18,16 @@
   </h4>
   {% if row.status == 'verified' %}
     <p>Право подтверждено {{ row.verified_at|dt }} ({{ PROOF_KINDS[row.proof_kind] if row.proof_kind else 'документ' }}). Файлы подтверждения удалены после проверки.</p>
+    {% if row.published %}
+      <p><span class="badge v-ok">опубликовано</span> Публичная страница: <a href="/l/{{ row.id }}" target="_blank">{{ public_url }}</a>
+        <button class="outline sm" onclick="navigator.clipboard.writeText('{{ public_url }}');this.textContent='Скопировано'">Скопировать ссылку</button></p>
+      <form method="post" action="/listing/{{ row.id }}/publish" class="inline"><input type="hidden" name="action" value="off"><button class="outline secondary sm">Снять с публикации</button></form>
+    {% elif d.warnings %}
+      <p class="small err">Публикация откроется, когда в тексте не останется противоречий с кадастром.</p>
+    {% else %}
+      <form method="post" action="/listing/{{ row.id }}/publish" class="inline"><input type="hidden" name="action" value="on"><button class="sm">Опубликовать в базе</button></form>
+      <span class="small muted">Объявление появится на витрине <a href="/market" target="_blank">/market</a> и по публичной ссылке.</span>
+    {% endif %}
   {% elif row.status == 'pending' %}
     <p>Отправлено на проверку {{ row.submitted_at|dt }}: {{ PROOF_KINDS[row.proof_kind] if row.proof_kind else '' }}. Файлы ({{ proofs|length }}): {% for f in proofs %}<a href="/listing/{{ row.id }}/proof/{{ f }}" target="_blank">{{ f }}</a>{% if not loop.last %}, {% endif %}{% endfor %}. Их видит только модератор, после решения они удаляются.</p>
   {% else %}

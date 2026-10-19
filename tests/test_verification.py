@@ -13,7 +13,8 @@ PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 
 def _register(c, email: str, role: str = "seller") -> None:
     r = c.post(
-        "/register", data={"email": email, "password": "12345678", "name": email, "role": role}
+        "/register",
+        data={"email": email, "password": "12345678", "name": email.split("@")[0], "role": role},
     )
     assert r.status_code == 303
 

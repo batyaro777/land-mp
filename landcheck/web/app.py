@@ -1019,6 +1019,144 @@ def listing_proof(user: UserDep, listing_id: int, name: str):
     return FileResponse(p)
 
 
+@router.post("/listing/{listing_id}/publish")
+def listing_publish(user: UserDep, listing_id: int, action: Annotated[str, Form()] = "on"):
+    """Публикация в базу: только после подтверждения права и без противоречий с кадастром."""
+    with session() as db:
+        row = _own_listing(db, user, listing_id)
+        if action == "off":
+            row.published = False
+        elif row.status == "verified" and not _listing_warnings(row.data):
+            row.published = True
+        db.commit()
+    return RedirectResponse(f"/listing/{listing_id}", status_code=303)
+
+
+def _market_card(row, owner: User | None) -> dict[str, Any]:
+    d = row.data or {}
+    pf = d.get("parcel_facts") or {}
+    return {
+        "id": row.id,
+        "cad_num": row.cad_num,
+        "title": d.get("title") or row.cad_num,
+        "price_rub": d.get("price_rub"),
+        "area_sotka": d.get("land_area_sotka"),
+        "address": d.get("address"),
+        "object_type": d.get("object_type"),
+        "category": pf.get("category"),
+        "permitted_use": pf.get("permitted_use"),
+        "image": (d.get("images") or [None])[0],
+        "verified_at": row.verified_at,
+        "proof_kind": row.proof_kind,
+        "seller": (owner.brand or owner.name) if owner else None,
+        "price_per_sotka": (
+            round(d["price_rub"] / d["land_area_sotka"])
+            if d.get("price_rub") and d.get("land_area_sotka")
+            else None
+        ),
+    }
+
+
+def _public_listings(
+    db,
+    *,
+    region: str = "",
+    kind: str = "",
+    price_max: float | None = None,
+    area_min: float | None = None,
+    area_max: float | None = None,
+):
+    from landcheck.web.db import Listing as ListingRow
+
+    rows = db.scalars(
+        select(ListingRow)
+        .where(ListingRow.status == "verified", ListingRow.published.is_(True))
+        .order_by(ListingRow.verified_at.desc(), ListingRow.id.desc())
+        .limit(500)
+    ).all()
+    owners = {u.id: u for u in db.scalars(select(User)).all()}
+    cards = []
+    for r in rows:
+        c = _market_card(r, owners.get(r.user_id))
+        hay = f"{c['address'] or ''} {c['title']}".lower()
+        if region and region.lower() not in hay:
+            continue
+        if kind and (c["object_type"] or "") != kind:
+            continue
+        if price_max is not None and (c["price_rub"] is None or c["price_rub"] > price_max):
+            continue
+        if area_min is not None and (c["area_sotka"] is None or c["area_sotka"] < area_min):
+            continue
+        if area_max is not None and (c["area_sotka"] is None or c["area_sotka"] > area_max):
+            continue
+        cards.append(c)
+    return cards
+
+
+@router.get("/market", response_class=HTMLResponse)
+def market(
+    request: Request,
+    region: str = "",
+    kind: str = "",
+    price_max: str = "",
+    area_min: str = "",
+    area_max: str = "",
+):
+    """Витрина: только объявления с подтверждённым правом, публично, без входа."""
+    from landcheck.inputs import parse_number
+    from landcheck.listing import AVITO_OBJECT_TYPES
+
+    def num(v: str) -> float | None:
+        return parse_number(v) if v.strip() else None
+
+    pm = num(price_max)
+    if pm is not None and pm < 1000:
+        pm *= 1_000_000
+    with session() as db:
+        cards = _public_listings(
+            db,
+            region=region.strip(),
+            kind=kind,
+            price_max=pm,
+            area_min=num(area_min),
+            area_max=num(area_max),
+        )
+    return render(
+        request,
+        "market.html",
+        cards=cards,
+        kinds=list(AVITO_OBJECT_TYPES.values()),
+        f={
+            "region": region,
+            "kind": kind,
+            "price_max": price_max,
+            "area_min": area_min,
+            "area_max": area_max,
+        },
+    )
+
+
+@router.get("/l/{listing_id}", response_class=HTMLResponse)
+def listing_public(request: Request, listing_id: int):
+    """Публичная страница объявления: факты НСПД, фото, цена, продавец, отметка о праве."""
+    from landcheck.web.db import Listing as ListingRow
+
+    with session() as db:
+        row = db.get(ListingRow, listing_id)
+        if row is None or not row.is_public:
+            raise HTTPException(404)
+        owner = db.get(User, row.user_id)
+        return render(
+            request,
+            "listing_public.html",
+            row=row,
+            d=row.data,
+            card=_market_card(row, owner),
+            owner=owner,
+            logo_url=logo_url(row.user_id) if owner else None,
+        )
+
+
 def require_admin(request: Request) -> User:
     user = require_user(request)
     if not user.is_admin:

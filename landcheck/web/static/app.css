@@ -78,3 +78,11 @@ nav.tabs a.active { border-color: #2E75B6; font-weight: 600; }
 article.verify { border-left: 4px solid #1f6b2a; }
 form.decide { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
 form.decide input { flex: 1 1 240px; margin-bottom: 0; }
+
+/* витрина */
+form.filters { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+form.filters input, form.filters select { flex: 1 1 160px; margin-bottom: 0; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem; }
+.card { margin: 0; }
+.card-img { width: 100%; aspect-ratio: 4/3; object-fit: cover; border-radius: 6px; margin-bottom: 0.5rem; }
+.card h4 { margin-bottom: 0.3rem; }

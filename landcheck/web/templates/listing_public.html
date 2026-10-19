@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}{{ d.title }} — {{ brand }}{% endblock %}
+{% block content %}
+<div class="report-brand">
+  <div class="brand-line">{% if logo_url %}<img src="{{ logo_url }}" alt="" class="brand-logo">{% endif %}<strong>{{ card.seller or 'Продавец' }}</strong></div>
+  <span class="muted small">Объявление с подтверждённым правом · {{ brand }}</span>
+</div>
+<hgroup>
+  <h2>{{ d.title }}</h2>
+  <p>{{ d.address or '' }}</p>
+</hgroup>
+<p><span class="badge v-ok">право подтверждено {{ row.verified_at|day }}</span>
+  <span class="badge">{{ PROOF_KINDS[row.proof_kind].split(':')[0] if row.proof_kind else 'документ проверен' }}</span>
+  <span class="badge">текст сверен с кадастром</span></p>
+<div class="grid two">
+<article>
+  <h3>{{ d.price_rub|money if d.price_rub else 'Цена по запросу' }}{% if card.price_per_sotka %} <small class="muted">· {{ card.price_per_sotka|money }} за сотку</small>{% endif %}</h3>
+  <p style="white-space: pre-line">{{ d.description }}</p>
+  {% if d.phone %}<p><strong>Телефон:</strong> {{ d.phone }}</p>{% endif %}
+  <p class="small muted">Кадастровый номер <code>{{ row.cad_num }}</code>. Факты об участке взяты из НСПД{% if d.parcel_facts and d.parcel_facts.fetched_at %} ({{ d.parcel_facts.fetched_at|dt }}){% endif %}; ограничения смотрите в полном отчёте, перед сделкой — выписка ЕГРН.</p>
+</article>
+<article>
+  <h4>Факты из ЕГРН</h4>
+  <ul class="small">{% for f in d.facts %}<li>{{ f }}</li>{% endfor %}</ul>
+  {% if d.zouit_notes %}<h4>Ограничения (ЗОУИТ)</h4><ul class="small">{% for z in d.zouit_notes %}<li>{{ z }}</li>{% endfor %}</ul>{% endif %}
+  {% if d.images %}<div class="photos">{% for img in d.images %}<img src="{{ img }}" alt="">{% endfor %}</div>{% endif %}
+</article>
+</div>
+<p class="small"><a href="/market">← все участки с подтверждённым правом</a></p>
+{% endblock %}

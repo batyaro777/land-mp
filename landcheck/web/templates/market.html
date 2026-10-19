@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Участки с подтверждённым правом — {{ brand }}{% endblock %}
+{% block content %}
+<hgroup>
+  <h2>Участки с подтверждённым правом</h2>
+  <p>В базе только объявления, по которым продавец подтвердил право собственности или договор с собственником, а текст сверен с кадастром. Факты — из НСПД, не из слов продавца.</p>
+</hgroup>
+<form method="get" action="/market" class="filters">
+  <input name="region" value="{{ f.region }}" placeholder="Регион, район, посёлок">
+  <select name="kind">
+    <option value="">любой тип</option>
+    {% for k in kinds %}<option value="{{ k }}" {{ 'selected' if f.kind == k else '' }}>{{ k }}</option>{% endfor %}
+  </select>
+  <input name="price_max" value="{{ f.price_max }}" placeholder="Цена до, ₽ (3 млн)">
+  <input name="area_min" value="{{ f.area_min }}" placeholder="Соток от">
+  <input name="area_max" value="{{ f.area_max }}" placeholder="Соток до">
+  <button type="submit" class="sm">Показать</button>
+</form>
+<p class="muted small">Найдено: {{ cards|length }}.{% if not user %} Проверить любой участок под свою цель можно <a href="/login?tab=register">после регистрации</a>.{% endif %}</p>
+{% if not cards %}<p class="muted">Пока ничего нет: база только наполняется. Разместить свой участок — <a href="/login?tab=register">регистрация продавца</a>.</p>{% endif %}
+<div class="cards">
+{% for c in cards %}
+  <article class="card">
+    {% if c.image %}<a href="/l/{{ c.id }}"><img src="{{ c.image }}" alt="" class="card-img"></a>{% endif %}
+    <h4><a href="/l/{{ c.id }}">{{ c.title }}</a></h4>
+    <p class="small">{{ c.address or '' }}</p>
+    <p><strong>{{ c.price_rub|money if c.price_rub else 'цена по запросу' }}</strong>{% if c.area_sotka %} · {{ c.area_sotka }} сот.{% endif %}{% if c.price_per_sotka %} · {{ c.price_per_sotka|money }}/сот.{% endif %}</p>
+    <p class="small muted">{{ c.category or '' }}{% if c.permitted_use %} · {{ c.permitted_use|truncate(60) }}{% endif %}</p>
+    <p class="small"><span class="badge v-ok">право подтверждено {{ c.verified_at|day }}</span> <code class="small">{{ c.cad_num }}</code></p>
+  </article>
+{% endfor %}
+</div>
+{% endblock %}
