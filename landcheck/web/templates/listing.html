@@ -12,6 +12,28 @@
   <p class="small muted">Исправьте текст и нажмите «Сохранить правки» — проверка повторится.</p>
 </article>
 {% endif %}
+<article class="verify">
+  <h4>Подтверждение права
+    <span class="badge {{ {'draft':'','pending':'v-check','verified':'v-ok','rejected':'v-stop'}[row.status] }}">{{ row.status_label }}</span>
+  </h4>
+  {% if row.status == 'verified' %}
+    <p>Право подтверждено {{ row.verified_at|dt }} ({{ PROOF_KINDS[row.proof_kind] if row.proof_kind else 'документ' }}). Файлы подтверждения удалены после проверки.</p>
+  {% elif row.status == 'pending' %}
+    <p>Отправлено на проверку {{ row.submitted_at|dt }}: {{ PROOF_KINDS[row.proof_kind] if row.proof_kind else '' }}. Файлы ({{ proofs|length }}): {% for f in proofs %}<a href="/listing/{{ row.id }}/proof/{{ f }}" target="_blank">{{ f }}</a>{% if not loop.last %}, {% endif %}{% endfor %}. Их видит только модератор, после решения они удаляются.</p>
+  {% else %}
+    {% if row.status == 'rejected' %}<p class="err">Отклонено{% if row.moderation_note %}: {{ row.moderation_note }}{% endif %}. Загрузите документы заново.</p>{% endif %}
+    <p class="small muted">Без подтверждения объявление не публикуется в базе: так в ней нет «фонарей». Подойдёт выписка ЕГРН (PDF из Госуслуг), скан свидетельства или договор с собственником. ФИО и персональные данные из документов не сохраняются, файлы удаляются после проверки.</p>
+    <form method="post" action="/listing/{{ row.id }}/verify" enctype="multipart/form-data">
+      <label>Кто размещает
+        <select name="proof_kind">{% for k, v in PROOF_KINDS.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select>
+      </label>
+      <label>Документы <small class="muted">(PDF, JPG или PNG, до 3 файлов по 10 МБ)</small>
+        <input type="file" name="proofs" accept=".pdf,.jpg,.jpeg,.png" multiple required></label>
+      <button type="submit" class="outline sm">Отправить на проверку</button>
+    </form>
+  {% endif %}
+  {% if d.skipped_proofs %}<p class="small err">Не приняты файлы (не PDF/JPG/PNG или больше 10 МБ): {{ d.skipped_proofs|join(', ') }}</p>{% endif %}
+</article>
 <div class="grid two">
 <article>
   <form method="post" action="/listing/{{ row.id }}">

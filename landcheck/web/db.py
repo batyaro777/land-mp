@@ -131,8 +131,24 @@ class CheckItem(Base):
     check: Mapped[Check] = relationship(back_populates="items")
 
 
+LISTING_STATUSES: dict[str, str] = {
+    "draft": "черновик",
+    "pending": "на проверке",
+    "verified": "право подтверждено",
+    "rejected": "отклонено",
+}
+PROOF_KINDS: dict[str, str] = {
+    "owner": "Я собственник: выписка ЕГРН или свидетельство о праве",
+    "agent": "Я представитель: агентский или комиссионный договор с собственником",
+}
+
+
 class Listing(Base):
-    """Черновик объявления (М3)."""
+    """Объявление (М3 → кабинет продавца К2): черновик → на проверке → право подтверждено.
+
+    Файлы подтверждения лежат вне статики (proofs/<id>/) и удаляются после решения
+    модератора: в базе остаются только статус, вид подтверждения и дата.
+    """
 
     __tablename__ = "listings"
 
@@ -141,6 +157,20 @@ class Listing(Base):
     cad_num: Mapped[str] = mapped_column(String(40))
     data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    status: Mapped[str] = mapped_column(String(16), default="draft", server_default="draft")
+    published: Mapped[bool] = mapped_column(default=False, server_default="0")
+    proof_kind: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    moderation_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    @property
+    def status_label(self) -> str:
+        return LISTING_STATUSES.get(self.status or "draft", "черновик")
+
+    @property
+    def is_public(self) -> bool:
+        return self.status == "verified" and bool(self.published)
 
 
 _engine = None
@@ -171,6 +201,14 @@ _NEW_COLUMNS: dict[str, dict[str, str]] = {
         "email": "VARCHAR(200)",
         "password_hash": "VARCHAR(200)",
         "role": "VARCHAR(16) NOT NULL DEFAULT 'broker'",
+    },
+    "listings": {
+        "status": "VARCHAR(16) NOT NULL DEFAULT 'draft'",
+        "published": "BOOLEAN NOT NULL DEFAULT 0",
+        "proof_kind": "VARCHAR(16)",
+        "submitted_at": "DATETIME",
+        "verified_at": "DATETIME",
+        "moderation_note": "TEXT",
     },
 }
 _NEW_INDEXES = ("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email ON users(email)",)

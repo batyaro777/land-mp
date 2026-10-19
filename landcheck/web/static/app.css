@@ -73,3 +73,8 @@ article.region { border-left: 4px solid #2E75B6; }
 nav.tabs { display: flex; gap: 1.2rem; margin-bottom: 1rem; border-bottom: 1px solid var(--pico-muted-border-color); }
 nav.tabs a { padding: 0.3rem 0; text-decoration: none; border-bottom: 2px solid transparent; }
 nav.tabs a.active { border-color: #2E75B6; font-weight: 600; }
+
+/* подтверждение права и модерация */
+article.verify { border-left: 4px solid #1f6b2a; }
+form.decide { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+form.decide input { flex: 1 1 240px; margin-bottom: 0; }

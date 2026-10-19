@@ -9,10 +9,16 @@ from typing import Annotated, Any
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from landcheck import __version__
 from landcheck.export import DISCLAIMER, to_csv, to_markdown, to_xlsx
@@ -38,6 +44,8 @@ from landcheck.web.content import (
     price_position,
 )
 from landcheck.web.db import (
+    LISTING_STATUSES,
+    PROOF_KINDS,
     ROLES,
     Check,
     CheckItem,
@@ -75,7 +83,9 @@ templates.env.globals.update(
 
 PURPOSES = [(p.value, p.activity) for p in Purpose]
 VERDICT_ORDER = ["ок", "проверить", "стоп"]
-templates.env.globals["ROLES"] = ROLES
+templates.env.globals.update(
+    ROLES=ROLES, PROOF_KINDS=PROOF_KINDS, LISTING_STATUSES=LISTING_STATUSES
+)
 
 
 def create_app() -> FastAPI:
@@ -903,7 +913,178 @@ def _own_listing(db, user: User, listing_id: int):
 def listing_page(request: Request, user: UserDep, listing_id: int):
     with session() as db:
         row = _own_listing(db, user, listing_id)
-        return render(request, "listing.html", row=row, d=row.data, user=user)
+        return render(
+            request,
+            "listing.html",
+            row=row,
+            d=row.data,
+            proofs=_proof_files(row.id),
+            public_url=f"{settings.base_url}/l/{row.id}",
+            user=user,
+        )
+
+
+# --- подтверждение права (К2.3) и модерация ----------------------------------------------
+PROOF_EXTS = {"pdf": b"%PDF", "jpg": b"\xff\xd8\xff", "png": b"\x89PNG\r\n\x1a\n"}
+MAX_PROOF_BYTES = 10 * 1024 * 1024
+MAX_PROOFS = 3
+
+
+def _proofs_dir(listing_id: int) -> Path:
+    return settings.db_path.parent / "proofs" / str(listing_id)
+
+
+def _proof_kind_of(raw: bytes) -> str | None:
+    if raw.startswith(b"%PDF"):
+        return "pdf"
+    kind = _image_kind(raw)
+    return kind if kind in ("jpg", "png", "webp") else None
+
+
+def _proof_files(listing_id: int) -> list[str]:
+    d = _proofs_dir(listing_id)
+    return sorted(p.name for p in d.iterdir() if p.is_file()) if d.exists() else []
+
+
+def _delete_proofs(listing_id: int) -> None:
+    d = _proofs_dir(listing_id)
+    if d.exists():
+        for p in d.iterdir():
+            p.unlink()
+        d.rmdir()
+
+
+@router.post("/listing/{listing_id}/verify")
+async def listing_verify(
+    request: Request,
+    user: UserDep,
+    listing_id: int,
+    proof_kind: Annotated[str, Form()] = "owner",
+    proofs: Annotated[list[UploadFile] | None, File()] = None,
+):
+    """Продавец отправляет подтверждение права: файлы в приватное хранилище, статус «на проверке».
+
+    Повторная отправка заменяет прежние файлы.
+    """
+    from datetime import UTC, datetime
+
+    if proof_kind not in PROOF_KINDS:
+        proof_kind = "owner"
+    saved: list[str] = []
+    skipped: list[str] = []
+    with session() as db:
+        row = _own_listing(db, user, listing_id)
+        if row.status == "verified":
+            return RedirectResponse(f"/listing/{listing_id}", status_code=303)
+        _delete_proofs(row.id)
+        d = _proofs_dir(row.id)
+        for f in (proofs or [])[:MAX_PROOFS]:
+            if not f.filename:
+                continue
+            raw = await f.read(MAX_PROOF_BYTES + 1)
+            kind = _proof_kind_of(raw)
+            if kind is None or len(raw) > MAX_PROOF_BYTES:
+                skipped.append(f.filename)
+                continue
+            d.mkdir(parents=True, exist_ok=True)
+            name = f"{len(saved) + 1:02d}.{kind}"
+            (d / name).write_bytes(raw)
+            saved.append(name)
+        if not saved:
+            msg = "Нужен хотя бы один файл PDF, JPG или PNG до 10 МБ."
+            if skipped:
+                msg += " Не приняты: " + ", ".join(skipped)
+            return render(request, "error.html", message=msg, user=user, status_code=400)
+        row.status = "pending"
+        row.proof_kind = proof_kind
+        row.submitted_at = datetime.now(UTC)
+        row.moderation_note = None
+        row.published = False
+        data = dict(row.data)
+        data["skipped_proofs"] = skipped
+        row.data = data
+        db.commit()
+    return RedirectResponse(f"/listing/{listing_id}", status_code=303)
+
+
+@router.get("/listing/{listing_id}/proof/{name}")
+def listing_proof(user: UserDep, listing_id: int, name: str):
+    """Файл подтверждения видят только владелец и модератор."""
+    with session() as db:
+        _own_listing(db, user, listing_id)
+    safe = Path(name).name
+    p = _proofs_dir(listing_id) / safe
+    if safe != name or not p.exists():
+        raise HTTPException(404)
+    return FileResponse(p)
+
+
+def require_admin(request: Request) -> User:
+    user = require_user(request)
+    if not user.is_admin:
+        raise HTTPException(404)
+    return user
+
+
+AdminDep = Annotated[User, Depends(require_admin)]
+
+
+@router.get("/admin/listings", response_class=HTMLResponse)
+def admin_listings(request: Request, admin: AdminDep, status: str = "pending"):
+    from landcheck.web.db import Listing as ListingRow
+
+    if status not in LISTING_STATUSES and status != "all":
+        status = "pending"
+    with session() as db:
+        q = select(ListingRow).order_by(ListingRow.submitted_at.desc(), ListingRow.id.desc())
+        if status != "all":
+            q = q.where(ListingRow.status == status)
+        rows = db.scalars(q.limit(200)).all()
+        owners = {u.id: u for u in db.scalars(select(User)).all()}
+        counts = {
+            st: db.scalar(select(func.count(ListingRow.id)).where(ListingRow.status == st)) or 0
+            for st in LISTING_STATUSES
+        }
+    return render(
+        request,
+        "admin_listings.html",
+        rows=rows,
+        owners=owners,
+        status=status,
+        counts=counts,
+        proofs={r.id: _proof_files(r.id) for r in rows},
+        user=admin,
+    )
+
+
+@router.post("/admin/listings/{listing_id}/decide")
+def admin_decide(
+    admin: AdminDep,
+    listing_id: int,
+    decision: Annotated[str, Form()],
+    note: Annotated[str, Form()] = "",
+):
+    """Решение модератора: право подтверждено или отклонено; файлы подтверждения удаляются."""
+    from datetime import UTC, datetime
+
+    from landcheck.web.db import Listing as ListingRow
+
+    with session() as db:
+        row = db.get(ListingRow, listing_id)
+        if row is None:
+            raise HTTPException(404)
+        if decision == "approve":
+            row.status = "verified"
+            row.verified_at = datetime.now(UTC)
+        elif decision == "reject":
+            row.status = "rejected"
+            row.published = False
+        else:
+            raise HTTPException(400)
+        row.moderation_note = note.strip()[:1000] or None
+        db.commit()
+    _delete_proofs(listing_id)
+    return RedirectResponse("/admin/listings", status_code=303)
 
 
 @router.post("/listing/{listing_id}")
