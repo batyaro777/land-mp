@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Мои объявления — {{ brand }}{% endblock %}
+{% block content %}
+<hgroup>
+  <h2>Мои объявления</h2>
+  <p>Объявление собирается из фактов НСПД и ваших заметок, противоречия с кадастром подсвечиваются.</p>
+</hgroup>
+<p><a href="/listing/new" role="button">Новое объявление</a></p>
+{% if not rows %}<p class="muted">Пока пусто. Нажмите «Новое объявление»: нужны кадастровый номер, фото и пара слов об участке.</p>{% endif %}
+{% for r in rows %}
+<div class="check-card">
+  <a href="/listing/{{ r.id }}"><strong>{{ r.data.title or r.cad_num }}</strong></a>
+  <div class="muted small"><code>{{ r.cad_num }}</code> · {{ r.created_at|dt }}{% if r.data.price_rub %} · {{ r.data.price_rub|money }}{% endif %}{% if r.data.images %} · фото: {{ r.data.images|length }}{% endif %}</div>
+  <div class="small">{% if r.data.warnings %}<span class="badge v-check">противоречия с кадастром</span>{% else %}<span class="badge v-ok">текст сверен с кадастром</span>{% endif %}</div>
+</div>
+{% endfor %}
+{% endblock %}

@@ -68,3 +68,8 @@ article.region { border-left: 4px solid #2E75B6; }
 .mic-wrap .mic { flex: 0 0 auto; white-space: nowrap; }
 .mic-wrap .mic-status { flex-basis: 100%; min-height: 1em; }
 .mic.recording { background: #fde2e1; border-color: #b42318; color: #b42318; }
+
+/* вкладки входа */
+nav.tabs { display: flex; gap: 1.2rem; margin-bottom: 1rem; border-bottom: 1px solid var(--pico-muted-border-color); }
+nav.tabs a { padding: 0.3rem 0; text-decoration: none; border-bottom: 2px solid transparent; }
+nav.tabs a.active { border-color: #2E75B6; font-weight: 600; }

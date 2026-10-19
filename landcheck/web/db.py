@@ -5,7 +5,10 @@ SQLite через SQLAlchemy.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
+import re
 import secrets
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,7 +24,9 @@ from sqlalchemy import (
     Text,
     create_engine,
     event,
+    inspect,
     select,
+    text,
 )
 from sqlalchemy.orm import (
     DeclarativeBase,
@@ -41,7 +46,17 @@ class Base(DeclarativeBase):
     pass
 
 
+ROLES: dict[str, str] = {"buyer": "Покупатель", "seller": "Продавец", "broker": "Брокер"}
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+MIN_PASSWORD = 8
+
+
 class User(Base):
+    """Пользователь кабинета. Вход по коду приглашения (пилот) или по email и паролю (ТЗ v2, R3).
+
+    Роль задаёт домашнюю страницу и навигацию: покупатель, продавец, брокер (всё сразу).
+    """
+
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -51,8 +66,15 @@ class User(Base):
     invite_code: Mapped[str] = mapped_column(String(40), unique=True)
     is_admin: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    email: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    password_hash: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    role: Mapped[str] = mapped_column(String(16), default="broker", server_default="broker")
 
     checks: Mapped[list[Check]] = relationship(back_populates="user", cascade="all, delete-orphan")
+
+    @property
+    def role_label(self) -> str:
+        return ROLES.get(self.role or "broker", "Брокер")
 
 
 class Invite(Base):
@@ -139,7 +161,31 @@ def init_db(path: str | Path) -> None:
         cur.close()
 
     Base.metadata.create_all(_engine)
+    _migrate(_engine)
     SessionLocal = sessionmaker(bind=_engine, expire_on_commit=False)
+
+
+# Колонки, добавленные после первого релиза: SQLite умеет только ADD COLUMN, этого хватает.
+_NEW_COLUMNS: dict[str, dict[str, str]] = {
+    "users": {
+        "email": "VARCHAR(200)",
+        "password_hash": "VARCHAR(200)",
+        "role": "VARCHAR(16) NOT NULL DEFAULT 'broker'",
+    },
+}
+_NEW_INDEXES = ("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email ON users(email)",)
+
+
+def _migrate(engine) -> None:
+    insp = inspect(engine)
+    with engine.begin() as conn:
+        for table, cols in _NEW_COLUMNS.items():
+            have = {c["name"] for c in insp.get_columns(table)}
+            for name, ddl in cols.items():
+                if name not in have:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+        for ddl in _NEW_INDEXES:
+            conn.execute(text(ddl))
 
 
 def session() -> Session:
@@ -177,6 +223,64 @@ def redeem_invite(
     db.flush()
     inv.used_by = user.id
     db.commit()
+    return user
+
+
+# --- email + пароль -----------------------------------------------------------------------
+def hash_password(password: str) -> str:
+    """scrypt из стандартной библиотеки: без внешних зависимостей, соль на пользователя."""
+    salt = secrets.token_bytes(16)
+    digest = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1, dklen=32)
+    return f"scrypt${salt.hex()}${digest.hex()}"
+
+
+def verify_password(password: str, stored: str | None) -> bool:
+    if not stored or not stored.startswith("scrypt$"):
+        return False
+    try:
+        _, salt_hex, digest_hex = stored.split("$", 2)
+        digest = hashlib.scrypt(
+            password.encode("utf-8"), salt=bytes.fromhex(salt_hex), n=2**14, r=8, p=1, dklen=32
+        )
+    except (ValueError, TypeError):
+        return False
+    return hmac.compare_digest(digest.hex(), digest_hex)
+
+
+def normalize_email(email: str) -> str:
+    return (email or "").strip().lower()
+
+
+def register_user(
+    db: Session, email: str, password: str, name: str, role: str, brand: str | None = None
+) -> tuple[User | None, str | None]:
+    """Новый пользователь по email: (user, None) или (None, текст ошибки)."""
+    email = normalize_email(email)
+    if not EMAIL_RE.match(email):
+        return None, "Укажите настоящий email."
+    if len(password) < MIN_PASSWORD:
+        return None, f"Пароль не короче {MIN_PASSWORD} знаков."
+    if role not in ROLES:
+        return None, "Выберите роль."
+    if db.scalar(select(User.id).where(User.email == email)) is not None:
+        return None, "Такой email уже зарегистрирован — войдите."
+    user = User(
+        name=name.strip()[:120] or email.split("@")[0],
+        brand=(brand or "").strip()[:120] or None,
+        invite_code="REG-" + secrets.token_hex(6).upper(),
+        email=email,
+        password_hash=hash_password(password),
+        role=role,
+    )
+    db.add(user)
+    db.commit()
+    return user, None
+
+
+def authenticate(db: Session, email: str, password: str) -> User | None:
+    user = db.scalar(select(User).where(User.email == normalize_email(email)))
+    if user is None or not verify_password(password, user.password_hash):
+        return None
     return user
 
 

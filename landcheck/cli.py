@@ -500,5 +500,31 @@ def invite(
         print(c)
 
 
+@app.command()
+def admin(
+    who: Annotated[str, typer.Argument(help="email или id пользователя")],
+    off: Annotated[bool, typer.Option("--off", help="Снять права администратора")] = False,
+):
+    """Дать (или снять) права администратора: модерация объявлений, чужие подборки."""
+    from sqlalchemy import select
+
+    from landcheck.web.config import settings
+    from landcheck.web.db import User, init_db, normalize_email, session
+
+    init_db(settings.db_path)
+    with session() as db:
+        user = (
+            db.get(User, int(who))
+            if who.isdigit()
+            else db.scalar(select(User).where(User.email == normalize_email(who)))
+        )
+        if user is None:
+            print("пользователь не найден")
+            raise typer.Exit(code=1)
+        user.is_admin = not off
+        db.commit()
+        print(f"{user.id} {user.name} ({user.email or user.invite_code}): admin={user.is_admin}")
+
+
 if __name__ == "__main__":  # pragma: no cover
     sys.exit(app())

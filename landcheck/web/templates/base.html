@@ -18,11 +18,19 @@
     </ul>
     <ul>
       {% if user %}
+      {% if user.role == 'seller' %}
+      <li><a href="/listings">Мои объявления</a></li>
+      <li><a href="/single">Проверить участок</a></li>
+      {% elif user.role == 'buyer' %}
+      <li><a href="/single">Проверить участок</a></li>
+      <li><a href="/">Подборки</a></li>
+      {% else %}
       <li><a href="/">Подборки</a></li>
       <li><a href="/single">Один участок</a></li>
-      <li><a href="/listing/new">Объявление</a></li>
+      <li><a href="/listings">Объявления</a></li>
+      {% endif %}
       <li><details class="dropdown">
-        <summary>{{ user.brand or user.name }}</summary>
+        <summary>{{ user.brand or user.name }} <small class="muted">· {{ user.role_label|lower }}</small></summary>
         <ul dir="rtl">
           <li><a href="/profile">Профиль и логотип</a></li>
           <li><form method="post" action="/logout"><button class="outline secondary">Выйти</button></form></li>

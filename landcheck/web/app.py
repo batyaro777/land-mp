@@ -37,7 +37,18 @@ from landcheck.web.content import (
     price_orientation,
     price_position,
 )
-from landcheck.web.db import Check, CheckItem, User, init_db, redeem_invite, session
+from landcheck.web.db import (
+    ROLES,
+    Check,
+    CheckItem,
+    User,
+    authenticate,
+    init_db,
+    normalize_email,
+    redeem_invite,
+    register_user,
+    session,
+)
 from landcheck.web.serialize import (
     LEVEL_RANK,
     flags_by_level,
@@ -64,6 +75,7 @@ templates.env.globals.update(
 
 PURPOSES = [(p.value, p.activity) for p in Purpose]
 VERDICT_ORDER = ["ок", "проверить", "стоп"]
+templates.env.globals["ROLES"] = ROLES
 
 
 def create_app() -> FastAPI:
@@ -147,10 +159,30 @@ def _batch_from_check(check: Check) -> BatchResult:
 
 # --- auth -------------------------------------------------------------------------------
 @router.get("/login", response_class=HTMLResponse)
-def login_form(request: Request, error: str | None = None):
+def login_form(request: Request, error: str | None = None, tab: str = "password"):
     if current_user(request):
         return RedirectResponse("/", status_code=303)
-    return render(request, "login.html", error=error, user=None)
+    return render(request, "login.html", error=error, tab=tab, user=None)
+
+
+def _login_response(user: User) -> RedirectResponse:
+    resp = RedirectResponse("/", status_code=303)
+    resp.set_cookie(COOKIE, make_token(user.id), max_age=MAX_AGE, httponly=True, samesite="lax")
+    return resp
+
+
+def _throttled(request: Request) -> HTMLResponse | None:
+    ip = request.client.host if request.client else "?"
+    if too_many_attempts(ip):
+        return render(
+            request,
+            "login.html",
+            error="Слишком много попыток. Подождите 10 минут.",
+            tab="password",
+            user=None,
+            status_code=429,
+        )
+    return None
 
 
 @router.post("/login")
@@ -161,23 +193,61 @@ def login(
     contact: Annotated[str, Form()] = "",
     brand_name: Annotated[str, Form()] = "",
 ):
-    ip = request.client.host if request.client else "?"
-    if too_many_attempts(ip):
-        return render(
-            request,
-            "login.html",
-            error="Слишком много попыток. Подождите 10 минут.",
-            user=None,
-            status_code=429,
-        )
+    """Вход по коду приглашения (пилот): код создаёт пользователя-брокера."""
+    if (resp := _throttled(request)) is not None:
+        return resp
     with session() as db:
         user = redeem_invite(db, code, name or "Брокер", contact, brand_name)
     if user is None:
-        record_failed_attempt(ip)
-        return render(request, "login.html", error="Код не найден. Проверьте написание.", user=None)
-    resp = RedirectResponse("/", status_code=303)
-    resp.set_cookie(COOKIE, make_token(user.id), max_age=MAX_AGE, httponly=True, samesite="lax")
-    return resp
+        record_failed_attempt(request.client.host if request.client else "?")
+        return render(
+            request,
+            "login.html",
+            error="Код не найден. Проверьте написание.",
+            tab="code",
+            user=None,
+        )
+    return _login_response(user)
+
+
+@router.post("/login/password")
+def login_password(
+    request: Request, email: Annotated[str, Form()], password: Annotated[str, Form()]
+):
+    if (resp := _throttled(request)) is not None:
+        return resp
+    with session() as db:
+        user = authenticate(db, email, password)
+    if user is None:
+        record_failed_attempt(request.client.host if request.client else "?")
+        return render(
+            request,
+            "login.html",
+            error="Email или пароль не подходят.",
+            tab="password",
+            user=None,
+        )
+    return _login_response(user)
+
+
+@router.post("/register")
+def register(
+    request: Request,
+    email: Annotated[str, Form()],
+    password: Annotated[str, Form()],
+    name: Annotated[str, Form()] = "",
+    role: Annotated[str, Form()] = "buyer",
+    brand_name: Annotated[str, Form()] = "",
+):
+    """Регистрация без кода (ТЗ v2, R3): email, пароль, имя, роль."""
+    if (resp := _throttled(request)) is not None:
+        return resp
+    with session() as db:
+        user, error = register_user(db, email, password, name, role, brand_name)
+    if user is None:
+        record_failed_attempt(request.client.host if request.client else "?")
+        return render(request, "login.html", error=error, tab="register", user=None)
+    return _login_response(user)
 
 
 @router.post("/logout")
@@ -190,6 +260,8 @@ def logout():
 # --- dashboard & checks -------------------------------------------------------------------
 @router.get("/", response_class=HTMLResponse)
 def dashboard(request: Request, user: UserDep):
+    if user.role == "seller":
+        return RedirectResponse("/listings", status_code=303)
     with session() as db:
         checks = db.scalars(
             select(Check)
@@ -588,9 +660,14 @@ async def profile_save(
     name: Annotated[str, Form()] = "",
     brand_name: Annotated[str, Form()] = "",
     contact: Annotated[str, Form()] = "",
+    role: Annotated[str, Form()] = "",
+    email: Annotated[str, Form()] = "",
+    password: Annotated[str, Form()] = "",
     remove_logo: Annotated[str, Form()] = "",
     logo: Annotated[UploadFile | None, File()] = None,
 ):
+    from landcheck.web.db import EMAIL_RE, MIN_PASSWORD, hash_password
+
     error = None
     if remove_logo:
         _remove_logo(user.id)
@@ -611,6 +688,22 @@ async def profile_save(
         u.name = name.strip()[:120] or u.name
         u.brand = brand_name.strip()[:120] or None
         u.contact = contact.strip()[:200] or None
+        if role in ROLES:
+            u.role = role
+        new_email = normalize_email(email)
+        if new_email and new_email != (u.email or ""):
+            taken = db.scalar(select(User.id).where(User.email == new_email, User.id != u.id))
+            if not EMAIL_RE.match(new_email):
+                error = error or "Email не сохранён: укажите настоящий адрес."
+            elif taken is not None:
+                error = error or "Email не сохранён: он уже занят другим пользователем."
+            else:
+                u.email = new_email
+        if password:
+            if len(password) < MIN_PASSWORD:
+                error = error or f"Пароль не сохранён: не короче {MIN_PASSWORD} знаков."
+            else:
+                u.password_hash = hash_password(password)
         db.commit()
     if error:
         return RedirectResponse(f"/profile?error={quote(error)}", status_code=303)
@@ -781,6 +874,20 @@ async def listing_create(
         db.commit()
         listing_id = row.id
     return RedirectResponse(f"/listing/{listing_id}", status_code=303)
+
+
+@router.get("/listings", response_class=HTMLResponse)
+def listings_page(request: Request, user: UserDep):
+    from landcheck.web.db import Listing as ListingRow
+
+    with session() as db:
+        rows = db.scalars(
+            select(ListingRow)
+            .where(ListingRow.user_id == user.id)
+            .order_by(ListingRow.created_at.desc())
+            .limit(100)
+        ).all()
+    return render(request, "listings.html", rows=rows, user=user)
 
 
 def _own_listing(db, user: User, listing_id: int):

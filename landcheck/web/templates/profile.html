@@ -14,6 +14,16 @@
       <input name="brand_name" value="{{ user.brand or '' }}" placeholder="Например, Земля Подмосковья"></label>
     <label>Контакт <small class="muted">(телефон или Telegram; в отчёты пока не выводится)</small>
       <input name="contact" value="{{ user.contact or '' }}" placeholder="@username"></label>
+    <label>Роль
+      <select name="role">
+        {% for key, label in ROLES.items() %}<option value="{{ key }}" {{ 'selected' if user.role == key else '' }}>{{ label }}</option>{% endfor %}
+      </select>
+      <small class="muted">Брокер видит всё: подборки, отчёты, объявления. Роль можно менять.</small>
+    </label>
+    <div class="grid">
+      <label>Email для входа<input type="email" name="email" value="{{ user.email or '' }}" placeholder="you@example.com"></label>
+      <label>Новый пароль <small class="muted">(пусто — не менять)</small><input type="password" name="password" minlength="8" autocomplete="new-password"></label>
+    </div>
     <label>Логотип <small class="muted">(PNG, JPG или WebP до 2 МБ; в отчёте высота 40 px)</small>
       <input type="file" name="logo" accept=".png,.jpg,.jpeg,.webp"></label>
     {% if logo_url %}
