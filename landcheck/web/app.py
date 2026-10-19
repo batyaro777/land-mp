@@ -881,8 +881,21 @@ async def listing_create(
             "fetch_errors": errors,
             "parcel_facts": ParcelFacts.from_parcel(parcel).to_dict(),
         }
+        row.data = _compose_with_ai(dict(row.data))
         db.commit()
         listing_id = row.id
+    return RedirectResponse(f"/listing/{listing_id}", status_code=303)
+
+
+@router.post("/listing/{listing_id}/compose")
+def listing_compose(user: UserDep, listing_id: int, notes: Annotated[str, Form()] = ""):
+    """Пересобрать текст ИИ по новым заметкам продавца."""
+    with session() as db:
+        row = _own_listing(db, user, listing_id)
+        data = dict(row.data)
+        data["notes"] = notes.strip() or data.get("notes") or ""
+        row.data = _compose_with_ai(data)
+        db.commit()
     return RedirectResponse(f"/listing/{listing_id}", status_code=303)
 
 
@@ -898,6 +911,35 @@ def listings_page(request: Request, user: UserDep):
             .limit(100)
         ).all()
     return render(request, "listings.html", rows=rows, user=user)
+
+
+def _compose_with_ai(data: dict[str, Any]) -> dict[str, Any]:
+    """Заголовок и текст через Gemini по фактам ЕГРН и заметкам; при ошибке данные не меняются."""
+    from landcheck.packager import compose_listing
+
+    if not settings.gemini_api_key:
+        return data
+    pf = data.get("parcel_facts") or {}
+    res = compose_listing(
+        facts=list(data.get("facts") or []),
+        zouit_notes=list(data.get("zouit_notes") or []),
+        notes=data.get("notes") or "",
+        object_type=data.get("object_type") or "",
+        price_rub=data.get("price_rub"),
+        fetched=(pf.get("fetched_at") or "")[:10],
+        api_key=settings.gemini_api_key,
+        model=settings.gemini_model,
+    )
+    if res.get("error"):
+        log.warning("compose failed: %s", res["error"])
+        data["composed_error"] = res["error"]
+        return data
+    data["title"] = res["title"] or data.get("title")
+    data["description"] = res["description"]
+    data["composed_by"] = res["model"]
+    data.pop("composed_error", None)
+    data["warnings"] = _listing_warnings(data)
+    return data
 
 
 def _own_listing(db, user: User, listing_id: int):
@@ -1233,6 +1275,7 @@ def listing_update(
     description: Annotated[str, Form()] = "",
     price: Annotated[str, Form()] = "",
     phone: Annotated[str, Form()] = "",
+    notes: Annotated[str, Form()] = "",
 ):
     from landcheck.inputs import parse_number
 
@@ -1241,6 +1284,8 @@ def listing_update(
         data = dict(row.data)
         data["title"] = title.strip() or data["title"]
         data["description"] = description.strip() or data["description"]
+        if notes.strip():
+            data["notes"] = notes.strip()
         if price.strip():
             v = parse_number(price)
             data["price_rub"] = v * 1_000_000 if v is not None and v < 1000 else v

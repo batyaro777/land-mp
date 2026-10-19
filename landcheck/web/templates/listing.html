@@ -47,14 +47,24 @@
 <div class="grid two">
 <article>
   <form method="post" action="/listing/{{ row.id }}">
+    {% if d.composed_error %}<p class="small err">ИИ-сборка не удалась ({{ d.composed_error }}): текст оставлен прежним.</p>{% endif %}
+    {% if d.composed_by %}<p class="small muted">Текст собран ИИ ({{ d.composed_by }}) по фактам ЕГРН и вашим заметкам; проверьте и поправьте. Противоречия с кадастром подсвечиваются выше.</p>{% endif %}
     <label>Заголовок (до 50 знаков)<input name="title" value="{{ d.title }}" maxlength="50"></label>
     <label>Текст объявления<textarea name="description" rows="16">{{ d.description }}</textarea></label>
+    <label for="notes">Заметки продавца <small class="muted">(что есть на участке и рядом; можно голосом)</small></label>
+    <div class="mic-wrap">
+      <textarea id="notes" name="notes" rows="4" form="compose">{{ d.notes or '' }}</textarea>
+      {% if voice_enabled %}<button type="button" class="mic outline sm" data-target="notes">🎙 Голосом</button>{% endif %}
+      <small class="mic-status muted"></small>
+    </div>
+    {% if voice_enabled %}<p><button type="submit" form="compose" class="outline sm" title="Заголовок и текст заново по фактам ЕГРН и заметкам">Пересобрать текст ИИ</button></p>{% endif %}
     <div class="grid">
       <label>Цена, ₽<input name="price" value="{{ '%.0f'|format(d.price_rub) if d.price_rub else '' }}"></label>
       <label>Телефон<input name="phone" value="{{ d.phone or '' }}"></label>
     </div>
     <button type="submit" class="outline">Сохранить правки</button>
   </form>
+  <form method="post" action="/listing/{{ row.id }}/compose" id="compose"></form>
 </article>
 <article>
   <h4>Факты из НСПД в тексте</h4>
