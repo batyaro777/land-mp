@@ -46,7 +46,15 @@ class Base(DeclarativeBase):
     pass
 
 
-ROLES: dict[str, str] = {"buyer": "Покупатель", "seller": "Продавец", "broker": "Брокер"}
+ROLES: dict[str, str] = {
+    "buyer": "Покупатель",
+    "seller": "Продавец",
+    "broker": "Брокер",
+    "admin": "Администратор",
+}
+# Роли, которые пользователь выбирает сам (регистрация, профиль). Администратор — только через
+# код приглашения с флагом --admin или `landcheck admin <email>`: видит всю картину целиком.
+PUBLIC_ROLES: tuple[str, ...] = ("buyer", "seller", "broker")
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 MIN_PASSWORD = 8
 
@@ -88,6 +96,8 @@ class Invite(Base):
     note: Mapped[str | None] = mapped_column(String(200), nullable=True)
     used_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # Роль, которую получит пользователь по этому коду (None → брокер); «admin» — администратор.
+    role: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
 
 class Check(Base):
@@ -252,6 +262,7 @@ _NEW_COLUMNS: dict[str, dict[str, str]] = {
         "ref_code": "VARCHAR(16)",
         "referred_by": "INTEGER",
     },
+    "invites": {"role": "VARCHAR(16)"},
     "listings": {
         "status": "VARCHAR(16) NOT NULL DEFAULT 'draft'",
         "published": "BOOLEAN NOT NULL DEFAULT 0",
@@ -285,11 +296,15 @@ def session() -> Session:
 
 
 # --- инвайты ---------------------------------------------------------------------------
-def create_invites(db: Session, count: int = 1, note: str | None = None) -> list[str]:
+def create_invites(
+    db: Session, count: int = 1, note: str | None = None, role: str | None = None
+) -> list[str]:
+    if role is not None and role not in ROLES:
+        raise ValueError(f"неизвестная роль: {role}")
     codes: list[str] = []
     for _ in range(count):
         code = "LC-" + secrets.token_hex(3).upper()
-        db.add(Invite(code=code, note=note))
+        db.add(Invite(code=code, note=note, role=role))
         codes.append(code)
     db.commit()
     return codes
@@ -304,17 +319,27 @@ def redeem_invite(
         return None
     if inv.used_by is not None:
         return db.get(User, inv.used_by)
+    role = inv.role or "broker"
     user = User(
         name=name.strip()[:120],
         contact=(contact or "").strip()[:200] or None,
         brand=(brand or "").strip()[:120] or None,
         invite_code=code,
+        role=role,
+        is_admin=role == "admin",
     )
     db.add(user)
     db.flush()
     inv.used_by = user.id
     db.commit()
     return user
+
+
+def grant_admin(db: Session, user: User, on: bool = True) -> None:
+    """Права администратора вместе с ролью: обзор системы, пользователи, модерация, чужие данные."""
+    user.is_admin = on
+    user.role = "admin" if on else ("broker" if user.role == "admin" else user.role)
+    db.commit()
 
 
 # --- email + пароль -----------------------------------------------------------------------
@@ -376,7 +401,7 @@ def register_user(
         return None, "Укажите настоящий email."
     if len(password) < MIN_PASSWORD:
         return None, f"Пароль не короче {MIN_PASSWORD} знаков."
-    if role not in ROLES:
+    if role not in PUBLIC_ROLES:
         return None, "Выберите роль."
     if db.scalar(select(User.id).where(User.email == email)) is not None:
         return None, "Такой email уже зарегистрирован — войдите."

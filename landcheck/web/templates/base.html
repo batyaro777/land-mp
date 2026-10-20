@@ -18,7 +18,15 @@
     </ul>
     <ul>
       {% if user %}
-      {% if user.role == 'seller' %}
+      {% if user.is_admin %}
+      <li><a href="/admin"><strong>Обзор</strong></a></li>
+      <li><a href="/admin/users">Пользователи</a></li>
+      <li><a href="/admin/listings">Модерация</a></li>
+      <li><a href="/checks">Подборки</a></li>
+      <li><a href="/single">Один участок</a></li>
+      <li><a href="/search">Поиск</a></li>
+      <li><a href="/listings">Объявления</a></li>
+      {% elif user.role == 'seller' %}
       <li><a href="/listings">Мои объявления</a></li>
       <li><a href="/single">Проверить участок</a></li>
       {% elif user.role == 'buyer' %}
@@ -37,7 +45,6 @@
           <li><a href="/profile">Профиль и логотип</a></li>
           <li><a href="/partner">Партнёрская ссылка</a></li>
           <li><a href="/connections">Запросы контакта</a></li>
-          {% if user.is_admin %}<li><a href="/admin/listings">Модерация</a></li>{% endif %}
           <li><form method="post" action="/logout"><button class="outline secondary">Выйти</button></form></li>
         </ul>
       </details></li>

@@ -46,6 +46,7 @@ from landcheck.web.content import (
 from landcheck.web.db import (
     LISTING_STATUSES,
     PROOF_KINDS,
+    PUBLIC_ROLES,
     ROLES,
     Check,
     CheckItem,
@@ -86,7 +87,10 @@ templates.env.globals.update(
 PURPOSES = [(p.value, p.activity) for p in Purpose]
 VERDICT_ORDER = ["ок", "проверить", "стоп"]
 templates.env.globals.update(
-    ROLES=ROLES, PROOF_KINDS=PROOF_KINDS, LISTING_STATUSES=LISTING_STATUSES
+    ROLES=ROLES,
+    PUBLIC_ROLES_MAP={k: ROLES[k] for k in PUBLIC_ROLES},
+    PROOF_KINDS=PROOF_KINDS,
+    LISTING_STATUSES=LISTING_STATUSES,
 )
 
 
@@ -296,10 +300,22 @@ def logout():
 # --- dashboard & checks -------------------------------------------------------------------
 @router.get("/", response_class=HTMLResponse)
 def dashboard(request: Request, user: UserDep):
+    if user.is_admin:
+        return RedirectResponse("/admin", status_code=303)
     if user.role == "seller":
         return RedirectResponse("/listings", status_code=303)
     if user.role == "buyer":
         return RedirectResponse("/search", status_code=303)
+    return _broker_dashboard(request, user)
+
+
+@router.get("/checks", response_class=HTMLResponse)
+def checks_page(request: Request, user: UserDep):
+    """Подборки брокера — для администратора и прямых ссылок (дом администратора — /admin)."""
+    return _broker_dashboard(request, user)
+
+
+def _broker_dashboard(request: Request, user: User):
     with session() as db:
         checks = db.scalars(
             select(Check)
@@ -728,8 +744,8 @@ async def profile_save(
         u.name = name.strip()[:120] or u.name
         u.brand = brand_name.strip()[:120] or None
         u.contact = contact.strip()[:200] or None
-        if role in ROLES:
-            u.role = role
+        if role in PUBLIC_ROLES and not u.is_admin:
+            u.role = role  # администратор роль в профиле не меняет: только через CLI
         new_email = normalize_email(email)
         if new_email and new_email != (u.email or ""):
             taken = db.scalar(select(User.id).where(User.email == new_email, User.id != u.id))
@@ -1755,6 +1771,91 @@ def require_admin(request: Request) -> User:
 
 
 AdminDep = Annotated[User, Depends(require_admin)]
+
+
+def _aware(dt):
+    from datetime import UTC
+
+    return dt if dt is None or dt.tzinfo else dt.replace(tzinfo=UTC)
+
+
+@router.get("/admin", response_class=HTMLResponse)
+def admin_overview(request: Request, admin: AdminDep):
+    """Вся картина целиком: люди, проверки, объявления, запросы, связи, ИИ. Только администратор."""
+    from collections import Counter
+    from datetime import UTC, datetime, timedelta
+
+    from landcheck.web.db import BuyerRequest, Connection, Favorite, Invite
+    from landcheck.web.db import Listing as ListingRow
+
+    now = datetime.now(UTC)
+    week = now - timedelta(days=7)
+    with session() as db:
+        users = db.scalars(select(User).order_by(User.created_at.desc())).all()
+        names = {u.id: (u.brand or u.name) for u in users}
+        checks = db.scalars(select(Check).order_by(Check.created_at.desc())).all()
+        listings = db.scalars(select(ListingRow).order_by(ListingRow.id.desc())).all()
+        requests = db.scalars(select(BuyerRequest).order_by(BuyerRequest.created_at.desc())).all()
+        connections = db.scalars(select(Connection).order_by(Connection.id.desc())).all()
+        favorites = db.scalar(select(func.count(Favorite.id))) or 0
+        items_total = db.scalar(select(func.count(CheckItem.id))) or 0
+        invites_free = db.scalar(select(func.count(Invite.id)).where(Invite.used_by.is_(None))) or 0
+    stats = {
+        "users": len(users),
+        "users_week": sum(1 for u in users if _aware(u.created_at) >= week),
+        "users_by_role": Counter(u.role for u in users),
+        "admins": sum(1 for u in users if u.is_admin),
+        "checks": len(checks),
+        "checks_week": sum(1 for c in checks if _aware(c.created_at) >= week),
+        "checks_by_status": Counter(c.status for c in checks),
+        "parcels": items_total,
+        "listings": len(listings),
+        "listings_by_status": Counter(r.status for r in listings),
+        "published": sum(1 for r in listings if r.published),
+        "composed_by": Counter((r.data or {}).get("composed_by") or "шаблон" for r in listings),
+        "requests": len(requests),
+        "requests_week": sum(1 for r in requests if _aware(r.created_at) >= week),
+        "connections_by_status": Counter(c.status for c in connections),
+        "favorites": favorites,
+        "invites_free": invites_free,
+    }
+    return render(
+        request,
+        "admin_overview.html",
+        stats=stats,
+        names=names,
+        users=users[:10],
+        checks=checks[:12],
+        listings=listings[:12],
+        requests=requests[:10],
+        connections=connections[:10],
+        user=admin,
+    )
+
+
+@router.get("/admin/users", response_class=HTMLResponse)
+def admin_users(request: Request, admin: AdminDep):
+    from collections import Counter
+
+    from landcheck.web.db import BuyerRequest
+    from landcheck.web.db import Listing as ListingRow
+
+    with session() as db:
+        users = db.scalars(select(User).order_by(User.created_at.desc())).all()
+        checks = Counter(db.scalars(select(Check.user_id)).all())
+        listings = Counter(db.scalars(select(ListingRow.user_id)).all())
+        requests = Counter(db.scalars(select(BuyerRequest.user_id)).all())
+        referred = Counter(u.referred_by for u in users if u.referred_by)
+    return render(
+        request,
+        "admin_users.html",
+        users=users,
+        checks=checks,
+        listings=listings,
+        requests=requests,
+        referred=referred,
+        user=admin,
+    )
 
 
 @router.get("/admin/listings", response_class=HTMLResponse)

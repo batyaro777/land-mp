@@ -498,6 +498,9 @@ def web(
 def invite(
     count: Annotated[int, typer.Option(help="Сколько кодов создать")] = 1,
     note: Annotated[str | None, typer.Option(help="Пометка: кому")] = None,
+    admin: Annotated[
+        bool, typer.Option("--admin", help="Код администратора: обзор системы, пользователи")
+    ] = False,
 ):
     """Создать коды приглашения для входа в кабинет."""
     from landcheck.web.config import settings
@@ -505,7 +508,7 @@ def invite(
 
     init_db(settings.db_path)
     with session() as db:
-        codes = create_invites(db, count, note)
+        codes = create_invites(db, count, note, role="admin" if admin else None)
     for c in codes:
         print(c)
 
@@ -519,7 +522,7 @@ def admin(
     from sqlalchemy import select
 
     from landcheck.web.config import settings
-    from landcheck.web.db import User, init_db, normalize_email, session
+    from landcheck.web.db import User, grant_admin, init_db, normalize_email, session
 
     init_db(settings.db_path)
     with session() as db:
@@ -531,8 +534,7 @@ def admin(
         if user is None:
             print("пользователь не найден")
             raise typer.Exit(code=1)
-        user.is_admin = not off
-        db.commit()
+        grant_admin(db, user, on=not off)
         print(f"{user.id} {user.name} ({user.email or user.invite_code}): admin={user.is_admin}")
 
 

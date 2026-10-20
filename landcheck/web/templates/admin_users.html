@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Пользователи — {{ brand }}{% endblock %}
+{% block content %}
+<hgroup>
+  <h2>Пользователи</h2>
+  <p>Все аккаунты системы: роль, контакты, активность, кто кого привёл. Видно только администратору.</p>
+</hgroup>
+<table class="small">
+  <thead><tr><th>№</th><th>Имя / бренд</th><th>Роль</th><th>Email</th><th>Контакт</th><th>Зарегистрирован</th><th>Как вошёл</th><th>Проверок</th><th>Объявлений</th><th>Запросов</th><th>Привёл</th></tr></thead>
+  <tbody>
+  {% for u in users %}
+  <tr>
+    <td>{{ u.id }}</td>
+    <td>{{ u.brand or u.name }}{% if u.brand and u.brand != u.name %} <span class="muted">({{ u.name }})</span>{% endif %}</td>
+    <td>{{ u.role_label|lower }}{% if u.is_admin %} · <span class="badge">админ</span>{% endif %}</td>
+    <td>{{ u.email or '—' }}</td>
+    <td>{{ u.contact or '—' }}</td>
+    <td>{{ u.created_at|dt }}</td>
+    <td>{{ 'регистрация' if u.invite_code.startswith('REG-') else 'код ' ~ u.invite_code }}</td>
+    <td>{{ checks.get(u.id, 0) }}</td>
+    <td>{{ listings.get(u.id, 0) }}</td>
+    <td>{{ requests.get(u.id, 0) }}</td>
+    <td>{{ referred.get(u.id, 0) }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p class="small muted">Права администратора выдаются только из командной строки сервера: <code>landcheck admin &lt;email&gt;</code> или код приглашения <code>landcheck invite --admin</code>.</p>
+{% endblock %}

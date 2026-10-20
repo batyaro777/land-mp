@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Обзор системы — {{ brand }}{% endblock %}
+{% block content %}
+<hgroup>
+  <h2>Обзор системы</h2>
+  <p>Что происходит внутри: люди, проверки, объявления, запросы покупателей, связи между агентами, работа ИИ. Видно только администратору.</p>
+</hgroup>
+<div class="cards">
+  <article><h4>Пользователи</h4><p><strong>{{ stats.users }}</strong> · за 7 дней +{{ stats.users_week }}</p>
+    <p class="small muted">{% for r, n in stats.users_by_role.items() %}{{ ROLES.get(r, r)|lower }}: {{ n }}{% if not loop.last %} · {% endif %}{% endfor %}</p>
+    <p class="small"><a href="/admin/users">все пользователи</a> · свободных кодов: {{ stats.invites_free }}</p></article>
+  <article><h4>Проверки подборок</h4><p><strong>{{ stats.checks }}</strong> · за 7 дней +{{ stats.checks_week }} · участков {{ stats.parcels }}</p>
+    <p class="small muted">{% for st, n in stats.checks_by_status.items() %}{{ st }}: {{ n }}{% if not loop.last %} · {% endif %}{% endfor %}</p></article>
+  <article><h4>Объявления</h4><p><strong>{{ stats.listings }}</strong> · опубликовано {{ stats.published }}</p>
+    <p class="small muted">{% for st, n in stats.listings_by_status.items() %}{{ LISTING_STATUSES.get(st, st)|lower }}: {{ n }}{% if not loop.last %} · {% endif %}{% endfor %}</p>
+    <p class="small"><a href="/admin/listings">модерация</a></p></article>
+  <article><h4>Покупатели</h4><p>запросов <strong>{{ stats.requests }}</strong> · за 7 дней +{{ stats.requests_week }} · сохранено {{ stats.favorites }}</p></article>
+  <article><h4>Запросы контакта</h4><p>{% for st, n in stats.connections_by_status.items() %}{{ {'new':'новых','accepted':'принято','declined':'отклонено'}.get(st, st) }}: <strong>{{ n }}</strong>{% if not loop.last %} · {% endif %}{% else %}пока нет{% endfor %}</p></article>
+  <article><h4>ИИ в объявлениях</h4><p class="small">{% for m, n in stats.composed_by.items() %}{{ m }}: {{ n }}{% if not loop.last %}<br>{% endif %}{% endfor %}</p></article>
+</div>
+<div class="grid two">
+<article>
+  <h4>Последние проверки</h4>
+  {% if not checks %}<p class="muted">Пока нет.</p>{% else %}
+  <table class="small"><thead><tr><th>Когда</th><th>Кто</th><th>Подборка</th><th>Статус</th></tr></thead><tbody>
+  {% for c in checks %}<tr><td>{{ c.created_at|dt }}</td><td>{{ names.get(c.user_id, c.user_id) }}</td><td><a href="/checks/{{ c.id }}">{{ c.title or ('#' ~ c.id) }}</a> · {{ c.done }}/{{ c.total }}</td><td>{{ c.status }}</td></tr>{% endfor %}
+  </tbody></table>{% endif %}
+</article>
+<article>
+  <h4>Последние объявления</h4>
+  {% if not listings %}<p class="muted">Пока нет.</p>{% else %}
+  <table class="small"><thead><tr><th>№</th><th>Кто</th><th>Участок</th><th>Статус</th></tr></thead><tbody>
+  {% for r in listings %}<tr><td>{{ r.id }}</td><td>{{ names.get(r.user_id, r.user_id) }}</td><td><a href="/listing/{{ r.id }}"><code>{{ r.cad_num }}</code></a>{% if r.data.price_rub %} · {{ r.data.price_rub|money }}{% endif %}</td><td>{{ r.status_label }}{% if r.published %} · <span class="badge v-ok">опубликовано</span>{% endif %}</td></tr>{% endfor %}
+  </tbody></table>{% endif %}
+</article>
+<article>
+  <h4>Запросы покупателей</h4>
+  {% if not requests %}<p class="muted">Пока нет.</p>{% else %}
+  <table class="small"><thead><tr><th>Когда</th><th>Кто</th><th>Запрос</th></tr></thead><tbody>
+  {% for q in requests %}<tr><td>{{ q.created_at|dt }}</td><td>{{ names.get(q.user_id, q.user_id) }}</td><td><a href="/search/{{ q.id }}">{{ q.text|truncate(80) }}</a>{% if q.region %} · {{ q.region }}{% endif %}{% if q.budget_rub %} · {{ q.budget_rub|money }}{% endif %}</td></tr>{% endfor %}
+  </tbody></table>{% endif %}
+</article>
+<article>
+  <h4>Запросы контакта между агентами</h4>
+  {% if not connections %}<p class="muted">Пока нет.</p>{% else %}
+  <table class="small"><thead><tr><th>Когда</th><th>От</th><th>Кому</th><th>Объявление</th><th>Статус</th></tr></thead><tbody>
+  {% for c in connections %}<tr><td>{{ c.created_at|dt }}</td><td>{{ names.get(c.from_user_id, c.from_user_id) }}</td><td>{{ names.get(c.to_user_id, c.to_user_id) }}</td><td><a href="/listing/{{ c.listing_id }}">#{{ c.listing_id }}</a></td><td>{{ c.status }}</td></tr>{% endfor %}
+  </tbody></table>{% endif %}
+</article>
+<article>
+  <h4>Новые пользователи</h4>
+  <table class="small"><thead><tr><th>Когда</th><th>Кто</th><th>Роль</th><th>Email</th></tr></thead><tbody>
+  {% for u in users %}<tr><td>{{ u.created_at|dt }}</td><td>{{ u.brand or u.name }}</td><td>{{ u.role_label|lower }}{% if u.is_admin %} · админ{% endif %}</td><td>{{ u.email or '—' }}</td></tr>{% endfor %}
+  </tbody></table>
+</article>
+</div>
+{% endblock %}

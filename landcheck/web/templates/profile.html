@@ -16,7 +16,7 @@
       <input name="contact" value="{{ user.contact or '' }}" placeholder="@username"></label>
     <label>Роль
       <select name="role">
-        {% for key, label in ROLES.items() %}<option value="{{ key }}" {{ 'selected' if user.role == key else '' }}>{{ label }}</option>{% endfor %}
+        {% for key, label in PUBLIC_ROLES_MAP.items() %}<option value="{{ key }}" {{ 'selected' if user.role == key else '' }}>{{ label }}</option>{% endfor %}
       </select>
       <small class="muted">Брокер видит всё: подборки, отчёты, объявления. Роль можно менять.</small>
     </label>

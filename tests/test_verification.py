@@ -67,7 +67,7 @@ def test_verification_flow(client):  # noqa: F811
     # админ видит очередь и подтверждает
     _register(client, "admin@example.com", role="broker")
     _make_admin("admin@example.com")
-    assert "Модерация" in client.get("/").text
+    assert "Модерация" in client.get("/admin").text
     q = client.get("/admin/listings").text
     assert "50:09:0060202:101" in q and "seller@example.com" in q and "01.pdf" in q
     assert "агентский" in q.lower()
