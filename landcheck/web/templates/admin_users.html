@@ -12,7 +12,7 @@
   <tr>
     <td>{{ u.id }}</td>
     <td>{{ u.brand or u.name }}{% if u.brand and u.brand != u.name %} <span class="muted">({{ u.name }})</span>{% endif %}</td>
-    <td>{{ u.role_label|lower }}{% if u.is_admin %} · <span class="badge">админ</span>{% endif %}</td>
+    <td>{{ u.role_label|lower }}{% if u.is_admin and u.role != 'admin' %} · <span class="badge">админ</span>{% endif %}</td>
     <td>{{ u.email or '—' }}</td>
     <td>{{ u.contact or '—' }}</td>
     <td>{{ u.created_at|dt }}</td>
