@@ -122,7 +122,8 @@ LANDCHECK_PROXY=socks5://127.0.0.1:1080 landcheck web --port 8000
 (`GROQ_API_KEY` достаточно: gpt-oss-120b и Qwen 3.8 на Groq; запасные OpenRouter `:free`,
 Mistral); блок «Регион» ищет через свой SearXNG (`SEARXNG_URL`) или DuckDuckGo без ключа,
 скачивает страницы и отдаёт модели только найденное с номерами источников; голос — Web Speech
-API в браузере, на сервере Groq Whisper или `faster-whisper` (сборка с `--build-arg ASR_LOCAL=1`).
+API в браузере, на сервере Groq Whisper, ElevenLabs Scribe (`ELEVENLABS_API_KEY`, по подписке)
+или `faster-whisper` (сборка с `--build-arg ASR_LOCAL=1`).
 Gemini остаётся опцией (`LANDCHECK_REGION=gemini`, `GEMINI_API_KEY`).
 
 Переменные окружения — в `.env.example`. Хранилище кабинета — SQLite (`LANDCHECK_DB`),

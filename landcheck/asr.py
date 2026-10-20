@@ -1,9 +1,10 @@
 """Голосовой ввод: расшифровка речи цепочкой провайдеров, бесплатный стек по умолчанию.
 
 ТЗ v2, М1.3. Решение Тони 19.10.2026: Gemini платный — используем бесплатные уровни.
-Порядок (LANDCHECK_ASR, по умолчанию ``groq,local,gemini``):
+Порядок (LANDCHECK_ASR, по умолчанию ``groq,elevenlabs,local,gemini``):
 - ``groq`` — Whisper large-v3-turbo на Groq (бесплатный уровень без карты: 20 запросов/мин,
   2 000/день, 28 800 аудио-секунд/день);
+- ``elevenlabs`` — Scribe v2 (подписка Тони; часы включены в план), лучшая точность на русском;
 - ``local`` — faster-whisper на сервере (extra ``asr-local``), только WAV, без внешних сервисов;
 - ``gemini`` — прежний путь, если ключ оставлен.
 В браузере первым работает Web Speech API (см. voice.js); сюда приходит запасной путь.
@@ -40,6 +41,8 @@ ALLOWED_MIME = {
 }
 GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_MODEL = "whisper-large-v3-turbo"
+ELEVENLABS_URL = "https://api.elevenlabs.io/v1/speech-to-text"
+ELEVENLABS_MODEL = os.environ.get("ELEVENLABS_STT_MODEL") or "scribe_v2"
 LOCAL_MODEL = os.environ.get("LANDCHECK_WHISPER_MODEL") or "large-v3-turbo"
 
 # Тишина: на пустой записи модель выдумывает текст («Да, добрый день», «277» — проверено на
@@ -95,10 +98,12 @@ def clean_text(text: str) -> str:
 
 def providers_available(order: str | None = None) -> list[str]:
     """Провайдеры из LANDCHECK_ASR, у которых есть ключ или установленный пакет."""
-    order = order or os.environ.get("LANDCHECK_ASR") or "groq,local,gemini"
+    order = order or os.environ.get("LANDCHECK_ASR") or "groq,elevenlabs,local,gemini"
     out: list[str] = []
     for name in (n.strip().lower() for n in order.split(",")):
         if name == "groq" and os.environ.get("GROQ_API_KEY"):
+            out.append(name)
+        elif name == "elevenlabs" and os.environ.get("ELEVENLABS_API_KEY"):
             out.append(name)
         elif name == "local" and _local_available():
             out.append(name)
@@ -157,6 +162,8 @@ def transcribe(
     for name in providers:
         if name == "groq":
             res = _transcribe_groq(audio, mime, timeout=timeout)
+        elif name == "elevenlabs":
+            res = _transcribe_elevenlabs(audio, mime, timeout=timeout)
         elif name == "local":
             res = _transcribe_local(audio, mime)
         elif name == "gemini":
@@ -203,6 +210,41 @@ def _transcribe_groq(audio: bytes, mime: str, *, timeout: float) -> dict[str, An
     except ValueError:
         return _failed(GROQ_MODEL, "Groq: ответ не JSON")
     return {"text": clean_text(text), "model": f"groq/{GROQ_MODEL}", "error": None, "usage": None}
+
+
+# --- ElevenLabs Scribe --------------------------------------------------------------------
+def _transcribe_elevenlabs(audio: bytes, mime: str, *, timeout: float) -> dict[str, Any]:
+    key = os.environ.get("ELEVENLABS_API_KEY") or ""
+    ext = {"audio/wav": "wav", "audio/webm": "webm", "audio/ogg": "ogg", "audio/mp4": "m4a"}.get(
+        mime, "wav"
+    )
+    try:
+        r = httpx.post(
+            ELEVENLABS_URL,
+            headers={"xi-api-key": key},
+            files={"file": (f"voice.{ext}", audio, mime)},
+            data={
+                "model_id": ELEVENLABS_MODEL,
+                "language_code": "rus",
+                "tag_audio_events": "false",
+                "diarize": "false",
+            },
+            timeout=timeout,
+        )
+    except Exception as e:  # noqa: BLE001 — сеть
+        return _failed(ELEVENLABS_MODEL, f"{type(e).__name__}: {e}")
+    if r.status_code != 200:
+        return _failed(ELEVENLABS_MODEL, f"ElevenLabs HTTP {r.status_code}")
+    try:
+        text = r.json().get("text") or ""
+    except ValueError:
+        return _failed(ELEVENLABS_MODEL, "ElevenLabs: ответ не JSON")
+    return {
+        "text": clean_text(text),
+        "model": f"elevenlabs/{ELEVENLABS_MODEL}",
+        "error": None,
+        "usage": None,
+    }
 
 
 # --- локальный faster-whisper ---------------------------------------------------------------

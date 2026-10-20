@@ -28,10 +28,13 @@ class Provider:
 
 DEFAULT_MODELS: dict[str, tuple[str, ...]] = {
     "groq": ("openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"),
+    # Бесплатные модели OpenRouter на 20.10.2026 (список меняется: openrouter.ai/api/v1/models,
+    # pricing.prompt == "0"); последним — маршрутизатор по любой свободной модели.
     "openrouter": (
-        "deepseek/deepseek-chat-v3.1:free",
-        "qwen/qwen3-235b-a22b:free",
-        "google/gemma-3-27b-it:free",
+        "google/gemma-4-31b-it:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "minimax/minimax-m3.1-flash:free",
+        "openrouter/free",
     ),
     "mistral": ("mistral-medium-latest", "mistral-small-latest"),
     "gemini": ("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash"),

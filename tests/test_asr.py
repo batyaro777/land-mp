@@ -191,3 +191,23 @@ def test_groq_provider_first_then_gemini(monkeypatch):
     monkeypatch.setattr(httpx, "post", lambda *a, **k: (_ for _ in ()).throw(AssertionError))
     r = transcribe(speech, "audio/wav")
     assert "нет провайдера" in r["error"]
+
+
+def test_elevenlabs_provider(monkeypatch):
+    import numpy as np
+
+    speech = _wav(np.random.default_rng(3).normal(0, 0.05, 16000 * 2).clip(-1, 1))
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "el")
+
+    def fake_post(url, *a, **k):
+        assert "elevenlabs" in url and k["headers"]["xi-api-key"] == "el"
+        assert k["data"]["model_id"] == "scribe_v2" and k["data"]["language_code"] == "rus"
+        return _Resp(200, {"text": "Участок 10 соток под дом.", "language_code": "rus"})
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    assert asr.providers_available() == ["elevenlabs"]
+    r = transcribe(speech, "audio/wav")
+    assert r["text"] == "Участок 10 соток под дом." and r["model"] == "elevenlabs/scribe_v2"
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp(401, {}))
+    assert "ElevenLabs HTTP 401" in transcribe(speech, "audio/wav")["error"]
