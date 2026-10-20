@@ -269,7 +269,7 @@ def collect_documents(
     search_fn = search_fn or websearch.search
     fetch_fn = fetch_fn or websearch.fetch_many
     seen: set[str] = set()
-    docs: list[dict[str, Any]] = []
+    per_query: list[list[dict[str, Any]]] = []
     queries: list[str] = []
     errors: list[str] = []
     short = short_place(locality).lower()
@@ -281,12 +281,13 @@ def collect_documents(
         if res.get("error"):
             errors.append(res["error"])
             continue
+        bucket: list[dict[str, Any]] = []
         for it in res["results"]:
             url = (it.get("url") or "").split("#")[0]
             if not url or url in seen or is_junk(url, it.get("title") or "", short):
                 continue
             seen.add(url)
-            docs.append(
+            bucket.append(
                 {
                     "url": url,
                     "title": it.get("title") or url,
@@ -295,6 +296,12 @@ def collect_documents(
                     "engine": it.get("engine"),
                 }
             )
+        per_query.append(bucket)
+    # По кругу из каждого запроса: иначе первые темы (инвестиции, стройка) занимали все
+    # места, а свалки, цены за сотку и генплан до модели не доходили (прод, 20.10).
+    docs: list[dict[str, Any]] = []
+    for i in range(max(len(b) for b in per_query) if per_query else 0):
+        docs.extend(b[i] for b in per_query if i < len(b))
     docs = docs[: max_docs * 2]
     texts = fetch_fn([d["url"] for d in docs])
     kept = []

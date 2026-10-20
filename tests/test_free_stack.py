@@ -375,3 +375,24 @@ def test_relevance_filter_drops_offtopic_documents():
         {"title": "x", "snippet": "село Элекмонар получит газ", "text": ""}, "Элекмонар"
     )
     assert is_relevant({"title": "x", "snippet": "", "text": "в Белокурихе построят"}, "Белокуриха")
+
+
+def test_collect_documents_interleaves_queries():
+    from landcheck.region import collect_documents
+
+    def search_fn(q, max_results, news, recent=False):
+        tag = "инвест" if "инвестиции проект" in q else ("свалка" if "свалка" in q else "x")
+        return {
+            "results": [
+                {"title": f"Белокуриха {tag} {i}", "url": f"https://{tag}.ru/{i}", "snippet": "s"}
+                for i in range(6)
+            ],
+            "error": None,
+        }
+
+    docs, _, _ = collect_documents(
+        "Белокуриха", Purpose.IZHS, search_fn=search_fn, fetch_fn=lambda urls: {}, max_docs=4
+    )
+    hosts = [d["url"].split("/")[2] for d in docs]
+    # три темы (остальные запросы дают те же url и отсеиваются как дубли) → по кругу
+    assert hosts == ["инвест.ru", "x.ru", "свалка.ru", "инвест.ru"]
