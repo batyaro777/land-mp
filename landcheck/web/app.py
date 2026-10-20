@@ -823,29 +823,41 @@ def _listing_warnings(data: dict[str, Any]) -> list[str]:
     return contradictions(pf, text, data.get("price_rub")) + static_warnings(pf)
 
 
-def _refresh_tiny_area(data: dict[str, Any]) -> dict[str, Any] | None:
-    """Объявления, созданные до bf4c70d, хранят «Площадь по ЕГРН 0.01 сот.» для участка
-    с ошибочной площадью (Клавдий, прод 20.10) — при открытии приводим к новым правилам."""
+def _refresh_listing_data(data: dict[str, Any]) -> dict[str, Any] | None:
+    """Объявления, созданные до bf4c70d/65502dd, хранят «Площадь по ЕГРН 0.01 сот.» для участка
+    с ошибочной площадью и рубрику «Поселений (ИЖС)» без категории и ВРИ (Клавдий, прод 20.10) —
+    при открытии приводим к новым правилам."""
     from landcheck.listing import MIN_AREA_M2, ParcelFacts
 
     pf_raw = data.get("parcel_facts")
     if not pf_raw:
         return None
-    area = ParcelFacts.from_dict(pf_raw).best_area_m2
-    if not area or area >= MIN_AREA_M2:
-        return None
+    pf = ParcelFacts.from_dict(pf_raw)
+    out = dict(data)
+    changed = False
     facts = list(data.get("facts") or [])
-    stale = [f for f in facts if f.startswith("Площадь по ЕГРН ") and "не определена" not in f]
-    if not stale and data.get("land_area_sotka") is None:
+    if pf.best_area_m2 and pf.best_area_m2 < MIN_AREA_M2:
+        stale = [f for f in facts if f.startswith("Площадь по ЕГРН ") and "не определена" not in f]
+        if stale or data.get("land_area_sotka") is not None:
+            fresh = (
+                f"Площадь по ЕГРН не определена: в карточке {pf.best_area_m2:g} м², "
+                "похоже на ошибку данных — уточнить по выписке"
+            )
+            facts = [fresh if f in stale else f for f in facts]
+            if fresh not in facts:
+                facts.insert(0, fresh)
+            out["land_area_sotka"] = None
+            changed = True
+    if pf.category is None and not pf.permitted_use_all:
+        unset = [f for f in facts if f.startswith("Категория:") and "не установлен" in f.lower()]
+        if unset or data.get("object_type"):
+            facts = [f for f in facts if f not in unset]
+            out["object_type"] = ""
+            changed = True
+    if not changed:
         return None
-    fresh = (
-        f"Площадь по ЕГРН не определена: в карточке {area:g} м², "
-        "похоже на ошибку данных — уточнить по выписке"
-    )
-    facts = [fresh if f in stale else f for f in facts]
-    if fresh not in facts:
-        facts.insert(0, fresh)
-    return {**data, "facts": facts, "land_area_sotka": None}
+    out["facts"] = facts
+    return out
 
 
 def _listing_block_kind(data: dict[str, Any]) -> str | None:
@@ -991,10 +1003,12 @@ def listings_page(request: Request, user: UserDep):
 
 def _compose_guards(pf: dict[str, Any], data: dict[str, Any]) -> tuple[list[str], list[str], str]:
     """Что модели нельзя: по фактам ЕГРН, а не по вере в промпт (прод 20.10)."""
+    from landcheck.listing import normalize_category
+
     object_type = data.get("object_type") or ""
-    if not pf.get("category"):
-        object_type = "не определён: категория земель в ЕГРН не установлена, назначение не называть"
-    facts = list(data.get("facts") or [])
+    if not normalize_category(pf.get("category")):
+        object_type = ""  # рубрику не передаём: модель принимала её за назначение участка
+    facts = [f for f in data.get("facts") or [] if "не установлен" not in f.lower()]
     forbidden: list[str] = []
     area = pf.get("best_area_m2")
     if area is not None and area < 50:
@@ -1057,7 +1071,7 @@ def listing_page(request: Request, user: UserDep, listing_id: int):
         row = _own_listing(db, user, listing_id)
         # Контроль противоречий пересчитывается при каждом просмотре: правила меняются,
         # а сохранённый список мог устареть (Клавдий, прод 19.10).
-        fixed = _refresh_tiny_area(row.data)
+        fixed = _refresh_listing_data(row.data)
         changed = fixed is not None
         if fixed is not None:
             row.data = fixed

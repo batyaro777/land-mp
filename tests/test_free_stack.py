@@ -259,13 +259,21 @@ def test_collect_documents_prefers_page_text_over_snippet():
         Purpose.SNT,
         search_fn=lambda q, max_results, news, recent=False: {
             "results": [
-                {"title": "Новости Белокурихи", "url": "https://x.ru/news/1", "snippet": "sn"}
+                {
+                    "title": "Новости Белокурихи",
+                    "url": "https://x.ru/news/1",
+                    "snippet": "В Белокурихе " + "новость " * 20,
+                },
+                {"title": "Белокуриха кратко", "url": "https://x.ru/news/2", "snippet": "sn"},
             ],
             "error": None,
         },
-        fetch_fn=lambda urls: {"https://x.ru/news/1": "short"},
+        fetch_fn=lambda urls: {"https://x.ru/news/1": "short", "https://x.ru/news/2": "short"},
     )
-    assert docs[0]["text"] == "sn" and len(queries) == len(build_queries("Белокуриха", Purpose.SNT))
+    assert [d["url"] for d in docs] == ["https://x.ru/news/1"]  # сниппет короче 150 знаков — мимо
+    assert docs[0]["text"].startswith("В Белокурихе") and len(queries) == len(
+        build_queries("Белокуриха", Purpose.SNT)
+    )
 
 
 def test_packager_uses_free_llm_first(monkeypatch):
@@ -375,7 +383,7 @@ def test_relevance_filter_drops_offtopic_documents():
         {"title": "x", "snippet": "село Элекмонар получит газ", "text": ""}, "Элекмонар"
     )
     assert is_relevant(
-        {"title": "x", "snippet": "", "text": "в Белокурихе построят… Белокуриха ждёт. Белокуриха"},
+        {"title": "x", "snippet": "", "text": "в Белокурихе построят… Белокуриха ждёт"},
         "Белокуриха",
     )
 
@@ -387,7 +395,11 @@ def test_collect_documents_interleaves_queries():
         tag = "инвест" if "инвестиции проект" in q else ("свалка" if "свалка" in q else "x")
         return {
             "results": [
-                {"title": f"Белокуриха {tag} {i}", "url": f"https://{tag}.ru/{i}", "snippet": "s"}
+                {
+                    "title": f"Белокуриха {tag} {i}",
+                    "url": f"https://{tag}.ru/{i}",
+                    "snippet": "Белокуриха: " + "текст " * 30,
+                }
                 for i in range(6)
             ],
             "error": None,
@@ -414,7 +426,7 @@ def test_classifieds_and_passing_mentions_are_filtered():
         {"title": "Жильё в республике", "snippet": "", "text": text_once}, "Элекмонар"
     )
     assert is_relevant(
-        {"title": "Жильё", "snippet": "", "text": text_once + " Элекмонар, Элекмонар"}, "Элекмонар"
+        {"title": "Жильё", "snippet": "", "text": text_once + " Элекмонар"}, "Элекмонар"
     )
     assert is_relevant({"title": "Школа в Элекмонаре", "snippet": "", "text": ""}, "Элекмонар")
 
@@ -513,7 +525,11 @@ def test_sources_follow_final_citations_and_keep_numbers():
     def search_fn(q, max_results, news, recent=False):
         return {
             "results": [
-                {"title": f"Белокуриха {i}", "url": f"https://s{i}.ru/a", "snippet": "s"}
+                {
+                    "title": f"Белокуриха {i}",
+                    "url": f"https://s{i}.ru/a",
+                    "snippet": "Белокуриха: " + "текст " * 30,
+                }
                 for i in range(1, 4)
             ],
             "error": None,
@@ -546,3 +562,11 @@ def test_sources_follow_final_citations_and_keep_numbers():
     )
     assert r["grounded"] and [s["n"] for s in r["sources"]] == [3]
     assert r["sections"][2]["items"] == ["данных не найдено"]
+
+
+def test_generic_guides_are_junk():
+    from landcheck.region import is_junk
+
+    assert is_junk("https://shestakov-dom.com/blog/1", "Участок под глэмпинг: что нужно знать")
+    assert is_junk("https://site.ru/a", "Как выбрать участок под дом — советы")
+    assert not is_junk("https://tolknews.ru/news/1", "Обзор рынка земли Алтайского края 2026")

@@ -119,3 +119,24 @@ def test_listing_uses_ai_text_and_keeps_contradiction_check(client, monkeypatch)
     url2 = client.post("/listing", data={"cad_num": "50:09:0060202:101"}).headers["location"]
     page = client.get(url2).text
     assert "Текст собран ИИ" not in page and "По данным ЕГРН" in page
+
+
+def test_service_phrases_are_scrubbed_from_ai_text():
+    from landcheck.packager import build_prompt, scrub_service_phrases
+
+    title, desc = scrub_service_phrases(
+        "Участок в поселении, категория не установлена",
+        "Участок расположен в поселении. Точный населённый пункт не указан в предоставленных "
+        "данных.\n\nКатегория: категория не установлена. Границы установлены, участок отмежёван."
+        "\n\nПродавец отмечает: ровный участок.",
+    )
+    assert title == "Участок в поселении"
+    assert desc == (
+        "Участок расположен в поселении.\n\nГраницы установлены, участок отмежёван."
+        "\n\nПродавец отмечает: ровный участок."
+    )
+    assert scrub_service_phrases("Категория не установлена", "")[0] == "Земельный участок"
+    p = build_prompt(
+        facts=[], zouit_notes=[], notes="", object_type="", price_rub=None, fetched="2026-10-20"
+    )
+    assert "Рубрика площадки не определена" in p and "Служебные фразы" in p

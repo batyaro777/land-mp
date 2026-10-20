@@ -187,7 +187,7 @@ def test_compose_guards_forbid_purpose_without_vri_and_tiny_area_text_warning():
     facts, forbidden, object_type = _compose_guards(
         pf, {"facts": ["Площадь по ЕГРН 0.01 сот."], "object_type": "Поселений (ИЖС)"}
     )
-    assert facts == [] and object_type.startswith("не определён")
+    assert facts == [] and object_type == ""
     assert any("ВРИ в ЕГРН не установлен" in f for f in forbidden)
     assert any("площадь" in f for f in forbidden)
     tiny = ParcelFacts(
@@ -236,3 +236,52 @@ def test_no_category_no_vri_means_no_avito_type(client, fixtures_dir):  # noqa: 
     )
     assert any("уберите площадь" in w for w in contradictions(tiny, "площадь около 1 кв. м", None))
     assert any("рубрику площадки" in w for w in static_warnings(tiny))
+
+
+def test_unset_category_string_from_nspd_counts_as_missing(client, fixtures_dir):  # noqa: F811
+    import json
+
+    from landcheck.listing import normalize_category
+    from landcheck.web.app import _compose_guards, _refresh_listing_data
+    from tests.helpers import make_payload
+
+    assert normalize_category("Категория не установлена") is None
+    assert normalize_category("Земли населенных пунктов") == "Земли населенных пунктов"
+    (fixtures_dir / "50_09_0060202_558.json").write_text(
+        json.dumps(
+            make_payload(
+                "50:09:0060202:558", category="Категория не установлена", vri=None, vri_tab=[]
+            )
+        ),
+        encoding="utf-8",
+    )
+    _register(client, "unset@example.com")
+    url = client.post(
+        "/listing", data={"cad_num": "50:09:0060202:558", "price": "1000000"}
+    ).headers["location"]
+    page = client.get(url).text
+    assert "не определён (нет категории и ВРИ в ЕГРН)" in page and "Поселений (ИЖС)" not in page
+    assert "категория не установлена" not in page.lower().replace("категория земель и ври", "")
+    # старая запись: рубрика «Поселений (ИЖС)» и факт «Категория: категория не установлена»
+    old = {
+        "parcel_facts": {
+            "cad_num": "x",
+            "category": "Категория не установлена",
+            "permitted_use": None,
+            "permitted_use_all": "",
+            "best_area_m2": 1000.0,
+            "has_borders": True,
+            "zouit_count": 0,
+            "cadastral_cost_rub": None,
+        },
+        "facts": ["Категория: категория не установлена", "Границы установлены, участок отмежёван"],
+        "object_type": "Поселений (ИЖС)",
+        "land_area_sotka": 10.0,
+    }
+    fixed = _refresh_listing_data(old)
+    assert fixed["object_type"] == "" and fixed["facts"] == [
+        "Границы установлены, участок отмежёван"
+    ]
+    assert fixed["land_area_sotka"] == 10.0
+    _, forbidden, object_type = _compose_guards(old["parcel_facts"], old)
+    assert object_type == "" and any("ВРИ в ЕГРН не установлен" in f for f in forbidden)

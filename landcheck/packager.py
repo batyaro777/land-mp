@@ -30,10 +30,12 @@ _PROMPT = """Ты редактор объявлений о продаже зем
 гарантий):
 {notes}
 
-Рубрика площадки (это не назначение участка — назначение только из факта «ВРИ»): {object_type}.
+{rubric}
 Цена: {price}.
 Запрещено: {forbidden}.
-Если категория или ВРИ в фактах не установлены — так и пиши, назначение участка не придумывай.
+Если категории или ВРИ нет в фактах — назначение участка не придумывай и не пиши, что что-то
+«не указано» или «не установлено»: просто опиши участок без этого. Служебные фразы
+(«в предоставленных данных», «не указан», «не установлена») в заголовке и тексте запрещены.
 Площадь меньше одной сотки в фактах — вероятная ошибка данных: не называй её в заголовке.
 Не добавляй характеристик, которых нет в фактах и заметках: постройки или их отсутствие, подъезд
 и дорога, тишина, соседи, коммуникации, вид, лес, река — только если это написал продавец.
@@ -67,11 +69,17 @@ def build_prompt(
     forbidden: list[str] | None = None,
 ) -> str:
     rules = ["обещать то, чего нет в фактах ЕГРН", *(forbidden or [])]
+    rubric = (
+        f"Рубрика площадки (это не назначение участка — назначение только из факта «ВРИ»): "
+        f"{object_type}."
+        if object_type
+        else "Рубрика площадки не определена: категорию и назначение участка в тексте не упоминай."
+    )
     return _PROMPT.format(
         facts="\n".join(f"- {f}" for f in facts) or "- нет",
         zouit="\n".join(f"- {z}" for z in zouit_notes) or "- нет",
         notes=notes.strip() or "- нет",
-        object_type=object_type,
+        rubric=rubric,
         price=_fmt_price(price_rub),
         title_max=TITLE_MAX,
         fetched=fetched,
@@ -79,7 +87,29 @@ def build_prompt(
     )
 
 
+_SERVICE_RE = re.compile(
+    r"(не указан|не установлен|не определен|предоставленн\w* данн|исходн\w* данн|"
+    r"в данных|нет данных|отсутствует в)",
+    re.IGNORECASE,
+)
+
+
+def scrub_service_phrases(title: str, desc: str) -> tuple[str, str]:
+    """Модель пишет покупателю «Точный населённый пункт не указан в предоставленных данных»
+    и «категория не установлена» (прод 20.10) — такие предложения убираем кодом."""
+    parts = [p.strip() for p in title.split(",")]
+    title = ", ".join(p for p in parts if p and not _SERVICE_RE.search(p)) or "Земельный участок"
+    paragraphs: list[str] = []
+    for para in re.split(r"\n\s*\n", desc):
+        sentences = [x for x in re.split(r"(?<=[.!?])\s+", para.strip()) if x]
+        kept = [x for x in sentences if not _SERVICE_RE.search(x)]
+        if kept:
+            paragraphs.append(" ".join(kept))
+    return title, "\n\n".join(paragraphs)
+
+
 def _finish(title: str, desc: str, model: str) -> dict[str, Any]:
+    title, desc = scrub_service_phrases(title, desc)
     title = re.sub(r"\s+", " ", title).strip()[:TITLE_MAX].rstrip(" ,.;—-")
     return {"title": title, "description": desc.strip(), "model": model, "error": None}
 

@@ -23,6 +23,17 @@ AVITO_OBJECT_TYPES = {
 }
 
 
+_UNSET_RE = re.compile(r"не установлен", re.IGNORECASE)
+
+
+def normalize_category(category: str | None) -> str | None:
+    """НСПД присылает «Категория не установлена» строкой, а не пустым полем (прод 20.10) —
+    для всех проверок это отсутствие категории."""
+    if not category or _UNSET_RE.search(category):
+        return None
+    return category
+
+
 @dataclass
 class ParcelFacts:
     """Минимум фактов участка для повторной проверки текста после правок (хранится в БД)."""
@@ -41,7 +52,7 @@ class ParcelFacts:
     def from_parcel(cls, p: Parcel) -> ParcelFacts:
         return cls(
             cad_num=p.cad_num,
-            category=p.category,
+            category=normalize_category(p.category),
             permitted_use=p.permitted_use,
             permitted_use_all=p.permitted_use_all,
             best_area_m2=p.best_area_m2,
@@ -53,7 +64,9 @@ class ParcelFacts:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> ParcelFacts:
-        return cls(**{k: d.get(k) for k in cls.__dataclass_fields__})  # type: ignore[arg-type]
+        obj = cls(**{k: d.get(k) for k in cls.__dataclass_fields__})  # type: ignore[arg-type]
+        obj.category = normalize_category(obj.category)
+        return obj
 
     def to_dict(self) -> dict[str, Any]:
         return {k: getattr(self, k) for k in self.__dataclass_fields__}
@@ -74,13 +87,14 @@ class Draft:
 
 
 def _guess_object_type(parcel: Parcel) -> str:
-    cls = category_class(parcel.category)
+    category = normalize_category(parcel.category)
+    cls = category_class(category)
     vri = parcel.permitted_use_all
     if cls == "industry":
         return AVITO_OBJECT_TYPES["industry"]
     if cls == "agri" or vri_match(Purpose.SNT, vri) == "match":
         return AVITO_OBJECT_TYPES["snt"]
-    if not parcel.category and not vri:
+    if not category and not vri:
         return ""  # ни категории, ни ВРИ в ЕГРН — рубрику площадки не определить
     return AVITO_OBJECT_TYPES["izhs"]
 
@@ -202,8 +216,9 @@ def build_draft(
         area_s = None
     elif area_s:
         facts.append(f"Площадь по ЕГРН {area_s} сот.")
-    if parcel.category:
-        facts.append(f"Категория: {parcel.category.lower()}")
+    category = normalize_category(parcel.category)
+    if category:
+        facts.append(f"Категория: {category.lower()}")
     if vri:
         facts.append(f"ВРИ: {vri}")
     facts.append(
@@ -219,7 +234,12 @@ def build_draft(
             + "; ".join(z.describe(max_len=60) for z in parcel.territorial_zones[:2])
         )
 
-    zouit_notes = list(dict.fromkeys(z.describe(max_len=120) for z in parcel.zouit))
+    # Дубли убираем по реестровому номеру или полному описанию, не по обрезанной строке:
+    # иначе «Граница III зоны округа…» и «Граница округа…» склеивались (прод 20.10).
+    uniq: dict[str, Any] = {}
+    for z in parcel.zouit:
+        uniq.setdefault(z.reg_number or z.describe(max_len=10_000), z)
+    zouit_notes = [z.describe(max_len=120) for z in uniq.values()]
 
     title_bits = ["Участок"]
     if area_s:
