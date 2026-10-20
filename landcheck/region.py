@@ -234,8 +234,21 @@ def research_region(
 
 
 # --- бесплатный путь: поиск → страницы → модель ------------------------------------------
+_PLACE_PREFIX = re.compile(
+    r"^(городской округ|муниципальный округ|муниципальный район|город|г\.|с\.|село|пос\.|посёлок|"
+    r"поселок|д\.|деревня|ст-ца|станица|рп|пгт)\s+",
+    re.IGNORECASE,
+)
+
+
+def short_place(locality: str) -> str:
+    """«Алтайский край, городской округ Белокуриха» → «Белокуриха» для поисковых запросов."""
+    last = locality.split(",")[-1].strip() or locality
+    return _PLACE_PREFIX.sub("", last).strip() or last
+
+
 def build_queries(locality: str, purpose: Purpose) -> list[dict[str, Any]]:
-    short = locality.split(",")[-1].strip() or locality
+    short = short_place(locality)
     year = datetime.now(UTC).year
     return [
         {"q": f"{short} инвестиции проект {year}", "news": False, "recent": True},
@@ -259,7 +272,7 @@ def collect_documents(
     docs: list[dict[str, Any]] = []
     queries: list[str] = []
     errors: list[str] = []
-    short = locality.split(",")[-1].strip().lower()
+    short = short_place(locality).lower()
     for spec in build_queries(locality, purpose):
         queries.append(spec["q"])
         res = search_fn(

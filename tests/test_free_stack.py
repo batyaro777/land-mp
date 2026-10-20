@@ -347,3 +347,14 @@ def test_packager_prompt_forbids_area_on_data_error():
         forbidden=["называть площадь участка"],
     )
     assert "Запрещено: обещать то, чего нет в фактах ЕГРН; называть площадь участка." in p
+
+
+def test_short_place_strips_municipal_prefixes():
+    from landcheck.region import build_queries, short_place
+
+    assert short_place("Алтайский край, городской округ Белокуриха") == "Белокуриха"
+    assert short_place("Республика Алтай, Чемальский район, с. Элекмонар") == "Элекмонар"
+    assert short_place("Московская область") == "Московская область"
+    assert build_queries("Алтайский край, г. Белокуриха", Purpose.IZHS)[0]["q"].startswith(
+        "Белокуриха "
+    )
