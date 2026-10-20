@@ -256,10 +256,35 @@ def short_place(locality: str) -> str:
     return _PLACE_PREFIX.sub("", last).strip() or last
 
 
+def district_of(locality: str) -> str | None:
+    """«Республика Алтай, Чемальский район, с. Элекмонар» → «Чемальский район»."""
+    for part in locality.split(","):
+        part = part.strip()
+        if re.search(r"\bрайон\b|\bр-н\b", part, re.IGNORECASE) and short_place(part) != part:
+            continue
+        if re.search(r"\bрайон\b|\bр-н\b", part, re.IGNORECASE):
+            return part
+    return None
+
+
+def _stem(word: str) -> str:
+    w = word.lower()
+    return w[:-1] if len(w) > 5 else w
+
+
+def district_stem(locality: str) -> str | None:
+    """«Чемальский район» → «чемальск»: основа для поиска упоминаний района в документах."""
+    d = district_of(locality)
+    if not d:
+        return None
+    name = re.sub(r"\s*(район|р-н)\s*", " ", d, flags=re.IGNORECASE).strip()
+    return name.lower()[:-2] if len(name) > 6 else name.lower()
+
+
 def build_queries(locality: str, purpose: Purpose) -> list[dict[str, Any]]:
     short = short_place(locality)
     year = datetime.now(UTC).year
-    return [
+    queries = [
         {"q": f"{short} инвестиции проект {year}", "news": False, "recent": True},
         {"q": f"{short} строительство дорога газификация {year}", "news": False, "recent": True},
         {"q": f"{short} свалка полигон промзона кладбище", "news": False, "recent": False},
@@ -267,6 +292,19 @@ def build_queries(locality: str, purpose: Purpose) -> list[dict[str, Any]]:
         {"q": f"{short} генплан застройка мастер-план", "news": False, "recent": False},
         {"q": f"{short} инвестиции строительство", "news": True, "recent": True},
     ]
+    district = district_of(locality)
+    if district and short_place(district).lower() != short.lower():
+        # Для села своих новостей мало (Элекмонар: 2 документа с одного сайта, прод 20.10) —
+        # добавляем район: дороги, газ, инвестиции и генплан там решаются на уровне района.
+        queries += [
+            {
+                "q": f"{district} дорога газификация инвестиции {year}",
+                "news": False,
+                "recent": True,
+            },
+            {"q": f"{district} генплан ПЗЗ полигон отходов", "news": False, "recent": False},
+        ]
+    return queries
 
 
 def collect_documents(
@@ -282,6 +320,7 @@ def collect_documents(
     queries: list[str] = []
     errors: list[str] = []
     short = short_place(locality).lower()
+    extra = [x for x in (district_stem(locality),) if x]
     for spec in build_queries(locality, purpose):
         queries.append(spec["q"])
         res = search_fn(
@@ -318,7 +357,7 @@ def collect_documents(
     for d in docs:
         text = texts.get(d["url"]) or ""
         d["text"] = text if len(text) >= MIN_DOC_CHARS else d["snippet"]
-        if len(d["text"]) >= MIN_SNIPPET_CHARS and is_relevant(d, short):
+        if len(d["text"]) >= MIN_SNIPPET_CHARS and is_relevant(d, short, extra):
             kept.append(d)
         if len(kept) >= max_docs:
             break
@@ -374,19 +413,22 @@ def is_classified(url: str, title: str) -> bool:
     return bool(_CLASSIFIED_TITLE.search(title or ""))
 
 
-def is_relevant(doc: dict[str, Any], locality_short: str) -> bool:
-    """Документ должен упоминать населённый пункт: иначе в сводку по Элекмонару попадают
-    «Газпром: Калининградское ПХГ» и статистика по всей республике (прод, 20.10)."""
+def is_relevant(
+    doc: dict[str, Any], locality_short: str, extra_stems: list[str] | None = None
+) -> bool:
+    """Документ должен упоминать населённый пункт (или его район): иначе в сводку по Элекмонару
+    попадают «Газпром: Калининградское ПХГ» и статистика по всей республике (прод, 20.10)."""
     if not locality_short:
         return True
-    stem = locality_short.lower()[:-1] if len(locality_short) > 5 else locality_short.lower()
+    stems = [_stem(locality_short), *(extra_stems or [])]
     head = f"{doc.get('title') or ''} {doc.get('snippet') or ''}".lower()
-    if stem in head:
+    if any(st in head for st in stems):
         return True
     # В тексте — не меньше двух упоминаний: одно «в том числе в Элекмонаре» в статистике
     # по всей республике ещё не делает страницу местной. Порог 3 отрезал местные новости
     # (прокуратура, дорога к Каракольским озёрам — Клавдий, прод 20.10).
-    return (doc.get("text") or "").lower().count(stem) >= 2
+    text = (doc.get("text") or "").lower()
+    return any(text.count(st) >= 2 for st in stems)
 
 
 # Общие советы и гайды («Участок под глэмпинг: что нужно знать») — не про локацию
@@ -440,6 +482,7 @@ _STATUS_RE = re.compile(
     re.IGNORECASE,
 )
 REGIONAL_MARK = "(по региону в целом)"
+DISTRICT_MARK = "(по району в целом)"
 
 
 def postprocess_sections(
@@ -447,6 +490,7 @@ def postprocess_sections(
     locality_short: str,
     region_name: str,
     cad_num: str | None = None,
+    district_name: str | None = None,
 ) -> list[dict[str, Any]]:
     """Что бесплатная модель не делает по промпту — делаем кодом (Клавдий, прод 20.10):
     цифры по всей республике без пометки, участок ООПТ из чужого кадастрового района,
@@ -454,6 +498,10 @@ def postprocess_sections(
     stem = (locality_short or "").lower()
     stem = stem[:-1] if len(stem) > 5 else stem
     region = (region_name or "").lower().strip()
+    dstem = None
+    if district_name:
+        d_clean = re.sub(r"\s*(район|р-н)\s*", " ", district_name, flags=re.IGNORECASE).strip()
+        dstem = d_clean.lower()[:-2] if len(d_clean) > 6 else d_clean.lower()
     district = (
         cad_num.split(":")[0] + ":" + cad_num.split(":")[1]
         if cad_num and cad_num.count(":") == 3
@@ -474,10 +522,15 @@ def postprocess_sections(
                 continue
             local = bool(stem) and stem in low
             regional = _REGIONAL_RE.search(it) or (region and region in low)
+            mark = None
             if not local and REGIONAL_MARK not in low and regional:
-                it = re.sub(r"\s*(\[[\d,\s]+\])\s*\.?\s*$", rf" {REGIONAL_MARK} \1", it, count=1)
-                if REGIONAL_MARK not in it:
-                    it = f"{it} {REGIONAL_MARK}"
+                mark = REGIONAL_MARK
+            elif not local and dstem and dstem in low and DISTRICT_MARK not in low:
+                mark = DISTRICT_MARK
+            if mark:
+                it = re.sub(r"\s*(\[[\d,\s]+\])\s*\.?\s*$", rf" {mark} \1", it, count=1)
+                if mark not in it:
+                    it = f"{it} {mark}"
             items.append(it)
         out.append({"title": sec["title"], "items": items or ["данных не найдено"]})
     return out
@@ -540,7 +593,7 @@ def research_region_search(
                 items.append(text)
         sections.append({"title": title, "items": items or ["данных не найдено"]})
     sections = postprocess_sections(
-        sections, short_place(locality), locality.split(",")[0], cad_num
+        sections, short_place(locality), locality.split(",")[0], cad_num, district_of(locality)
     )
     # Ссылки считаем по итоговым пунктам: документ, на который ссылался только вырезанный
     # пункт, в источниках не нужен (Клавдий, прод 20.10).

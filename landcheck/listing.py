@@ -24,6 +24,12 @@ AVITO_OBJECT_TYPES = {
 
 
 _UNSET_RE = re.compile(r"не установлен", re.IGNORECASE)
+# Служебные фразы, которые модель пишет покупателю вместо фактов (прод 20.10)
+SERVICE_RE = re.compile(
+    r"(категория не установлена|не указан[аоы]? в |в предоставленных данных|исходных данных|"
+    r"не предоставил|дополнительн\w* сведен|сведений нет|нет данных о|отсутствует в данных)",
+    re.IGNORECASE,
+)
 
 
 def normalize_category(category: str | None) -> str | None:
@@ -159,6 +165,11 @@ def contradictions(f: ParcelFacts, text: str, price_rub: float | None) -> list[s
                     f"в тексте {claimed:g} сот., по ЕГРН {actual:.1f} сот. — в объявление идёт площадь ЕГРН"
                 )
                 break
+    m_svc = SERVICE_RE.search(t)
+    if m_svc:
+        out.append(
+            f"в тексте служебная фраза «{m_svc.group(0).strip()}…» — уберите, покупателю она не нужна"
+        )
     if ("межеван" in t or "границы установлены" in t) and not f.has_borders:
         out.append("в тексте межевание сделано, а в ЕГРН границы не установлены")
     if "без обременений" in t and f.zouit_count:
@@ -239,7 +250,7 @@ def build_draft(
     uniq: dict[str, Any] = {}
     for z in parcel.zouit:
         uniq.setdefault(z.reg_number or z.describe(max_len=10_000), z)
-    zouit_notes = [z.describe(max_len=120) for z in uniq.values()]
+    zouit_notes = [z.listing_note(max_len=120) for z in uniq.values()]
 
     title_bits = ["Участок"]
     if area_s:

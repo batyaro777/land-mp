@@ -138,6 +138,19 @@ class ZoneHit:
             return "терзона"
         return self.layer
 
+    def listing_note(self, max_len: int = 120) -> str:
+        """Строка для объявления: название впереди, реестровый номер не обрезается — иначе две
+        горно-санитарные зоны с длинным видом неразличимы (Клавдий, прод 20.10)."""
+        tail = f" ({self.reg_number})" if self.reg_number else ""
+        main = self.name or self.kind or self.layer_short
+        if self.kind and self.name and self.kind != self.name:
+            full = f"{self.name} — {self.kind}"
+            main = full if len(full) + len(tail) <= max_len else self.name
+        room = max_len - len(tail)
+        if len(main) > room:
+            main = main[: room - 1] + "…"
+        return main + tail
+
     def describe(self, max_len: int = 120) -> str:
         """Одна строка для таблицы: вид · название (реестровый номер)."""
         parts = [p for p in (self.kind, self.name) if p]

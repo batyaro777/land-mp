@@ -285,3 +285,33 @@ def test_unset_category_string_from_nspd_counts_as_missing(client, fixtures_dir)
     assert fixed["land_area_sotka"] == 10.0
     _, forbidden, object_type = _compose_guards(old["parcel_facts"], old)
     assert object_type == "" and any("ВРИ в ЕГРН не установлен" in f for f in forbidden)
+
+
+def test_zouit_listing_notes_distinguish_zones_and_service_phrase_warning():
+    from landcheck.listing import ParcelFacts, contradictions
+    from landcheck.models import ZoneHit
+
+    kind = (
+        "Округ санитарной (горно-санитарной) охраны лечебно-оздоровительных местностей, "
+        "курортов и природных лечебных ресурсов"
+    )
+    a = ZoneHit(layer="z", reg_number="22:00-6.1134", kind=kind, name="Граница III зоны округа")
+    b = ZoneHit(layer="z", reg_number="22:00-6.1132", kind=kind, name="Граница округа")
+    na, nb = a.listing_note(max_len=120), b.listing_note(max_len=120)
+    assert na != nb and na.endswith("(22:00-6.1134)") and nb.endswith("(22:00-6.1132)")
+    assert na.startswith("Граница III зоны округа") and len(na) <= 120
+    pf = ParcelFacts(
+        cad_num="x",
+        category=None,
+        permitted_use=None,
+        permitted_use_all="",
+        best_area_m2=1000.0,
+        has_borders=True,
+        zouit_count=0,
+        cadastral_cost_rub=None,
+    )
+    ws = contradictions(pf, "Участок ровный. Категория: категория не установлена.", None)
+    assert any("служебная фраза" in w for w in ws)
+    ws = contradictions(pf, "Продавец не предоставил дополнительных сведений.", None)
+    assert any("служебная фраза" in w for w in ws)
+    assert contradictions(pf, "Участок ровный, у реки.", None) == []

@@ -1048,7 +1048,15 @@ def _compose_with_ai(data: dict[str, Any]) -> dict[str, Any]:
         log.warning("compose failed: %s", res["error"])
         data["composed_error"] = res["error"]
         return data
-    data["title"] = res["title"] or data.get("title")
+    if not object_type and not any(f.startswith("Площадь по ЕГРН ") for f in facts):
+        # Ни рубрики, ни площади — модели нечего сказать в заголовке, она пишет
+        # «Участок в районе с установленными границами» (прод 20.10). Заголовок — шаблонный.
+        from landcheck.listing import _short_locality
+
+        loc = _short_locality(data.get("address"))
+        data["title"] = f"Земельный участок — {loc}" if loc else "Земельный участок"
+    else:
+        data["title"] = res["title"] or data.get("title")
     data["description"] = res["description"]
     data["composed_by"] = res["model"]
     data.pop("composed_error", None)

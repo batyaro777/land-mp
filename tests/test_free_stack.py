@@ -570,3 +570,36 @@ def test_generic_guides_are_junk():
     assert is_junk("https://shestakov-dom.com/blog/1", "Участок под глэмпинг: что нужно знать")
     assert is_junk("https://site.ru/a", "Как выбрать участок под дом — советы")
     assert not is_junk("https://tolknews.ru/news/1", "Обзор рынка земли Алтайского края 2026")
+
+
+def test_district_queries_relevance_and_mark():
+    from landcheck.region import (
+        DISTRICT_MARK,
+        build_queries,
+        district_of,
+        district_stem,
+        is_relevant,
+        postprocess_sections,
+    )
+
+    loc = "Республика Алтай, Чемальский район, с. Элекмонар"
+    assert district_of(loc) == "Чемальский район" and district_stem(loc) == "чемальск"
+    assert district_of("Алтайский край, г. Белокуриха") is None
+    qs = build_queries(loc, Purpose.IZHS)
+    assert len(qs) == 8 and qs[6]["q"].startswith("Чемальский район ")
+    assert len(build_queries("Алтайский край, г. Белокуриха", Purpose.IZHS)) == 6
+    doc = {"title": "В Чемальском районе газифицируют сёла", "snippet": "", "text": ""}
+    assert is_relevant(doc, "Элекмонар", ["чемальск"]) and not is_relevant(doc, "Элекмонар")
+    out = postprocess_sections(
+        [
+            {
+                "title": "Дороги и инфраструктура",
+                "items": ["Газ придёт в Чемальский район в 2027 [2]"],
+            }
+        ],
+        "Элекмонар",
+        "Республика Алтай",
+        None,
+        "Чемальский район",
+    )
+    assert out[0]["items"] == [f"Газ придёт в Чемальский район в 2027 {DISTRICT_MARK} [2]"]
