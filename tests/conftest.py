@@ -5,6 +5,13 @@ import pytest
 
 from tests.helpers import make_payload, zone
 
+
+@pytest.fixture(autouse=True)
+def _no_elevation_network(monkeypatch):
+    """Рельеф в тестах не ходит в сеть: модуль выключен, кроме явных проверок с fetch."""
+    monkeypatch.setenv("LANDCHECK_ELEVATION_URL", "off")
+
+
 TZ = [zone("Территориальные зоны", "50:09-7.1", "Ж-1", "Зона застройки ИЖС")]
 
 # Синтетический набор: 8 участков с разными дефектами + 1 отсутствующий.

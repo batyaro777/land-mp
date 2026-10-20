@@ -141,6 +141,15 @@
 </article>
 {% endif %}
 
+{% if docs %}
+  {% include "_docs.html" %}
+{% elif not public %}
+<article id="docs" hx-get="{{ docs_url }}" hx-trigger="load delay:2s" hx-swap="outerHTML">
+  <h4>Документы и упоминания участка</h4>
+  <p class="muted small" aria-busy="true">Ищу кадастровый номер в судах, торгах, актах и новостях…</p>
+</article>
+{% endif %}
+
 {% if price %}
 <article>
   <h4>Ценовой ориентир за сотку</h4>

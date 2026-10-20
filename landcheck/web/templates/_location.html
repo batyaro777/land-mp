@@ -21,6 +21,14 @@
       {% endfor %}
     </ul>
     {% endif %}
+    {% if terrain is defined and terrain %}
+    <p style="margin-top:0.75rem"><strong>Рельеф</strong>
+      {% if terrain.error %}<span class="muted small">— {{ terrain.error }}</span>
+      {% else %}{% if terrain.level != 'neutral' %}<span class="badge mini v-{{ sev[terrain.level] }}">{{ {'risk':'риск','plus':'плюс'}[terrain.level] }}</span>{% endif %}
+      <span class="small">высота {{ terrain.elevation_m }} м, перепад по участку {{ terrain.drop_m }} м</span>{% endif %}</p>
+    {% if not terrain.error %}<ul class="loc-list">{% for n in terrain.notes %}<li>{{ n|ucfirst }}</li>{% endfor %}</ul>
+    <p class="muted small">{{ terrain.source }}: модель местности 90 м, для проекта нужна топосъёмка.</p>{% endif %}
+    {% endif %}
   </div>
   <div>
     <strong>Негативные факторы</strong>

@@ -42,8 +42,12 @@ DEFAULT_MODELS: dict[str, tuple[str, ...]] = {
     ),
     "mistral": ("mistral-medium-latest", "mistral-small-latest"),
     "gemini": ("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash"),
+    # DeepSeek напрямую: ~$0.3/M входных и $1.2/M выходных токенов на Flash (пик), «Регион»
+    # обходится в доли цента; JSON-режим поддерживается. Первый в цепочке, если есть ключ.
+    "deepseek": ("deepseek-flash", "deepseek-v4-pro"),
 }
 BASE_URLS = {
+    "deepseek": "https://api.deepseek.com/v1",
     "groq": "https://api.groq.com/openai/v1",
     "openrouter": "https://openrouter.ai/api/v1",
     "mistral": "https://api.mistral.ai/v1",
@@ -64,9 +68,9 @@ def _models_from_env(name: str) -> tuple[str, ...]:
 def providers_from_env(order: str | None = None) -> list[Provider]:
     """Провайдеры с ключами в окружении, в порядке LANDCHECK_LLM.
 
-    По умолчанию groq,openrouter,mistral; без ключа провайдер пропускается.
+    По умолчанию deepseek,groq,openrouter,mistral; без ключа провайдер пропускается.
     """
-    order = order or os.environ.get("LANDCHECK_LLM") or "groq,openrouter,mistral"
+    order = order or os.environ.get("LANDCHECK_LLM") or "deepseek,groq,openrouter,mistral"
     out: list[Provider] = []
     for name in (n.strip().lower() for n in order.split(",")):
         if name not in BASE_URLS:

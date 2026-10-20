@@ -578,9 +578,12 @@ def _report_ctx(check: Check, item: CheckItem, public: bool) -> dict[str, Any]:
         "purpose": purpose,
         "goal": goal_summary(data, purpose),
         "loc": loc,
+        "terrain": data.get("terrain"),
         "location_url": f"/checks/{check.id}/items/{item.cad_num}/location",
         "region": region,
         "region_url": f"/checks/{check.id}/items/{item.cad_num}/region",
+        "docs": data.get("docs"),
+        "docs_url": f"/checks/{check.id}/items/{item.cad_num}/docs",
         "region_enabled": settings.region_enabled,
         "checklist": CHECKLIST,
         "price": price_orientation(data, (check.stats or {}).get("median_price_per_sotka")),
@@ -645,17 +648,75 @@ def report_location(request: Request, user: UserDep, check_id: int, cad_num: str
                 area_m2=parcel.get("area_m2"),
             )
             data["location"] = loc
+            data["terrain"] = _terrain_for(parcel.get("geometry"), loc)
+            item.data = data
+            db.commit()
+        elif data.get("terrain") is None and parcel.get("geometry"):
+            data["terrain"] = _terrain_for(parcel.get("geometry"), loc)
             item.data = data
             db.commit()
         return render(
             request,
             "_location.html",
             loc=loc,
+            terrain=data.get("terrain"),
             public=False,
             location_url=f"/checks/{check.id}/items/{cad_num}/location",
             region=data.get("region"),
             user=user,
             **_loc_extras(loc, data.get("region")),
+        )
+
+
+def _terrain_for(
+    geometry: dict[str, Any] | None, loc: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """Рельеф с учётом воды рядом и зоны затопления из «Локации» (ТЗ v2, рельеф и вода)."""
+    import json
+
+    from landcheck.location import water_summary
+    from landcheck.terrain import terrain_summary
+
+    if not geometry:
+        return None
+    water_m = None
+    flood = False
+    if loc:
+        ws = water_summary(loc)
+        dists = [
+            i.get("distance_m") for i in (ws.get("items") or []) if i.get("distance_m") is not None
+        ]
+        water_m = min(dists) if dists else None
+        flood = "затоплен" in json.dumps(loc, ensure_ascii=False).lower()
+    return terrain_summary(geometry, water_distance_m=water_m, flood_zone=flood)
+
+
+@router.get("/checks/{check_id}/items/{cad_num}/docs", response_class=HTMLResponse)
+def report_docs(request: Request, user: UserDep, check_id: int, cad_num: str, refresh: int = 0):
+    """Блок «Документы и упоминания» (HTMX): поиск по кадастровому номеру, результат в item.data."""
+    from landcheck.docs_search import search_documents
+
+    with session() as db:
+        check = _own_check(db, user, check_id)
+        item = db.scalar(
+            select(CheckItem).where(CheckItem.check_id == check.id, CheckItem.cad_num == cad_num)
+        )
+        if item is None:
+            raise HTTPException(404)
+        data = dict(item.data)
+        docs = data.get("docs")
+        if docs is None or refresh:
+            docs = search_documents(cad_num)
+            data["docs"] = docs
+            item.data = data
+            db.commit()
+        return render(
+            request,
+            "_docs.html",
+            docs=docs,
+            public=False,
+            docs_url=f"/checks/{check.id}/items/{cad_num}/docs",
+            user=user,
         )
 
 
