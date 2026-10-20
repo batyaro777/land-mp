@@ -301,7 +301,7 @@ def collect_documents(
     for d in docs:
         text = texts.get(d["url"]) or ""
         d["text"] = text if len(text) >= MIN_DOC_CHARS else d["snippet"]
-        if d["text"]:
+        if d["text"] and is_relevant(d, short):
             kept.append(d)
         if len(kept) >= max_docs:
             break
@@ -315,7 +315,27 @@ _JUNK_HOSTS = (
     "duckduckgo.com",
     "go.mail.ru",
     "rambler.ru/search",
+    # доски объявлений и соцсети: цены юнитов и реклама, а не планы территории
+    "domclick.ru",
+    "avito.ru",
+    "cian.ru",
+    "youla.ru",
+    "vk.com",
+    "vk.ru",
+    "ok.ru",
+    "t.me",
+    "dzen.ru",
 )
+
+
+def is_relevant(doc: dict[str, Any], locality_short: str) -> bool:
+    """Документ должен упоминать населённый пункт: иначе в сводку по Элекмонару попадают
+    «Газпром: Калининградское ПХГ» и статистика по всей республике (прод, 20.10)."""
+    if not locality_short:
+        return True
+    stem = locality_short.lower()[:-1] if len(locality_short) > 5 else locality_short.lower()
+    hay = f"{doc.get('title') or ''} {doc.get('snippet') or ''} {doc.get('text') or ''}".lower()
+    return stem in hay
 
 
 def is_junk(url: str, title: str, locality_short: str = "") -> bool:

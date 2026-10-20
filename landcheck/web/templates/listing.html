@@ -10,9 +10,15 @@
 {% elif err == 'unpublished' %}<p class="err">Объявление снято с публикации: после правок в тексте появились противоречия с кадастром. Исправьте и опубликуйте снова.</p>{% endif %}
 {% if d.warnings %}
 <article class="flag check">
+  {% if block_kind == 'data' %}
+  <strong>Публикация и выгрузка закрыты: с самим участком не всё в порядке</strong>
+  <ul>{% for w in d.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+  <p class="small muted">Текстом это не исправить: нужны межевание или уточнение данных в Росреестре (выписка ЕГРН). После исправления нажмите «Обновить данные» в разовой проверке участка.</p>
+  {% else %}
   <strong>Выгрузка заблокирована, пока текст противоречит кадастру</strong>
   <ul>{% for w in d.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
   <p class="small muted">Исправьте текст и нажмите «Сохранить правки» — проверка повторится.</p>
+  {% endif %}
 </article>
 {% endif %}
 <article class="verify">
@@ -73,7 +79,7 @@
   <h4>Факты из НСПД в тексте</h4>
   <ul class="small">{% for f in d.facts %}<li>{{ f }}</li>{% endfor %}</ul>
   {% if d.zouit_notes %}<h4>ЗОУИТ</h4><ul class="small">{% for z in d.zouit_notes %}<li>{{ z }}</li>{% endfor %}</ul>{% endif %}
-  <p class="small"><strong>Тип для Avito:</strong> {{ d.object_type }} · <strong>Площадь:</strong> {{ d.land_area_sotka }} сот.</p>
+  <p class="small"><strong>Тип для Avito:</strong> {{ d.object_type }} · <strong>Площадь:</strong> {{ d.land_area_sotka ~ ' сот.' if d.land_area_sotka else 'не определена' }}</p>
   {% if d.images %}
   <h4>Фото ({{ d.images|length }})</h4>
   <div class="photos">{% for img in d.images %}<img src="{{ img }}" alt="">{% endfor %}</div>

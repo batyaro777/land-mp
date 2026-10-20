@@ -158,7 +158,7 @@ def test_region_search_pipeline_with_fakes():
             return {
                 "results": [
                     {
-                        "title": "Новость",
+                        "title": "Новость Белокурихи",
                         "url": "https://n.ru/1",
                         "snippet": "s",
                         "date": "2026-07-23",
@@ -170,7 +170,7 @@ def test_region_search_pipeline_with_fakes():
         return {
             "results": [
                 {
-                    "title": "Инвестпроект",
+                    "title": "Инвестпроект в Белокурихе",
                     "url": "https://a.ru/1",
                     "snippet": "кратко",
                     "engine": "ddgs",
@@ -258,7 +258,9 @@ def test_collect_documents_prefers_page_text_over_snippet():
         "Белокуриха",
         Purpose.SNT,
         search_fn=lambda q, max_results, news, recent=False: {
-            "results": [{"title": "Новости X", "url": "https://x.ru/news/1", "snippet": "sn"}],
+            "results": [
+                {"title": "Новости Белокурихи", "url": "https://x.ru/news/1", "snippet": "sn"}
+            ],
             "error": None,
         },
         fetch_fn=lambda urls: {"https://x.ru/news/1": "short"},
@@ -358,3 +360,18 @@ def test_short_place_strips_municipal_prefixes():
     assert build_queries("Алтайский край, г. Белокуриха", Purpose.IZHS)[0]["q"].startswith(
         "Белокуриха "
     )
+
+
+def test_relevance_filter_drops_offtopic_documents():
+    from landcheck.region import is_junk, is_relevant
+
+    assert is_junk("https://domclick.ru/card/1", "Участок 10 сот", "элекмонар")
+    assert is_junk("https://vk.com/wall-1_2", "пост", "элекмонар")
+    assert not is_relevant(
+        {"title": "Газпром: Калининградское ПХГ", "snippet": "", "text": "..."}, "Элекмонар"
+    )
+    assert is_relevant({"title": "Школа в Элекмонаре", "snippet": "", "text": ""}, "Элекмонар")
+    assert is_relevant(
+        {"title": "x", "snippet": "село Элекмонар получит газ", "text": ""}, "Элекмонар"
+    )
+    assert is_relevant({"title": "x", "snippet": "", "text": "в Белокурихе построят"}, "Белокуриха")

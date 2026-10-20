@@ -127,3 +127,22 @@ def test_zone_name_from_nspd_is_not_a_seller_claim():
     )
     assert contradictions(tiny, "участок 0 сот.", None) == []
     assert any("ошибку данных" in w for w in static_warnings(tiny))
+
+
+def test_tiny_area_listing_facts_and_block_reason(client, fixtures_dir):  # noqa: F811
+    import json
+
+    from tests.helpers import make_payload
+
+    (fixtures_dir / "50_09_0060202_555.json").write_text(
+        json.dumps(make_payload("50:09:0060202:555", area=1.0, specified_area=1.0)),
+        encoding="utf-8",
+    )
+    _register(client, "tiny@example.com")
+    url = client.post(
+        "/listing", data={"cad_num": "50:09:0060202:555", "price": "1000000"}
+    ).headers["location"]
+    page = client.get(url).text
+    assert "0.01 сот" not in page and "не определена" in page
+    assert "похоже на ошибку данных" in page
+    assert "с самим участком не всё в порядке" in page and "Исправьте текст" not in page

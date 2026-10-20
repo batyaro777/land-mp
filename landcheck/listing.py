@@ -179,7 +179,14 @@ def build_draft(
     )
 
     facts: list[str] = []
-    if area_s:
+    tiny = bool(parcel.best_area_m2) and parcel.best_area_m2 < MIN_AREA_M2
+    if tiny:
+        facts.append(
+            f"Площадь по ЕГРН не определена: в карточке {parcel.best_area_m2:g} м², "
+            "похоже на ошибку данных — уточнить по выписке"
+        )
+        area_s = None
+    elif area_s:
         facts.append(f"Площадь по ЕГРН {area_s} сот.")
     if parcel.category:
         facts.append(f"Категория: {parcel.category.lower()}")
@@ -245,7 +252,9 @@ def build_draft(
         title=title[:50] if len(title) > 50 else title,
         description=description,
         object_type=obj,
-        land_area_sotka=round(parcel.best_area_m2 / SOTKA_M2, 2) if parcel.best_area_m2 else None,
+        land_area_sotka=(
+            round(parcel.best_area_m2 / SOTKA_M2, 2) if parcel.best_area_m2 and not tiny else None
+        ),
         price_rub=price_rub,
         address=parcel.address,
         facts=facts,

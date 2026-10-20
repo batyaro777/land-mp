@@ -821,6 +821,20 @@ def _listing_warnings(data: dict[str, Any]) -> list[str]:
     return contradictions(pf, text, data.get("price_rub")) + static_warnings(pf)
 
 
+def _listing_block_kind(data: dict[str, Any]) -> str | None:
+    """Почему закрыта выгрузка: «text» — противоречия в тексте (правится текстом),
+    «data» — проблема самого участка (межевание, площадь), текстом не снять."""
+    from landcheck.listing import ParcelFacts, contradictions, strip_facts
+
+    pf_raw = data.get("parcel_facts")
+    if not pf_raw or not data.get("warnings"):
+        return None
+    pf = ParcelFacts.from_dict(pf_raw)
+    text = f"{data.get('title') or ''}\n{data.get('description') or ''}"
+    text = strip_facts(text, data.get("facts"), data.get("zouit_notes"))
+    return "text" if contradictions(pf, text, data.get("price_rub")) else "data"
+
+
 def _fetch_parcel_now(cad_num: str, *, refresh: bool = False):
     from landcheck.cache import ParcelCache
     from landcheck.normalize import parcel_from_payload
@@ -1016,6 +1030,7 @@ def listing_page(request: Request, user: UserDep, listing_id: int):
             proofs=_proof_files(row.id),
             public_url=f"{settings.base_url}/l/{row.id}",
             err=request.query_params.get("err"),
+            block_kind=_listing_block_kind(row.data),
             user=user,
         )
 
