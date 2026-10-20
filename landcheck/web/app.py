@@ -821,6 +821,31 @@ def _listing_warnings(data: dict[str, Any]) -> list[str]:
     return contradictions(pf, text, data.get("price_rub")) + static_warnings(pf)
 
 
+def _refresh_tiny_area(data: dict[str, Any]) -> dict[str, Any] | None:
+    """Объявления, созданные до bf4c70d, хранят «Площадь по ЕГРН 0.01 сот.» для участка
+    с ошибочной площадью (Клавдий, прод 20.10) — при открытии приводим к новым правилам."""
+    from landcheck.listing import MIN_AREA_M2, ParcelFacts
+
+    pf_raw = data.get("parcel_facts")
+    if not pf_raw:
+        return None
+    area = ParcelFacts.from_dict(pf_raw).best_area_m2
+    if not area or area >= MIN_AREA_M2:
+        return None
+    facts = list(data.get("facts") or [])
+    stale = [f for f in facts if f.startswith("Площадь по ЕГРН ") and "не определена" not in f]
+    if not stale and data.get("land_area_sotka") is None:
+        return None
+    fresh = (
+        f"Площадь по ЕГРН не определена: в карточке {area:g} м², "
+        "похоже на ошибку данных — уточнить по выписке"
+    )
+    facts = [fresh if f in stale else f for f in facts]
+    if fresh not in facts:
+        facts.insert(0, fresh)
+    return {**data, "facts": facts, "land_area_sotka": None}
+
+
 def _listing_block_kind(data: dict[str, Any]) -> str | None:
     """Почему закрыта выгрузка: «text» — противоречия в тексте (правится текстом),
     «data» — проблема самого участка (межевание, площадь), текстом не снять."""
@@ -1018,9 +1043,13 @@ def listing_page(request: Request, user: UserDep, listing_id: int):
         row = _own_listing(db, user, listing_id)
         # Контроль противоречий пересчитывается при каждом просмотре: правила меняются,
         # а сохранённый список мог устареть (Клавдий, прод 19.10).
+        fixed = _refresh_tiny_area(row.data)
+        if fixed is not None:
+            row.data = fixed
         fresh = _listing_warnings(row.data)
         if fresh != list(row.data.get("warnings") or []):
             row.data = {**row.data, "warnings": fresh}
+        if fixed is not None or fresh != list(row.data.get("warnings") or []):
             db.commit()
         return render(
             request,

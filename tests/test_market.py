@@ -146,3 +146,34 @@ def test_tiny_area_listing_facts_and_block_reason(client, fixtures_dir):  # noqa
     assert "0.01 сот" not in page and "не определена" in page
     assert "похоже на ошибку данных" in page
     assert "с самим участком не всё в порядке" in page and "Исправьте текст" not in page
+
+
+def test_old_tiny_area_listing_is_refreshed_on_view(client, fixtures_dir):  # noqa: F811
+    import json
+
+    from landcheck.web.db import Listing, session
+    from tests.helpers import make_payload
+
+    (fixtures_dir / "50_09_0060202_556.json").write_text(
+        json.dumps(make_payload("50:09:0060202:556", area=0.5, specified_area=0.5)),
+        encoding="utf-8",
+    )
+    _register(client, "old@example.com")
+    url = client.post(
+        "/listing", data={"cad_num": "50:09:0060202:556", "price": "1000000"}
+    ).headers["location"]
+    lid = int(url.rsplit("/", 1)[1])
+    with session() as db:  # имитируем запись, созданную до bf4c70d
+        row = db.get(Listing, lid)
+        facts = [f for f in row.data["facts"] if not f.startswith("Площадь по ЕГРН")]
+        row.data = {
+            **row.data,
+            "facts": ["Площадь по ЕГРН 0.01 сот.", *facts],
+            "land_area_sotka": 0.01,
+        }
+        db.commit()
+    page = client.get(url).text
+    assert "0.01 сот" not in page and "Площадь по ЕГРН не определена" in page
+    with session() as db:
+        d = db.get(Listing, lid).data
+        assert d["land_area_sotka"] is None and not any("0.01" in f for f in d["facts"])

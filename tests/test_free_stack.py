@@ -374,7 +374,10 @@ def test_relevance_filter_drops_offtopic_documents():
     assert is_relevant(
         {"title": "x", "snippet": "село Элекмонар получит газ", "text": ""}, "Элекмонар"
     )
-    assert is_relevant({"title": "x", "snippet": "", "text": "в Белокурихе построят"}, "Белокуриха")
+    assert is_relevant(
+        {"title": "x", "snippet": "", "text": "в Белокурихе построят… Белокуриха ждёт"},
+        "Белокуриха",
+    )
 
 
 def test_collect_documents_interleaves_queries():
@@ -396,3 +399,42 @@ def test_collect_documents_interleaves_queries():
     hosts = [d["url"].split("/")[2] for d in docs]
     # три темы (остальные запросы дают те же url и отсеиваются как дубли) → по кругу
     assert hosts == ["инвест.ru", "x.ru", "свалка.ru", "инвест.ru"]
+
+
+def test_classifieds_and_passing_mentions_are_filtered():
+    from landcheck.region import is_classified, is_relevant
+
+    assert is_classified("https://ak.move.ru/objects/1", "Участок 10 соток")
+    assert is_classified("https://dom.mirkvartir.ru/uchastki/", "Участки в Элекмонаре")
+    assert is_classified("https://site.ru/x", "Купить участок в Белокурихе — 25 объявлений")
+    assert is_classified("https://site.ru/x", "Продам участок ИЖС, цена от 300 000")
+    assert not is_classified("https://tolknews.ru/news/1", "В Белокурихе построят дорогу")
+    text_once = "Статистика по Республике Алтай. В том числе в Элекмонаре. " + "ещё текст " * 50
+    assert not is_relevant(
+        {"title": "Жильё в республике", "snippet": "", "text": text_once}, "Элекмонар"
+    )
+    assert is_relevant(
+        {"title": "Жильё", "snippet": "", "text": text_once + " Элекмонар"}, "Элекмонар"
+    )
+    assert is_relevant({"title": "Школа в Элекмонаре", "snippet": "", "text": ""}, "Элекмонар")
+
+
+def test_region_prompt_rules_for_market_and_status():
+    from landcheck.region import _RAG_PROMPT
+
+    assert "цены предложения" in _RAG_PROMPT and "по региону в целом" in _RAG_PROMPT
+    assert "только про саму локацию" in _RAG_PROMPT
+
+
+def test_packager_prompt_forbids_invented_features():
+    from landcheck.packager import build_prompt
+
+    p = build_prompt(
+        facts=["Категория: земли населённых пунктов"],
+        zouit_notes=[],
+        notes="ровный участок",
+        object_type="Земельный участок",
+        price_rub=None,
+        fetched="2026-10-20",
+    )
+    assert "Не добавляй характеристик" in p and "подъезд" in p

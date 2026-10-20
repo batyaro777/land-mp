@@ -77,8 +77,13 @@ _RAG_PROMPT = """Локация: {locality}. Цель покупателя: {act
 1–5 лет: инвестпроекты, ОЭЗ и ТОР, курортные кластеры, дороги и мосты, газификация, полигоны
 отходов, промышленные объекты, застройка; в «Рынке земли» — только цены земельных участков
 за сотку или гектар по типам (ИЖС, садоводство, сельхоз, рекреация) и их динамика; цены
-квартир, номеров и апартаментов туда не включай. «Вывод для покупателя» — 2–3 пункта по цели,
-на правильном русском без повторов.
+квартир, номеров и апартаментов туда не включай. Цены из объявлений — это цены предложения,
+не сделки: слово «продан» только для подтверждённых сделок (Росреестр, ДОМ.РФ, аналитика);
+цена за сотку = цена ÷ площадь в сотках, если пересчёт не сходится с источником — ₽/сот не
+приводи. Цифры по региону или республике в целом помечай «(по региону в целом)» и не выдавай
+за данные по локации. «Статус территории» — только про саму локацию: генплан, ПЗЗ, границы
+населённого пункта, курорт, ООПТ, агломерация; общие советы и обзоры туда не включай.
+«Вывод для покупателя» — 2–3 пункта по цели, на правильном русском без повторов.
 Поле "used" — номера документов, на которые ты сослался.
 
 Документы:
@@ -284,7 +289,8 @@ def collect_documents(
         bucket: list[dict[str, Any]] = []
         for it in res["results"]:
             url = (it.get("url") or "").split("#")[0]
-            if not url or url in seen or is_junk(url, it.get("title") or "", short):
+            title = it.get("title") or ""
+            if not url or url in seen or is_junk(url, title, short) or is_classified(url, title):
                 continue
             seen.add(url)
             bucket.append(
@@ -332,7 +338,36 @@ _JUNK_HOSTS = (
     "ok.ru",
     "t.me",
     "dzen.ru",
+    "move.ru",
+    "olan.ru",
+    "mirkvartir.ru",
+    "n1.ru",
+    "etagi.com",
+    "domofond.ru",
+    "realty.yandex.ru",
+    "realty.ya.ru",
+    "irr.ru",
+    "restate.ru",
+    "bazarpnz.ru",
+    "kupiprodai.ru",
+    "zemsnab.ru",
 )
+# Заголовок страницы объявлений: «Купить участок в Белокурихе — 25 объявлений», «Продам участок…»
+_CLASSIFIED_TITLE = re.compile(
+    r"(\d+\s*объявлени|\bобъявлени[яй]\b|\bпрода[мё]|\bпродается|\bпродаётся|цен[аы]\s+от\s+\d)",
+    re.IGNORECASE,
+)
+
+
+def is_classified(url: str, title: str) -> bool:
+    """Доска объявлений: цены там — запрашиваемые, не сделки, а текст — реклама
+    (ak.move.ru, olan.ru, mirkvartir.ru прошли фильтр доменов — Клавдий, прод 20.10)."""
+    from urllib.parse import urlparse
+
+    host = urlparse(url).netloc.lower()
+    if any(h in host for h in _JUNK_HOSTS):
+        return True
+    return bool(_CLASSIFIED_TITLE.search(title or ""))
 
 
 def is_relevant(doc: dict[str, Any], locality_short: str) -> bool:
@@ -341,8 +376,12 @@ def is_relevant(doc: dict[str, Any], locality_short: str) -> bool:
     if not locality_short:
         return True
     stem = locality_short.lower()[:-1] if len(locality_short) > 5 else locality_short.lower()
-    hay = f"{doc.get('title') or ''} {doc.get('snippet') or ''} {doc.get('text') or ''}".lower()
-    return stem in hay
+    head = f"{doc.get('title') or ''} {doc.get('snippet') or ''}".lower()
+    if stem in head:
+        return True
+    # В тексте — не меньше двух упоминаний: одно «в том числе в Элекмонаре» в статистике
+    # по всей республике или в блоге про глэмпинг ещё не делает страницу местной.
+    return (doc.get("text") or "").lower().count(stem) >= 2
 
 
 def is_junk(url: str, title: str, locality_short: str = "") -> bool:
