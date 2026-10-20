@@ -94,7 +94,19 @@ templates.env.globals.update(
 )
 
 
+def _configure_logging() -> None:
+    """Предупреждения модулей (llm, pipeline, jobs) — в stdout контейнера, с временем и именем:
+    без явной настройки Python выводит только голый текст через lastResort (прод 20.10)."""
+    root = logging.getLogger()
+    if not root.handlers:
+        logging.basicConfig(
+            level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+        )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
 def create_app() -> FastAPI:
+    _configure_logging()
     init_db(settings.db_path)
     app = FastAPI(title="landcheck", version=__version__, docs_url=None, redoc_url=None)
     app.mount("/static", StaticFiles(directory=str(BASE / "static")), name="static")
