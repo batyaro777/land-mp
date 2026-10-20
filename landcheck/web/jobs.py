@@ -56,11 +56,24 @@ def _set(check_id: int, **fields) -> None:
 
 
 def stats_of(batch: BatchResult) -> dict:
+    # Сколько участков не удалось получить из НСПД (показан кэш или пусто): раньше считались
+    # уникальные тексты ошибок, и 2 сбоя с одной причиной выглядели как «1 ошибка» (прод 20.10).
+    failed = [r for r in batch.results if (r.parcel.raw or {}).get("errors")]
+    stale = sum(1 for r in failed if (r.parcel.raw or {}).get("from_stale_cache"))
+    if failed:
+        log.warning(
+            "check: НСПД не ответил по %d участкам (кэш: %d): %s",
+            len(failed),
+            stale,
+            "; ".join(batch.errors[:3])[:300],
+        )
     return {
         "counts": batch.counts,
         "median_price_per_sotka": batch.median_price_per_sotka,
         "seconds": round((batch.finished_at - batch.started_at).total_seconds(), 1),
         "errors": batch.errors[:20],
+        "error_items": len(failed),
+        "stale_items": stale,
         "purpose": batch.request.purpose.label,
     }
 

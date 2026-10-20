@@ -100,6 +100,7 @@ def result_to_dict(r: CheckResult) -> dict[str, Any]:
             "territorial_zones": [_zone(z) for z in p.territorial_zones],
             "territorial_zone_checked": p.territorial_zone_checked,
             "errors": list(p.raw.get("errors") or []),
+            "from_stale_cache": bool(p.raw.get("from_stale_cache")),
         },
         "flags": [
             {

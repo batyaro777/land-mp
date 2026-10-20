@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import statistics
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -29,6 +30,9 @@ from landcheck.scoring import score, sort_key
 Progress = Callable[[int, int, str], None]
 
 
+log = logging.getLogger(__name__)
+
+
 def fetch_payload(
     cad_num: str,
     provider: ParcelProvider,
@@ -48,6 +52,7 @@ def fetch_payload(
         payload = provider.fetch_raw(cad_num)
     except Exception as e:  # noqa: BLE001 — сеть; деградируем в кэш
         errors.append(f"{type(e).__name__}: {e}")
+        log.warning("nspd %s: %s", cad_num, errors[-1])
         payload = None
     if (
         payload is not None
@@ -64,6 +69,13 @@ def fetch_payload(
             stale = None
         if stale is not None:
             stale.setdefault("errors", []).extend(errors)
+            stale["from_stale_cache"] = True
+            log.warning(
+                "nspd %s: показан кэш от %s, причина: %s",
+                cad_num,
+                stale.get("fetched_at"),
+                "; ".join(errors)[:200],
+            )
             return stale, errors
     if payload is None:
         payload = empty_payload(cad_num, getattr(provider, "name", "unknown"))

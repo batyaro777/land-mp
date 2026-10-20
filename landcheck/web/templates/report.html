@@ -19,6 +19,9 @@
   <h2><code>{{ p.cad_num }}</code> <span class="badge v-{{ vclass }} big">{{ d.verdict }}</span></h2>
   <p>{{ p.address or 'Адрес в НСПД не указан' }}</p>
 </hgroup>
+{% if p.errors %}
+<p class="err small">{% if p.from_stale_cache %}НСПД не ответил, показаны данные прошлой проверки от {{ p.fetched_at|dt }}{% else %}Данные НСПД получены с ошибкой{% endif %}: {{ p.errors[0]|truncate(120) }}.{% if not public %} Нажмите «Обновить данные» в подборке позже.{% endif %}</p>
+{% endif %}
 
 {% if not public %}
 <div class="toolbar no-print">

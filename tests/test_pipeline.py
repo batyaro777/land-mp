@@ -119,3 +119,28 @@ def test_load_reference_ignores_comments(tmp_path: Path):
     from pathlib import Path as P
 
     assert load_reference(P("data/reference_cns.txt")) == ["77:05:0001005:19", "63:01:0810003:510"]
+
+
+def test_stale_cache_fallback_is_marked_and_counted(tmp_path, caplog):
+    import logging
+
+    from landcheck.cache import ParcelCache
+    from landcheck.pipeline import fetch_payload
+    from tests.helpers import make_payload
+
+    class Boom:
+        name = "live"
+
+        def fetch_raw(self, cad_num):
+            raise ConnectionError("ProxyError: 502 Bad Gateway")
+
+    cache = ParcelCache(tmp_path / "c.sqlite", ttl_days=0)
+    fresh = make_payload("50:09:0060202:101")
+    fresh["provider"] = "live"
+    cache.put("50:09:0060202:101", fresh)
+    with caplog.at_level(logging.WARNING):
+        payload, errors = fetch_payload("50:09:0060202:101", Boom(), cache, refresh=True)
+    assert payload["from_stale_cache"] is True and payload["found"]
+    assert errors and "502" in errors[0]
+    assert any("показан кэш" in r.message for r in caplog.records)
+    cache.close()

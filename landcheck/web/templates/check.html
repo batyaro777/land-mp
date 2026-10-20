@@ -35,7 +35,8 @@
     </div>
   </div>
   <p class="muted small">Проверено за {{ st.get('seconds') }} с{% if st.get('median_price_per_sotka') %} · медиана по подборке {{ st.get('median_price_per_sotka')|money }} за сотку{% endif %}.
-  {% if st.get('errors') %}<span class="err">Ошибок получения данных: {{ st.get('errors')|length }}.</span>{% endif %}
+  {% if st.get('error_items') %}<span class="err">НСПД не ответил по {{ st.get('error_items') }} уч.{% if st.get('stale_items') %}, по {{ st.get('stale_items') }} показан кэш прошлой проверки{% endif %}: {{ (st.get('errors') or ['ошибка'])[0]|truncate(90) }}. Нажмите «Обновить данные» позже.</span>
+  {% elif st.get('errors') %}<span class="err">Ошибок получения данных: {{ st.get('errors')|length }}.</span>{% endif %}
   {% if new_count %} · новых для вас: {{ new_count }}{% endif %}{% if changed_count %} · <span class="err">вердикт изменился: {{ changed_count }}</span>{% endif %}</p>
 
   <div class="table-wrap">
