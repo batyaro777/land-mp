@@ -645,8 +645,8 @@ def report_location(request: Request, user: UserDep, check_id: int, cad_num: str
 
 @router.get("/checks/{check_id}/items/{cad_num}/region", response_class=HTMLResponse)
 def report_region(request: Request, user: UserDep, check_id: int, cad_num: str, refresh: int = 0):
-    """Блок «Регион» по запросу (HTMX): Gemini с поиском Google по локации участка."""
-    from landcheck.region import locality_from_address
+    """Блок «Регион» по запросу (HTMX): поиск по открытым источникам + модель по локации участка."""
+    from landcheck.region import resolve_locality
 
     with session() as db:
         check = _own_check(db, user, check_id)
@@ -658,7 +658,7 @@ def report_region(request: Request, user: UserDep, check_id: int, cad_num: str, 
         data = dict(item.data)
         parcel = data.get("parcel") or {}
         region = data.get("region")
-        locality = locality_from_address(parcel.get("address"))
+        locality = resolve_locality(parcel.get("address"), parcel.get("geometry"))
         if region is None or refresh or region.get("error"):
             if locality is None:
                 region = {
@@ -958,9 +958,18 @@ def _compose_with_ai(data: dict[str, Any]) -> dict[str, Any]:
     object_type = data.get("object_type") or ""
     if not pf.get("category"):
         object_type = "не определён: категория земель в ЕГРН не установлена, назначение не называть"
+    facts = list(data.get("facts") or [])
+    forbidden: list[str] = []
+    area = pf.get("best_area_m2")
+    if area is not None and area < 50:
+        # Площадь 1 м² в ЕГРН — ошибка данных: модель не должна её называть (прод 20.10:
+        # «0,01 сотки» попало в текст и заблокировало выгрузку).
+        facts = [f for f in facts if not f.startswith("Площадь")]
+        forbidden.append("называть площадь участка в любом виде (в ЕГРН ошибка данных)")
     res = compose_listing(
-        facts=list(data.get("facts") or []),
+        facts=facts,
         zouit_notes=list(data.get("zouit_notes") or []),
+        forbidden=forbidden,
         notes=data.get("notes") or "",
         object_type=object_type,
         price_rub=data.get("price_rub"),

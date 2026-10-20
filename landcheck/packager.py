@@ -31,6 +31,7 @@ _PROMPT = """Ты редактор объявлений о продаже зем
 {notes}
 
 Тип для площадки: {object_type}. Цена: {price}.
+Запрещено: {forbidden}.
 Если категория или ВРИ в фактах не установлены — так и пиши, назначение участка не придумывай.
 Площадь меньше одной сотки в фактах — вероятная ошибка данных: не называй её в заголовке.
 
@@ -58,7 +59,9 @@ def build_prompt(
     object_type: str,
     price_rub: float | None,
     fetched: str,
+    forbidden: list[str] | None = None,
 ) -> str:
+    rules = ["обещать то, чего нет в фактах ЕГРН", *(forbidden or [])]
     return _PROMPT.format(
         facts="\n".join(f"- {f}" for f in facts) or "- нет",
         zouit="\n".join(f"- {z}" for z in zouit_notes) or "- нет",
@@ -67,6 +70,7 @@ def build_prompt(
         price=_fmt_price(price_rub),
         title_max=TITLE_MAX,
         fetched=fetched,
+        forbidden="; ".join(rules),
     )
 
 
@@ -88,6 +92,7 @@ def compose_listing(
     timeout: float = 60.0,
     fallbacks: tuple[str, ...] = FALLBACK_MODELS,
     providers: list[llm.Provider] | None = None,
+    forbidden: list[str] | None = None,
 ) -> dict[str, Any]:
     """{"title", "description", "model", "error"} — исключений наружу нет.
 
@@ -100,6 +105,7 @@ def compose_listing(
         object_type=object_type,
         price_rub=price_rub,
         fetched=fetched,
+        forbidden=forbidden,
     )
     providers = llm.providers_from_env() if providers is None else providers
     if providers:

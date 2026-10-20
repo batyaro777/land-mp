@@ -349,16 +349,26 @@ def region(
     model: Annotated[str | None, typer.Option(help="Модель Gemini")] = None,
     as_json: Annotated[bool, typer.Option("--json", help="Сводка в JSON")] = False,
 ):
-    """Сводка по региону: инвестиции, дороги, риски, рынок — Gemini с поиском Google."""
+    """Сводка по региону: инвестиции, дороги, риски, рынок — поиск по открытым источникам
+    и бесплатная модель (LANDCHECK_REGION=search) или Gemini с поиском Google (gemini)."""
     import json as _json
     import os
 
+    from landcheck import llm
     from landcheck.inputs import CAD_RE
-    from landcheck.region import DEFAULT_MODEL, locality_from_address, research_region
+    from landcheck.region import (
+        DEFAULT_MODEL,
+        locality_from_address,
+        region_mode,
+        research_region,
+    )
 
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    if not api_key:
-        console.print("[red]Нет GEMINI_API_KEY в окружении.[/]")
+    if region_mode() == "gemini" and not api_key:
+        console.print("[red]Режим gemini: нет GEMINI_API_KEY в окружении.[/]")
+        raise typer.Exit(code=1)
+    if region_mode() != "gemini" and not llm.providers_from_env():
+        console.print("[red]Нет провайдера модели: задайте OPENROUTER_API_KEY или GROQ_API_KEY.[/]")
         raise typer.Exit(code=1)
     place = locality
     if CAD_RE.search(locality):

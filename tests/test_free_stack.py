@@ -258,10 +258,10 @@ def test_collect_documents_prefers_page_text_over_snippet():
         "Белокуриха",
         Purpose.SNT,
         search_fn=lambda q, max_results, news, recent=False: {
-            "results": [{"title": "X", "url": "https://x.ru", "snippet": "sn"}],
+            "results": [{"title": "Новости X", "url": "https://x.ru/news/1", "snippet": "sn"}],
             "error": None,
         },
-        fetch_fn=lambda urls: {"https://x.ru": "short"},
+        fetch_fn=lambda urls: {"https://x.ru/news/1": "short"},
     )
     assert docs[0]["text"] == "sn" and len(queries) == len(build_queries("Белокуриха", Purpose.SNT))
 
@@ -297,3 +297,53 @@ def test_packager_uses_free_llm_first(monkeypatch):
         api_key=None,
     )
     assert r["error"] == "нет провайдера LLM"
+
+
+def test_junk_filter_and_locality_from_geometry(monkeypatch):
+    from landcheck.region import is_junk, locality_from_geometry, resolve_locality
+    from tests.helpers import SQUARE
+
+    assert is_junk("https://www.google.ru/", "Google", "белокуриха")
+    assert is_junk("https://belokuriha-gorod.ru/", "Город Белокуриха - главная", "белокуриха")
+    assert is_junk("https://ru.wikipedia.org/wiki/%D0%93", "Г — Википедия", "белокуриха")
+    assert not is_junk(
+        "https://ru.wikipedia.org/wiki/Белокуриха", "Белокуриха — Википедия", "белокуриха"
+    )
+    assert not is_junk(
+        "https://morein.pro/blog/belokuriha-2026", "Белокуриха 2026: что строится", "белокуриха"
+    )
+    payload = {
+        "address": {
+            "state": "Алтайский край",
+            "county": "городской округ Белокуриха",
+            "town": "Белокуриха",
+        }
+    }
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _Resp(200, payload))
+    assert locality_from_geometry(SQUARE) == "Алтайский край, Белокуриха"
+    assert locality_from_geometry(None) is None
+    # адрес НСПД «только регион» уточняется по контуру; полный адрес остаётся как есть
+    assert resolve_locality("Алтайский край", SQUARE) == "Алтайский край, Белокуриха"
+    assert (
+        resolve_locality(
+            "Республика Алтай, Чемальский район, с. Элекмонар, ул. Советская, 1", SQUARE
+        )
+        == "Республика Алтай, Чемальский район, с. Элекмонар"
+    )
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _Resp(503, None))
+    assert resolve_locality("Алтайский край", SQUARE) == "Алтайский край"
+
+
+def test_packager_prompt_forbids_area_on_data_error():
+    from landcheck.packager import build_prompt
+
+    p = build_prompt(
+        facts=["Категория: земли населенных пунктов"],
+        zouit_notes=[],
+        notes="",
+        object_type="",
+        price_rub=None,
+        fetched="",
+        forbidden=["называть площадь участка"],
+    )
+    assert "Запрещено: обещать то, чего нет в фактах ЕГРН; называть площадь участка." in p

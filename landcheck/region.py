@@ -107,6 +107,58 @@ def locality_from_address(address: str | None) -> str | None:
     return ", ".join(kept) if kept else None
 
 
+NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
+_UA = "landcheck/0.1 (land-mp.dnai.engineering; broker land check)"
+
+
+def locality_from_geometry(
+    parcel_geojson: dict[str, Any] | None, *, timeout: float = 10.0
+) -> str | None:
+    """Населённый пункт по контуру участка через Nominatim (OSM, бесплатно): «Алтайский край,
+    Белокуриха». Нужен, когда адрес в НСПД — только регион (участок 22:64:010303:10)."""
+    if not parcel_geojson:
+        return None
+    try:
+        from landcheck.location import centroid
+
+        lat, lon = centroid(parcel_geojson)
+        resp = httpx.get(
+            NOMINATIM_URL,
+            params={
+                "lat": lat,
+                "lon": lon,
+                "format": "jsonv2",
+                "zoom": 14,
+                "accept-language": "ru",
+            },
+            headers={"User-Agent": _UA},
+            timeout=timeout,
+        )
+        if resp.status_code != 200:
+            return None
+        addr = (resp.json() or {}).get("address") or {}
+    except Exception:  # noqa: BLE001 — сеть, кривая геометрия
+        return None
+    state = addr.get("state") or addr.get("region")
+    district = addr.get("county") or addr.get("municipality") or addr.get("state_district")
+    place = addr.get("city") or addr.get("town") or addr.get("village") or addr.get("hamlet")
+    parts = [p for p in (state, district, place) if p]
+    if place and district and place in district:
+        parts = [p for p in (state, place) if p]
+    return ", ".join(dict.fromkeys(parts)) if parts else None
+
+
+def resolve_locality(address: str | None, parcel_geojson: dict[str, Any] | None) -> str | None:
+    """Локация для поиска: адрес НСПД до улицы; если в нём только регион — уточняем по контуру."""
+    loc = locality_from_address(address)
+    if loc and loc.count(",") >= 1:
+        return loc
+    by_geom = locality_from_geometry(parcel_geojson)
+    if by_geom:
+        return by_geom
+    return loc
+
+
 def locality_key(locality: str) -> str:
     return re.sub(r"\s+", " ", locality.lower().replace("ё", "е")).strip()
 
@@ -207,6 +259,7 @@ def collect_documents(
     docs: list[dict[str, Any]] = []
     queries: list[str] = []
     errors: list[str] = []
+    short = locality.split(",")[-1].strip().lower()
     for spec in build_queries(locality, purpose):
         queries.append(spec["q"])
         res = search_fn(
@@ -217,7 +270,7 @@ def collect_documents(
             continue
         for it in res["results"]:
             url = (it.get("url") or "").split("#")[0]
-            if not url or url in seen:
+            if not url or url in seen or is_junk(url, it.get("title") or "", short):
                 continue
             seen.add(url)
             docs.append(
@@ -240,6 +293,34 @@ def collect_documents(
         if len(kept) >= max_docs:
             break
     return kept, queries, errors
+
+
+_JUNK_HOSTS = (
+    "google.",
+    "yandex.",
+    "bing.com",
+    "duckduckgo.com",
+    "go.mail.ru",
+    "rambler.ru/search",
+)
+
+
+def is_junk(url: str, title: str, locality_short: str = "") -> bool:
+    """Мусор из поисковой выдачи (Клавдий, прод 20.10): главные страницы google.ru, статья
+    Википедии «Г», страницы поисковиков. Словарные статьи Википедии не про локацию — тоже мимо."""
+    from urllib.parse import urlparse
+
+    p = urlparse(url)
+    host = p.netloc.lower()
+    if any(h in host for h in _JUNK_HOSTS):
+        return True
+    if p.path in ("", "/") and not p.query:
+        return True  # главная страница сайта: текста по теме там нет
+    t = title.strip()
+    if "wikipedia.org" in host:
+        name = t.split(" — ")[0].strip()
+        return len(name) <= 2 or (locality_short and locality_short not in t.lower())
+    return len(t) < 3
 
 
 def _render_docs(docs: list[dict[str, Any]]) -> str:
@@ -282,7 +363,7 @@ def research_region_search(
         [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
         json_object=True,
         temperature=0.2,
-        max_tokens=2500,
+        max_tokens=4000,
     )
     if res.get("error") or not res.get("json"):
         return _failed("search", res.get("error") or "модель не вернула JSON")
