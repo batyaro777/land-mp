@@ -117,10 +117,10 @@ def test_websearch_searxng_and_ddgs_fallback(monkeypatch):
         def __exit__(self, *a):
             return False
 
-        def text(self, q, region, max_results):
+        def text(self, q, region, max_results, timelimit=None):
             return [{"title": "T", "href": "https://t.ru", "body": "snippet"}]
 
-        def news(self, q, region, max_results):
+        def news(self, q, region, max_results, timelimit=None):
             return [
                 {"title": "N", "url": "https://n.ru", "body": "news", "date": "2026-10-01T00:00"}
             ]
@@ -153,7 +153,7 @@ def test_fetch_text_extracts_main_content(monkeypatch):
 
 
 def test_region_search_pipeline_with_fakes():
-    def search_fn(q, max_results, news):
+    def search_fn(q, max_results, news, recent=False):
         if news:
             return {
                 "results": [
@@ -243,7 +243,10 @@ def test_region_search_pipeline_with_fakes():
     r = research_region_search(
         "Нигде",
         Purpose.IZHS,
-        search_fn=lambda q, max_results, news: {"results": [], "error": "ddgs: Ratelimit"},
+        search_fn=lambda q, max_results, news, recent=False: {
+            "results": [],
+            "error": "ddgs: Ratelimit",
+        },
         fetch_fn=lambda urls: {},
         chat_fn=chat_fn,
     )
@@ -254,7 +257,7 @@ def test_collect_documents_prefers_page_text_over_snippet():
     docs, queries, errors = collect_documents(
         "Белокуриха",
         Purpose.SNT,
-        search_fn=lambda q, max_results, news: {
+        search_fn=lambda q, max_results, news, recent=False: {
             "results": [{"title": "X", "url": "https://x.ru", "snippet": "sn"}],
             "error": None,
         },

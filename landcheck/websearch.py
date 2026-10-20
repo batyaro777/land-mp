@@ -23,21 +23,41 @@ def _searxng_url() -> str | None:
 
 
 def search(
-    query: str, *, max_results: int = 8, news: bool = False, timeout: float = 15.0
+    query: str,
+    *,
+    max_results: int = 8,
+    news: bool = False,
+    recent: bool = False,
+    timeout: float = 15.0,
 ) -> dict[str, Any]:
-    """{"results": [{title,url,snippet,date,engine}], "engine": str, "error": str|None}."""
+    """{"results": [{title,url,snippet,date,engine}], "engine": str, "error": str|None}.
+
+    recent=True ограничивает выдачу последним годом (планы и стройки, а не новости 2007 года).
+    """
     url = _searxng_url()
     if url:
-        res = _search_searxng(url, query, max_results=max_results, news=news, timeout=timeout)
+        res = _search_searxng(
+            url, query, max_results=max_results, news=news, recent=recent, timeout=timeout
+        )
         if not res.get("error"):
             return res
-    return _search_ddgs(query, max_results=max_results, news=news)
+    return _search_ddgs(query, max_results=max_results, news=news, recent=recent)
 
 
-def _search_searxng(base: str, query: str, *, max_results: int, news: bool, timeout: float) -> dict:
+def _search_searxng(
+    base: str,
+    query: str,
+    *,
+    max_results: int,
+    news: bool,
+    recent: bool = False,
+    timeout: float,
+) -> dict:
     params = {"q": query, "format": "json", "language": "ru-RU"}
     if news:
         params["categories"] = "news"
+    if recent:
+        params["time_range"] = "year"
     try:
         r = httpx.get(
             f"{base}/search", params=params, headers={"User-Agent": USER_AGENT}, timeout=timeout
@@ -63,19 +83,21 @@ def _search_searxng(base: str, query: str, *, max_results: int, news: bool, time
     return {"results": out, "engine": "searxng", "error": None}
 
 
-def _search_ddgs(query: str, *, max_results: int, news: bool) -> dict:
+def _search_ddgs(query: str, *, max_results: int, news: bool, recent: bool = False) -> dict:
     try:
         from ddgs import DDGS
     except ImportError:
         return {"results": [], "engine": "ddgs", "error": "пакет ddgs не установлен"}
+    kwargs: dict[str, Any] = {"region": "ru-ru", "max_results": max_results}
+    if recent:
+        kwargs["timelimit"] = "y"
     try:
         with DDGS() as d:
-            raw = (
-                d.news(query, region="ru-ru", max_results=max_results)
-                if news
-                else d.text(query, region="ru-ru", max_results=max_results)
-            )
-    except Exception as e:  # noqa: BLE001 — лимит 202, сеть
+            raw = d.news(query, **kwargs) if news else d.text(query, **kwargs)
+    except Exception as e:  # noqa: BLE001 — лимит 202, сеть, «No results found»
+        if recent:
+            # Без ограничения по дате DuckDuckGo чаще что-то находит; дату проверит модель.
+            return _search_ddgs(query, max_results=max_results, news=news, recent=False)
         return {"results": [], "engine": "ddgs", "error": f"ddgs: {type(e).__name__}: {e}"[:200]}
     out = []
     for it in raw or []:

@@ -61,7 +61,10 @@ _RAG_SYSTEM = (
     "Ты аналитик рынка земли в России. Отвечай только по приложенным документам, "
     "по-русски, кратко и конкретно, с датами и суммами, где они есть. Ничего не выдумывай: "
     "если в документах факта нет — пиши «данных не найдено». После каждого пункта ставь номера "
-    "документов-источников в квадратных скобках, например [2] или [1, 4]."
+    "документов-источников в квадратных скобках, например [2] или [1, 4]. Сегодня {today}: "
+    "важны планы и события последних 1–3 лет и на 1–5 лет вперёд; событие старше трёх лет "
+    "упоминай только с годом и не выдавай за актуальное; рекламу санаториев, путеводители и "
+    "туристические обзоры не пересказывай."
 )
 
 _RAG_PROMPT = """Локация: {locality}. Цель покупателя: {activity}.
@@ -181,12 +184,12 @@ def build_queries(locality: str, purpose: Purpose) -> list[dict[str, Any]]:
     short = locality.split(",")[-1].strip() or locality
     year = datetime.now(UTC).year
     return [
-        {"q": f"{short} инвестиции проект {year}", "news": False},
-        {"q": f"{short} строительство дорога газификация {year}", "news": False},
-        {"q": f"{short} свалка полигон промзона кладбище", "news": False},
-        {"q": f"{short} земельный участок цена за сотку {year}", "news": False},
-        {"q": f"{short} {purpose.activity.lower()}", "news": False},
-        {"q": f"{short}", "news": True},
+        {"q": f"{short} инвестиции проект {year}", "news": False, "recent": True},
+        {"q": f"{short} строительство дорога газификация {year}", "news": False, "recent": True},
+        {"q": f"{short} свалка полигон промзона кладбище", "news": False, "recent": False},
+        {"q": f"{short} земельный участок цена за сотку {year}", "news": False, "recent": True},
+        {"q": f"{short} генплан застройка мастер-план", "news": False, "recent": False},
+        {"q": f"{short} инвестиции строительство", "news": True, "recent": True},
     ]
 
 
@@ -204,7 +207,9 @@ def collect_documents(
     errors: list[str] = []
     for spec in build_queries(locality, purpose):
         queries.append(spec["q"])
-        res = search_fn(spec["q"], max_results=6, news=spec["news"])
+        res = search_fn(
+            spec["q"], max_results=6, news=spec["news"], recent=spec.get("recent", False)
+        )
         if res.get("error"):
             errors.append(res["error"])
             continue
@@ -270,8 +275,9 @@ def research_region_search(
         sections="\n".join(f"- {s}" for s in SECTIONS),
         docs=_render_docs(docs),
     )
+    system = _RAG_SYSTEM.format(today=datetime.now(UTC).strftime("%d.%m.%Y"))
     res = chat_fn(
-        [{"role": "system", "content": _RAG_SYSTEM}, {"role": "user", "content": prompt}],
+        [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
         json_object=True,
         temperature=0.2,
         max_tokens=2500,
