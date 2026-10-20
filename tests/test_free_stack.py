@@ -37,7 +37,7 @@ def test_providers_from_env_order_and_models(monkeypatch):
     ps = llm.providers_from_env()
     assert [p.name for p in ps] == ["groq", "openrouter"]
     assert ps[0].models == ("openai/gpt-oss-120b", "qwen/qwen3.8-27b") and ps[0].json_mode
-    assert not ps[1].json_mode
+    assert ps[1].models[0].endswith(":free")
     monkeypatch.setenv("LANDCHECK_LLM", "openrouter")
     assert [p.name for p in llm.providers_from_env()] == ["openrouter"]
     # Gemini — только если явно включён в порядок и есть ключ
@@ -52,26 +52,37 @@ def test_providers_from_env_order_and_models(monkeypatch):
 def test_chat_chain_skips_429_and_bad_json(monkeypatch):
     ps = [
         llm.Provider("groq", "https://g", "k", ("m1", "m2")),
-        llm.Provider("openrouter", "https://o", "k", ("m3",), json_mode=False),
+        llm.Provider("openrouter", "https://o", "k", ("m3", "m4")),
     ]
     seq = iter(
         [
             _Resp(429, {"error": "rate"}),  # groq/m1 — лимит
             _chat("не json"),  # groq/m2 — не JSON
-            _chat('Вот ответ:\n```json\n{"title": "ok"}\n```'),  # openrouter/m3
+            _Resp(400, {"error": "Reasoning is mandatory"}),  # openrouter/m3 строгий режим
+            _Resp(
+                200, {"choices": [{"message": {"content": "", "reasoning": "думал"}}]}
+            ),  # m3 повтор
+            _chat('Вот ответ:\n```json\n{"title": "ok"}\n```'),  # openrouter/m4
         ]
     )
     calls = []
 
     def fake_post(url, json, headers, timeout):
-        calls.append((url, json["model"], "response_format" in json))
+        calls.append((json["model"], "response_format" in json, "reasoning" in json))
         return next(seq)
 
     monkeypatch.setattr(httpx, "post", fake_post)
     r = llm.chat([{"role": "user", "content": "x"}], providers=ps, json_object=True)
-    assert r["json"] == {"title": "ok"} and r["provider"] == "openrouter" and r["model"] == "m3"
-    assert calls[0][2] is True and calls[2][2] is False  # json_object только там, где поддержка
-    assert r["tried"] == ["groq/m1", "groq/m2", "openrouter/m3"]
+    assert r["json"] == {"title": "ok"} and r["provider"] == "openrouter" and r["model"] == "m4"
+    # groq: json-формат без reasoning; openrouter m3: строгий → 400 → повтор без полей; m4 строгий
+    assert calls == [
+        ("m1", True, False),
+        ("m2", True, False),
+        ("m3", True, True),
+        ("m3", False, False),
+        ("m4", True, True),
+    ]
+    assert r["tried"] == ["groq/m1", "groq/m2", "openrouter/m3", "openrouter/m4"]
     r = llm.chat([{"role": "user", "content": "x"}], providers=[], json_object=True)
     assert "нет ни одного провайдера" in r["error"]
 

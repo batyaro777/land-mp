@@ -28,12 +28,14 @@ class Provider:
 
 DEFAULT_MODELS: dict[str, tuple[str, ...]] = {
     "groq": ("openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"),
-    # Бесплатные модели OpenRouter на 20.10.2026 (список меняется: openrouter.ai/api/v1/models,
-    # pricing.prompt == "0"); последним — маршрутизатор по любой свободной модели.
+    # Бесплатные модели OpenRouter, проверены 20.10.2026 на промпте «Региона» с выключенными
+    # рассуждениями и JSON-режимом: lightning 8 с, super 16 с, ultra 21 с, все отдают 6 разделов;
+    # gemma-4 :free отвечает 429 (общий пул перегружен), minimax не даёт выключить рассуждения.
+    # Список меняется: openrouter.ai/api/v1/models, pricing.prompt == "0".
     "openrouter": (
-        "google/gemma-4-31b-it:free",
+        "nvidia/nemotron-3.5-lightning:free",
+        "nvidia/nemotron-3-super-120b-a12b:free",
         "nvidia/nemotron-3-ultra-550b-a55b:free",
-        "minimax/minimax-m3.1-flash:free",
         "openrouter/free",
     ),
     "mistral": ("mistral-medium-latest", "mistral-small-latest"),
@@ -74,11 +76,7 @@ def providers_from_env(order: str | None = None) -> list[Provider]:
             continue
         out.append(
             Provider(
-                name=name,
-                base_url=BASE_URLS[name],
-                api_key=key,
-                models=_models_from_env(name),
-                json_mode=name != "openrouter",
+                name=name, base_url=BASE_URLS[name], api_key=key, models=_models_from_env(name)
             )
         )
     return out
@@ -113,35 +111,56 @@ def chat(
     for p in providers:
         for model in p.models:
             tried.append(f"{p.name}/{model}")
-            body: dict[str, Any] = {
-                "model": model,
-                "messages": messages,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-            }
-            if json_object and p.json_mode:
-                body["response_format"] = {"type": "json_object"}
             headers = {"Authorization": f"Bearer {p.api_key}"}
             if p.name == "openrouter":
                 headers["HTTP-Referer"] = "https://land-mp.dnai.engineering"
                 headers["X-Title"] = "landcheck"
-            try:
-                r = httpx.post(
-                    f"{p.base_url}/chat/completions", json=body, headers=headers, timeout=timeout
-                )
-            except Exception as e:  # noqa: BLE001 — сеть
-                last_error = f"{p.name}/{model}: {type(e).__name__}"
+            r = None
+            # Сначала строгий режим: без «рассуждений» (иначе reasoning-модели тратят на них все
+            # токены и отдают пустой ответ) и с JSON-форматом; если модель его не принимает (400),
+            # повторяем один раз без этих полей.
+            for strict in (True, False) if p.json_mode else (False,):
+                body: dict[str, Any] = {
+                    "model": model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                }
+                if strict:
+                    if json_object:
+                        body["response_format"] = {"type": "json_object"}
+                    if p.name == "openrouter":
+                        body["reasoning"] = {"enabled": False}
+                try:
+                    r = httpx.post(
+                        f"{p.base_url}/chat/completions",
+                        json=body,
+                        headers=headers,
+                        timeout=timeout,
+                    )
+                except Exception as e:  # noqa: BLE001 — сеть
+                    r = None
+                    last_error = f"{p.name}/{model}: {type(e).__name__}"
+                    break
+                if r.status_code != 400 or not strict:
+                    break
+            if r is None:
                 continue
             if r.status_code != 200:
                 last_error = f"{p.name}/{model}: HTTP {r.status_code}"
                 if r.status_code in RETRY_STATUSES or r.status_code in (400, 404):
-                    # 400/404 — модель недоступна или не поддерживает json_object: пробуем дальше
                     continue
                 break
             try:
-                text = r.json()["choices"][0]["message"]["content"] or ""
+                message = r.json()["choices"][0]["message"]
+                text = message.get("content") or ""
             except (ValueError, KeyError, IndexError, TypeError):
                 last_error = f"{p.name}/{model}: ответ без choices"
+                continue
+            if not text.strip():
+                last_error = f"{p.name}/{model}: пустой ответ" + (
+                    " (все токены ушли в рассуждения)" if message.get("reasoning") else ""
+                )
                 continue
             data = parse_json_text(text) if json_object else None
             if json_object and data is None:
