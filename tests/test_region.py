@@ -79,7 +79,7 @@ def test_region_block_in_report(client, monkeypatch):  # noqa: F811
     monkeypatch.setattr(settings, "gemini_api_key", "test")
     calls: list[tuple[str, str]] = []
 
-    def fake(locality, purpose, *, api_key, model):
+    def fake(locality, purpose, *, api_key, model, cad_num=None):
         calls.append((locality, purpose.value))
         return parse_response(SAMPLE, model=model)
 

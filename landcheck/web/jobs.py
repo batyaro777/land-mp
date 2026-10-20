@@ -249,7 +249,9 @@ def _fetch_osm_safe(parcel_geojson: dict[str, Any]) -> dict[str, Any]:
 
 
 # --- модуль «Регион»: один запрос на локацию и цель, кэш 30 дней ------------------------
-def fetch_region(locality: str, purpose, *, refresh: bool = False) -> dict[str, Any]:
+def fetch_region(
+    locality: str, purpose, *, refresh: bool = False, cad_num: str | None = None
+) -> dict[str, Any]:
     from landcheck.models import Purpose
     from landcheck.region import locality_key, research_region
 
@@ -272,7 +274,11 @@ def fetch_region(locality: str, purpose, *, refresh: bool = False) -> dict[str, 
             if cached is not None and not cached.get("error"):
                 return cached
         result = research_region(
-            locality, purpose, api_key=settings.gemini_api_key, model=settings.gemini_model
+            locality,
+            purpose,
+            api_key=settings.gemini_api_key,
+            model=settings.gemini_model,
+            cad_num=cad_num,
         )
         if not result.get("error"):
             cache.put_region(key, result)

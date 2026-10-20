@@ -668,7 +668,9 @@ def report_region(request: Request, user: UserDep, check_id: int, cad_num: str, 
                     "locality": None,
                 }
             else:
-                region = jobs.fetch_region(locality, _check_purpose(check), refresh=bool(refresh))
+                region = jobs.fetch_region(
+                    locality, _check_purpose(check), refresh=bool(refresh), cad_num=cad_num
+                )
                 region["locality"] = locality
             data["region"] = region
             item.data = data
@@ -987,13 +989,8 @@ def listings_page(request: Request, user: UserDep):
     return render(request, "listings.html", rows=rows, user=user)
 
 
-def _compose_with_ai(data: dict[str, Any]) -> dict[str, Any]:
-    """Заголовок и текст через Gemini по фактам ЕГРН и заметкам; при ошибке данные не меняются."""
-    from landcheck.packager import compose_listing
-
-    if not settings.llm_enabled:
-        return data
-    pf = data.get("parcel_facts") or {}
+def _compose_guards(pf: dict[str, Any], data: dict[str, Any]) -> tuple[list[str], list[str], str]:
+    """Что модели нельзя: по фактам ЕГРН, а не по вере в промпт (прод 20.10)."""
     object_type = data.get("object_type") or ""
     if not pf.get("category"):
         object_type = "не определён: категория земель в ЕГРН не установлена, назначение не называть"
@@ -1005,6 +1002,23 @@ def _compose_with_ai(data: dict[str, Any]) -> dict[str, Any]:
         # «0,01 сотки» попало в текст и заблокировало выгрузку).
         facts = [f for f in facts if not f.startswith("Площадь")]
         forbidden.append("называть площадь участка в любом виде (в ЕГРН ошибка данных)")
+    if not pf.get("permitted_use") and not pf.get("permitted_use_all"):
+        # Модель брала «ИЖС» из рубрики Avito «Поселений (ИЖС)» (Клавдий, прод 20.10).
+        forbidden.append(
+            "называть назначение участка (ИЖС, садоводство, ЛПХ, «под дом»): "
+            "ВРИ в ЕГРН не установлен"
+        )
+    return facts, forbidden, object_type
+
+
+def _compose_with_ai(data: dict[str, Any]) -> dict[str, Any]:
+    """Заголовок и текст через Gemini по фактам ЕГРН и заметкам; при ошибке данные не меняются."""
+    from landcheck.packager import compose_listing
+
+    if not settings.llm_enabled:
+        return data
+    pf = data.get("parcel_facts") or {}
+    facts, forbidden, object_type = _compose_guards(pf, data)
     res = compose_listing(
         facts=facts,
         zouit_notes=list(data.get("zouit_notes") or []),
@@ -1044,12 +1058,14 @@ def listing_page(request: Request, user: UserDep, listing_id: int):
         # Контроль противоречий пересчитывается при каждом просмотре: правила меняются,
         # а сохранённый список мог устареть (Клавдий, прод 19.10).
         fixed = _refresh_tiny_area(row.data)
+        changed = fixed is not None
         if fixed is not None:
             row.data = fixed
         fresh = _listing_warnings(row.data)
         if fresh != list(row.data.get("warnings") or []):
             row.data = {**row.data, "warnings": fresh}
-        if fixed is not None or fresh != list(row.data.get("warnings") or []):
+            changed = True
+        if changed:
             db.commit()
         return render(
             request,

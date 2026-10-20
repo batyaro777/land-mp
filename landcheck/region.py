@@ -64,7 +64,8 @@ _RAG_SYSTEM = (
     "документов-источников в квадратных скобках, например [2] или [1, 4]. Сегодня {today}: "
     "важны планы и события последних 1–3 лет и на 1–5 лет вперёд; событие старше трёх лет "
     "упоминай только с годом и не выдавай за актуальное; рекламу санаториев, путеводители и "
-    "туристические обзоры не пересказывай."
+    "туристические обзоры не пересказывай. Локация — это сама локация: не пиши "
+    "«рядом с городом X», если X и есть локация."
 )
 
 _RAG_PROMPT = """Локация: {locality}. Цель покупателя: {activity}.
@@ -228,6 +229,7 @@ def research_region(
     timeout: float = 120.0,
     fallbacks: tuple[str, ...] = FALLBACK_MODELS,
     mode: str | None = None,
+    cad_num: str | None = None,
 ) -> dict[str, Any]:
     """Сводка по локации: бесплатный поиск + модель (search) или Gemini grounding (gemini)."""
     mode = mode or region_mode()
@@ -235,7 +237,7 @@ def research_region(
         return research_region_gemini(
             locality, purpose, api_key=api_key, model=model, timeout=timeout, fallbacks=fallbacks
         )
-    return research_region_search(locality, purpose)
+    return research_region_search(locality, purpose, cad_num=cad_num)
 
 
 # --- бесплатный путь: поиск → страницы → модель ------------------------------------------
@@ -412,8 +414,70 @@ def _render_docs(docs: list[dict[str, Any]]) -> str:
     return "\n\n".join(chunks)
 
 
+_CAD_RE = re.compile(r"\b(\d{2}:\d{2}):\d{6,7}:\d+\b")
+_REGIONAL_RE = re.compile(
+    r"(республик|\bкра[йяею]\b|област[ьи]|\bрегион|\bокруг[аеу]?\b|по стране|в россии|субъект)",
+    re.IGNORECASE,
+)
+_STATUS_RE = re.compile(
+    r"(генплан|генеральн|пзз|правил[а-я]* землепользован|оопт|особо охраняем|границ|курорт|"
+    r"агломерац|\bзон[аыуе]\b|статус|территориальн|населённ|населенн|черт[аеы] (города|села)|"
+    r"категори|муниципал|мастер-план|проект планировки|развития территор)",
+    re.IGNORECASE,
+)
+REGIONAL_MARK = "(по региону в целом)"
+
+
+def postprocess_sections(
+    sections: list[dict[str, Any]],
+    locality_short: str,
+    region_name: str,
+    cad_num: str | None = None,
+) -> list[dict[str, Any]]:
+    """Что бесплатная модель не делает по промпту — делаем кодом (Клавдий, прод 20.10):
+    цифры по всей республике без пометки, участок ООПТ из чужого кадастрового района,
+    «Статус территории» про стройку школы вместо генплана и ПЗЗ."""
+    stem = (locality_short or "").lower()
+    stem = stem[:-1] if len(stem) > 5 else stem
+    region = (region_name or "").lower().strip()
+    district = (
+        cad_num.split(":")[0] + ":" + cad_num.split(":")[1]
+        if cad_num and cad_num.count(":") == 3
+        else None
+    )
+    out: list[dict[str, Any]] = []
+    for sec in sections:
+        items: list[str] = []
+        for it in sec["items"]:
+            if it == "данных не найдено":
+                continue
+            low = it.lower()
+            if district and any(m != district for m in _CAD_RE.findall(it)):
+                continue  # участок из другого кадастрового района — не про эту локацию
+            if sec["title"] == "Статус территории" and not _STATUS_RE.search(it):
+                continue
+            local = bool(stem) and stem in low
+            if (
+                not local
+                and REGIONAL_MARK not in low
+                and (_REGIONAL_RE.search(it) or (region and region in low))
+            ):
+                it = re.sub(r"(\s*\[[\d,\s]+\])\s*$", rf" {REGIONAL_MARK}\1", it, count=1)
+                if REGIONAL_MARK not in it:
+                    it = f"{it} {REGIONAL_MARK}"
+            items.append(it)
+        out.append({"title": sec["title"], "items": items or ["данных не найдено"]})
+    return out
+
+
 def research_region_search(
-    locality: str, purpose: Purpose, *, search_fn=None, fetch_fn=None, chat_fn=None
+    locality: str,
+    purpose: Purpose,
+    *,
+    search_fn=None,
+    fetch_fn=None,
+    chat_fn=None,
+    cad_num: str | None = None,
 ) -> dict[str, Any]:
     from landcheck import llm
 
@@ -468,11 +532,18 @@ def research_region_search(
     for n in data.get("used") or []:
         if isinstance(n, int):
             cited.add(n)
+    sections = postprocess_sections(
+        sections, short_place(locality), locality.split(",")[0], cad_num
+    )
     sources = [
         {"n": i, "title": d["title"], "url": d["url"], "date": d.get("date")}
         for i, d in enumerate(docs, start=1)
     ]
     grounded = bool(cited & {s["n"] for s in sources})
+    if grounded:
+        # В списке источников — только те, на которые модель сослалась: глэмпинг-блог,
+        # который прошёл фильтры, но не цитируется, в отчёте брокеру не нужен.
+        sources = [s for s in sources if s["n"] in cited]
     text = "\n".join(
         f"## {s['title']}\n" + "\n".join(f"- {i}" for i in s["items"]) for s in sections
     )

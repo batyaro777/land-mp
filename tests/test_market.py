@@ -177,3 +177,30 @@ def test_old_tiny_area_listing_is_refreshed_on_view(client, fixtures_dir):  # no
     with session() as db:
         d = db.get(Listing, lid).data
         assert d["land_area_sotka"] is None and not any("0.01" in f for f in d["facts"])
+
+
+def test_compose_guards_forbid_purpose_without_vri_and_tiny_area_text_warning():
+    from landcheck.listing import ParcelFacts, contradictions
+    from landcheck.web.app import _compose_guards
+
+    pf = {"category": None, "permitted_use": None, "permitted_use_all": "", "best_area_m2": 0.5}
+    facts, forbidden, object_type = _compose_guards(
+        pf, {"facts": ["Площадь по ЕГРН 0.01 сот."], "object_type": "Поселений (ИЖС)"}
+    )
+    assert facts == [] and object_type.startswith("не определён")
+    assert any("ВРИ в ЕГРН не установлен" in f for f in forbidden)
+    assert any("площадь" in f for f in forbidden)
+    tiny = ParcelFacts(
+        cad_num="y",
+        category=None,
+        permitted_use=None,
+        permitted_use_all="",
+        best_area_m2=0.5,
+        has_borders=True,
+        zouit_count=0,
+        cadastral_cost_rub=None,
+    )
+    assert any(
+        "уберите площадь из текста" in w for w in contradictions(tiny, "участок 0,01 сотки", None)
+    )
+    assert contradictions(tiny, "ровный участок", None) == []

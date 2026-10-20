@@ -127,6 +127,13 @@ def contradictions(f: ParcelFacts, text: str, price_rub: float | None) -> list[s
         and vri_match(Purpose.IZHS, f.permitted_use_all) == "conflict"
     ):
         out.append(f"в тексте ИЖС, а ВРИ по НСПД «{f.permitted_use}» — указать фактический ВРИ")
+    if f.best_area_m2 and f.best_area_m2 < MIN_AREA_M2:
+        m = re.search(r"(\d+(?:[.,]\d+)?)\s*сот", t)
+        if m and float(m.group(1).replace(",", ".")):
+            out.append(
+                f"в тексте площадь {m.group(1)} сот., а по ЕГРН она не определена (ошибка данных) — "
+                "уберите площадь из текста"
+            )
     if f.best_area_m2 and f.best_area_m2 >= MIN_AREA_M2:
         actual = f.best_area_m2 / SOTKA_M2
         for m in re.finditer(r"(\d+(?:[.,]\d+)?)\s*сот", t):
