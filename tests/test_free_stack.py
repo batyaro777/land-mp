@@ -586,7 +586,8 @@ def test_district_queries_relevance_and_mark():
     assert district_of(loc) == "Чемальский район" and district_stem(loc) == "чемальск"
     assert district_of("Алтайский край, г. Белокуриха") is None
     qs = build_queries(loc, Purpose.IZHS)
-    assert len(qs) == 8 and qs[6]["q"].startswith("Чемальский район ")
+    assert len(qs) == 9 and qs[6]["q"] == '"Чемальский район" газификация дорога'
+    assert qs[8] == {"q": "Элекмонар новости", "news": True, "recent": True}
     assert len(build_queries("Алтайский край, г. Белокуриха", Purpose.IZHS)) == 6
     doc = {"title": "В Чемальском районе газифицируют сёла", "snippet": "", "text": ""}
     assert is_relevant(doc, "Элекмонар", ["чемальск"]) and not is_relevant(doc, "Элекмонар")

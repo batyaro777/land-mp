@@ -973,11 +973,13 @@ async def listing_create(
 
 @router.post("/listing/{listing_id}/compose")
 def listing_compose(user: UserDep, listing_id: int, notes: Annotated[str, Form()] = ""):
-    """Пересобрать текст ИИ по новым заметкам продавца."""
+    """Пересобрать текст ИИ по новым заметкам продавца — с обновлением фактов и ЗОУИТ из кэша
+    НСПД: старые объявления хранили обрезанные дубли зон (Клавдий, прод 20.10)."""
     with session() as db:
         row = _own_listing(db, user, listing_id)
         data = dict(row.data)
         data["notes"] = notes.strip() or data.get("notes") or ""
+        data = _refresh_from_parcel(row.cad_num, data)
         row.data = _compose_with_ai(data)
         unpublished = bool(row.published and row.data.get("warnings"))
         if unpublished:
@@ -999,6 +1001,31 @@ def listings_page(request: Request, user: UserDep):
             .limit(100)
         ).all()
     return render(request, "listings.html", rows=rows, user=user)
+
+
+def _refresh_from_parcel(cad_num: str, data: dict[str, Any]) -> dict[str, Any]:
+    """Факты, ЗОУИТ, рубрика и площадь — заново по участку из кэша; текст и заметки не трогаем.
+    Если участок не достать (НСПД закрыт, кэш пуст) — данные остаются как были."""
+    from landcheck.listing import ParcelFacts, build_draft
+
+    try:
+        parcel, _errors = _fetch_parcel_now(cad_num)
+    except Exception as exc:  # noqa: BLE001 — пересборка текста не должна падать из-за НСПД
+        log.warning("refresh parcel %s failed: %s", cad_num, exc)
+        return data
+    if not parcel.found:
+        return data
+    draft = build_draft(parcel, notes=data.get("notes") or "", price_rub=data.get("price_rub"))
+    out = dict(data)
+    out["facts"] = draft.facts
+    out["zouit_notes"] = draft.zouit_notes
+    out["land_area_sotka"] = draft.land_area_sotka
+    out["address"] = draft.address or data.get("address")
+    out["parcel_facts"] = ParcelFacts.from_parcel(parcel).to_dict()
+    out["object_type"] = (
+        draft.object_type if not draft.object_type else data.get("object_type") or draft.object_type
+    )
+    return out
 
 
 def _compose_guards(pf: dict[str, Any], data: dict[str, Any]) -> tuple[list[str], list[str], str]:

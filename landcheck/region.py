@@ -296,13 +296,12 @@ def build_queries(locality: str, purpose: Purpose) -> list[dict[str, Any]]:
     if district and short_place(district).lower() != short.lower():
         # Для села своих новостей мало (Элекмонар: 2 документа с одного сайта, прод 20.10) —
         # добавляем район: дороги, газ, инвестиции и генплан там решаются на уровне района.
+        # Короткие запросы: «"Чемальский район" газификация» даёт 10/10 местных страниц,
+        # 6 слов плюс год Яндекс размывает в Осетию и Омск (Клавдий, прод 20.10).
         queries += [
-            {
-                "q": f"{district} дорога газификация инвестиции {year}",
-                "news": False,
-                "recent": True,
-            },
-            {"q": f"{district} генплан ПЗЗ полигон отходов", "news": False, "recent": False},
+            {"q": f'"{district}" газификация дорога', "news": False, "recent": True},
+            {"q": f"{district} новости строительство", "news": False, "recent": True},
+            {"q": f"{short} новости", "news": True, "recent": True},
         ]
     return queries
 

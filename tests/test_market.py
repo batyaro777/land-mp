@@ -315,3 +315,48 @@ def test_zouit_listing_notes_distinguish_zones_and_service_phrase_warning():
     ws = contradictions(pf, "Продавец не предоставил дополнительных сведений.", None)
     assert any("служебная фраза" in w for w in ws)
     assert contradictions(pf, "Участок ровный, у реки.", None) == []
+
+
+def test_recompose_refreshes_facts_and_flags_izhs_without_vri(client, fixtures_dir):  # noqa: F811
+    import json
+
+    from landcheck.listing import ParcelFacts, contradictions
+    from landcheck.web.db import Listing, session
+    from tests.helpers import make_payload
+
+    (fixtures_dir / "50_09_0060202_559.json").write_text(
+        json.dumps(make_payload("50:09:0060202:559", category=None, vri=None, vri_tab=[])),
+        encoding="utf-8",
+    )
+    _register(client, "recompose@example.com")
+    url = client.post(
+        "/listing", data={"cad_num": "50:09:0060202:559", "price": "1000000"}
+    ).headers["location"]
+    lid = int(url.rsplit("/", 1)[1])
+    with session() as db:  # имитируем старую запись: обрезанные дубли ЗОУИТ, пустые факты
+        row = db.get(Listing, lid)
+        row.data = {
+            **row.data,
+            "facts": [],
+            "zouit_notes": ["Округ санитарной…", "Округ санитарной…"],
+            "title": "Участок ИЖС, Белокуриха",
+        }
+        db.commit()
+    page = client.get(url).text
+    assert "в тексте ИЖС, а категория и ВРИ в ЕГРН не установлены" in page
+    assert client.post(f"/listing/{lid}/compose", data={"notes": "ровный"}).status_code == 303
+    with session() as db:
+        d = db.get(Listing, lid).data
+        assert d["zouit_notes"] == [] and "Границы установлены, участок отмежёван" in d["facts"]
+        assert d["notes"] == "ровный" and d["object_type"] == ""
+    pf = ParcelFacts(
+        cad_num="x",
+        category=None,
+        permitted_use=None,
+        permitted_use_all="",
+        best_area_m2=1000.0,
+        has_borders=True,
+        zouit_count=0,
+        cadastral_cost_rub=None,
+    )
+    assert any("назначение не обещать" in w for w in contradictions(pf, "участок под ИЖС", None))
