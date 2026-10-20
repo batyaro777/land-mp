@@ -32,10 +32,12 @@ DEFAULT_MODELS: dict[str, tuple[str, ...]] = {
     # рассуждениями и JSON-режимом: lightning 8 с, super 16 с, ultra 21 с, все отдают 6 разделов;
     # gemma-4 :free отвечает 429 (общий пул перегружен), minimax не даёт выключить рассуждения.
     # Список меняется: openrouter.ai/api/v1/models, pricing.prompt == "0".
+    # Порядок: super (16 с, чистый русский) → ultra (21 с) → lightning (8 с, но огрехи в тексте
+    # вроде «permanente», «сети, сети») → маршрутизатор.
     "openrouter": (
-        "nvidia/nemotron-3.5-lightning:free",
         "nvidia/nemotron-3-super-120b-a12b:free",
         "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "nvidia/nemotron-3.5-lightning:free",
         "openrouter/free",
     ),
     "mistral": ("mistral-medium-latest", "mistral-small-latest"),
