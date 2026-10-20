@@ -375,7 +375,7 @@ def test_relevance_filter_drops_offtopic_documents():
         {"title": "x", "snippet": "село Элекмонар получит газ", "text": ""}, "Элекмонар"
     )
     assert is_relevant(
-        {"title": "x", "snippet": "", "text": "в Белокурихе построят… Белокуриха ждёт"},
+        {"title": "x", "snippet": "", "text": "в Белокурихе построят… Белокуриха ждёт. Белокуриха"},
         "Белокуриха",
     )
 
@@ -414,7 +414,7 @@ def test_classifieds_and_passing_mentions_are_filtered():
         {"title": "Жильё в республике", "snippet": "", "text": text_once}, "Элекмонар"
     )
     assert is_relevant(
-        {"title": "Жильё", "snippet": "", "text": text_once + " Элекмонар"}, "Элекмонар"
+        {"title": "Жильё", "snippet": "", "text": text_once + " Элекмонар, Элекмонар"}, "Элекмонар"
     )
     assert is_relevant({"title": "Школа в Элекмонаре", "snippet": "", "text": ""}, "Элекмонар")
 
@@ -478,3 +478,71 @@ def test_postprocess_sections_marks_regional_drops_foreign_cad_and_filters_statu
     # без кадастрового номера чужие участки не отсеиваем, статус без ключевых слов → пусто
     out2 = postprocess_sections(secs[1:3], "Элекмонар", "Республика Алтай")
     assert len(out2[0]["items"]) == 2
+
+
+def test_postprocess_drops_uncited_and_not_found_variants_and_marks_before_citation():
+    from landcheck.region import REGIONAL_MARK, postprocess_sections
+
+    secs = [
+        {
+            "title": "Негативные факторы",
+            "items": ["Ржавая вода в сетях Чемала [4]", "Данных не найдено", "Шум без ссылки"],
+        },
+        {
+            "title": "Рынок земли",
+            "items": ["Цены по ИЖС в документах не указаны [данных не найдено]"],
+        },
+        {
+            "title": "Развитие и инвестиции",
+            "items": ["Туристический поток в Алтайском крае вырос на 12% [4]."],
+        },
+        {"title": "Вывод для покупателя", "items": ["Проверить ВРИ перед сделкой"]},
+    ]
+    out = postprocess_sections(secs, "Белокуриха", "Алтайский край")
+    assert out[0]["items"] == ["Ржавая вода в сетях Чемала [4]"]
+    assert out[1]["items"] == ["данных не найдено"]
+    assert out[2]["items"] == [
+        f"Туристический поток в Алтайском крае вырос на 12% {REGIONAL_MARK} [4]"
+    ]
+    assert out[3]["items"] == ["Проверить ВРИ перед сделкой"]
+
+
+def test_sources_follow_final_citations_and_keep_numbers():
+    from landcheck.region import research_region_search
+
+    def search_fn(q, max_results, news, recent=False):
+        return {
+            "results": [
+                {"title": f"Белокуриха {i}", "url": f"https://s{i}.ru/a", "snippet": "s"}
+                for i in range(1, 4)
+            ],
+            "error": None,
+        }
+
+    def chat_fn(messages, **k):
+        return {
+            "json": {
+                "sections": [
+                    {"title": "Развитие и инвестиции", "items": ["Стройка [3]"]},
+                    {
+                        "title": "Негативные факторы",
+                        "items": ["Участок ООПТ 04:09:020204:373 рядом [1]"],
+                    },
+                ],
+                "used": [1, 2, 3],
+            },
+            "provider": "groq",
+            "model": "m",
+            "error": None,
+        }
+
+    r = research_region_search(
+        "Алтайский край, г. Белокуриха",
+        Purpose.IZHS,
+        search_fn=search_fn,
+        fetch_fn=lambda urls: {},
+        chat_fn=chat_fn,
+        cad_num="22:64:010303:10",
+    )
+    assert r["grounded"] and [s["n"] for s in r["sources"]] == [3]
+    assert r["sections"][2]["items"] == ["данных не найдено"]

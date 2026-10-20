@@ -79,7 +79,7 @@
   <h4>Факты из НСПД в тексте</h4>
   <ul class="small">{% for f in d.facts %}<li>{{ f }}</li>{% endfor %}</ul>
   {% if d.zouit_notes %}<h4>ЗОУИТ</h4><ul class="small">{% for z in d.zouit_notes %}<li>{{ z }}</li>{% endfor %}</ul>{% endif %}
-  <p class="small"><strong>Тип для Avito:</strong> {{ d.object_type }} · <strong>Площадь:</strong> {{ d.land_area_sotka ~ ' сот.' if d.land_area_sotka else 'не определена' }}</p>
+  <p class="small"><strong>Тип для Avito:</strong> {{ d.object_type or 'не определён (нет категории и ВРИ в ЕГРН)' }} · <strong>Площадь:</strong> {{ d.land_area_sotka ~ ' сот.' if d.land_area_sotka else 'не определена' }}</p>
   {% if d.images %}
   <h4>Фото ({{ d.images|length }})</h4>
   <div class="photos">{% for img in d.images %}<img src="{{ img }}" alt="">{% endfor %}</div>

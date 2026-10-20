@@ -80,6 +80,8 @@ def _guess_object_type(parcel: Parcel) -> str:
         return AVITO_OBJECT_TYPES["industry"]
     if cls == "agri" or vri_match(Purpose.SNT, vri) == "match":
         return AVITO_OBJECT_TYPES["snt"]
+    if not parcel.category and not vri:
+        return ""  # ни категории, ни ВРИ в ЕГРН — рубрику площадки не определить
     return AVITO_OBJECT_TYPES["izhs"]
 
 
@@ -128,10 +130,10 @@ def contradictions(f: ParcelFacts, text: str, price_rub: float | None) -> list[s
     ):
         out.append(f"в тексте ИЖС, а ВРИ по НСПД «{f.permitted_use}» — указать фактический ВРИ")
     if f.best_area_m2 and f.best_area_m2 < MIN_AREA_M2:
-        m = re.search(r"(\d+(?:[.,]\d+)?)\s*сот", t)
+        m = re.search(r"(\d+(?:[.,]\d+)?)\s*(сот|кв\.?\s*м|м²|м2)", t)
         if m and float(m.group(1).replace(",", ".")):
             out.append(
-                f"в тексте площадь {m.group(1)} сот., а по ЕГРН она не определена (ошибка данных) — "
+                f"в тексте площадь «{m.group(0)}», а по ЕГРН она не определена (ошибка данных) — "
                 "уберите площадь из текста"
             )
     if f.best_area_m2 and f.best_area_m2 >= MIN_AREA_M2:
@@ -167,6 +169,11 @@ def static_warnings(f: ParcelFacts) -> list[str]:
         out.append(
             f"площадь по ЕГРН {f.best_area_m2:g} м² — похоже на ошибку данных или долю; "
             "уточнить по выписке, в объявлении площадь не обещать"
+        )
+    if not f.category and not f.permitted_use_all:
+        out.append(
+            "категория земель и ВРИ в ЕГРН не установлены — рубрику площадки не определить, "
+            "назначение в объявлении не указывать; запросить выписку ЕГРН"
         )
     return out
 
@@ -212,7 +219,7 @@ def build_draft(
             + "; ".join(z.describe(max_len=60) for z in parcel.territorial_zones[:2])
         )
 
-    zouit_notes = [z.describe(max_len=80) for z in parcel.zouit]
+    zouit_notes = list(dict.fromkeys(z.describe(max_len=120) for z in parcel.zouit))
 
     title_bits = ["Участок"]
     if area_s:
@@ -223,7 +230,7 @@ def build_draft(
         )
     elif obj == AVITO_OBJECT_TYPES["snt"]:
         title_bits.append("садоводство")
-    else:
+    elif obj == AVITO_OBJECT_TYPES["industry"]:
         title_bits.append("промназначения")
     if locality:
         title_bits.append(f"— {locality}")

@@ -204,3 +204,35 @@ def test_compose_guards_forbid_purpose_without_vri_and_tiny_area_text_warning():
         "уберите площадь из текста" in w for w in contradictions(tiny, "участок 0,01 сотки", None)
     )
     assert contradictions(tiny, "ровный участок", None) == []
+
+
+def test_no_category_no_vri_means_no_avito_type(client, fixtures_dir):  # noqa: F811
+    import json
+
+    from landcheck.listing import ParcelFacts, contradictions, static_warnings
+    from tests.helpers import make_payload
+
+    (fixtures_dir / "50_09_0060202_557.json").write_text(
+        json.dumps(make_payload("50:09:0060202:557", category=None, vri=None, vri_tab=[])),
+        encoding="utf-8",
+    )
+    _register(client, "nocat@example.com")
+    url = client.post(
+        "/listing", data={"cad_num": "50:09:0060202:557", "price": "1000000"}
+    ).headers["location"]
+    page = client.get(url).text
+    assert "не определён (нет категории и ВРИ в ЕГРН)" in page
+    assert "Поселений (ИЖС)" not in page and "промназначения" not in page.lower()
+    assert "рубрику площадки не определить" in page
+    tiny = ParcelFacts(
+        cad_num="y",
+        category=None,
+        permitted_use=None,
+        permitted_use_all="",
+        best_area_m2=1.0,
+        has_borders=True,
+        zouit_count=0,
+        cadastral_cost_rub=None,
+    )
+    assert any("уберите площадь" in w for w in contradictions(tiny, "площадь около 1 кв. м", None))
+    assert any("рубрику площадки" in w for w in static_warnings(tiny))

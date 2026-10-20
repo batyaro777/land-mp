@@ -381,9 +381,9 @@ def is_relevant(doc: dict[str, Any], locality_short: str) -> bool:
     head = f"{doc.get('title') or ''} {doc.get('snippet') or ''}".lower()
     if stem in head:
         return True
-    # В тексте — не меньше двух упоминаний: одно «в том числе в Элекмонаре» в статистике
-    # по всей республике или в блоге про глэмпинг ещё не делает страницу местной.
-    return (doc.get("text") or "").lower().count(stem) >= 2
+    # В тексте — не меньше трёх упоминаний: одно-два «в том числе в Элекмонаре» в статистике
+    # по всей республике или в блоге про глэмпинг ещё не делают страницу местной.
+    return (doc.get("text") or "").lower().count(stem) >= 3
 
 
 def is_junk(url: str, title: str, locality_short: str = "") -> bool:
@@ -449,20 +449,19 @@ def postprocess_sections(
     for sec in sections:
         items: list[str] = []
         for it in sec["items"]:
-            if it == "данных не найдено":
-                continue
             low = it.lower()
+            if "данных не найдено" in low or "данные не найдены" in low:
+                continue  # «Данных не найдено», «[данных не найдено]», рассуждения об отсутствии
+            if sec["title"] != "Вывод для покупателя" and not re.search(r"\[\d", it):
+                continue  # пункт без ссылки на документ — не обоснован
             if district and any(m != district for m in _CAD_RE.findall(it)):
                 continue  # участок из другого кадастрового района — не про эту локацию
             if sec["title"] == "Статус территории" and not _STATUS_RE.search(it):
                 continue
             local = bool(stem) and stem in low
-            if (
-                not local
-                and REGIONAL_MARK not in low
-                and (_REGIONAL_RE.search(it) or (region and region in low))
-            ):
-                it = re.sub(r"(\s*\[[\d,\s]+\])\s*$", rf" {REGIONAL_MARK}\1", it, count=1)
+            regional = _REGIONAL_RE.search(it) or (region and region in low)
+            if not local and REGIONAL_MARK not in low and regional:
+                it = re.sub(r"\s*(\[[\d,\s]+\])\s*\.?\s*$", rf" {REGIONAL_MARK} \1", it, count=1)
                 if REGIONAL_MARK not in it:
                     it = f"{it} {REGIONAL_MARK}"
             items.append(it)
@@ -523,26 +522,28 @@ def research_region_search(
         items = []
         for it in sec.get("items") or []:
             text = re.sub(r"\s+", " ", str(it)).strip()
-            if not text:
-                continue
-            for m in re.finditer(r"\[(\d+(?:\s*,\s*\d+)*)\]", text):
-                cited.update(int(x) for x in re.findall(r"\d+", m.group(1)))
-            items.append(text)
+            if text:
+                items.append(text)
         sections.append({"title": title, "items": items or ["данных не найдено"]})
-    for n in data.get("used") or []:
-        if isinstance(n, int):
-            cited.add(n)
     sections = postprocess_sections(
         sections, short_place(locality), locality.split(",")[0], cad_num
     )
+    # Ссылки считаем по итоговым пунктам: документ, на который ссылался только вырезанный
+    # пункт, в источниках не нужен (Клавдий, прод 20.10).
+    for sec in sections:
+        for it in sec["items"]:
+            for m in re.finditer(r"\[(\d+(?:\s*,\s*\d+)*)\]", it):
+                cited.update(int(x) for x in re.findall(r"\d+", m.group(1)))
+    if not cited:
+        cited.update(n for n in data.get("used") or [] if isinstance(n, int))
     sources = [
         {"n": i, "title": d["title"], "url": d["url"], "date": d.get("date")}
         for i, d in enumerate(docs, start=1)
     ]
     grounded = bool(cited & {s["n"] for s in sources})
     if grounded:
-        # В списке источников — только те, на которые модель сослалась: глэмпинг-блог,
-        # который прошёл фильтры, но не цитируется, в отчёте брокеру не нужен.
+        # В списке — только процитированные документы; номера `n` сохраняются, в шаблоне
+        # <li value="n">, чтобы [4] в тексте вёл на документ 4.
         sources = [s for s in sources if s["n"] in cited]
     text = "\n".join(
         f"## {s['title']}\n" + "\n".join(f"- {i}" for i in s["items"]) for s in sections
