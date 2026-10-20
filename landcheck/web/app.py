@@ -672,23 +672,28 @@ def _terrain_for(
     geometry: dict[str, Any] | None, loc: dict[str, Any] | None
 ) -> dict[str, Any] | None:
     """Рельеф с учётом воды рядом и зоны затопления из «Локации» (ТЗ v2, рельеф и вода)."""
-    import json
-
     from landcheck.location import water_summary
     from landcheck.terrain import terrain_summary
 
     if not geometry:
         return None
     water_m = None
-    flood = False
+    flood = water_zone = False
     if loc:
-        ws = water_summary(loc)
+        items = water_summary(loc).get("items") or []
+        # Расстояние — только до самой воды (OSM); «0 м» до водоохранной зоны — это зона,
+        # а не река (Клавдий, прод 20.10).
         dists = [
-            i.get("distance_m") for i in (ws.get("items") or []) if i.get("distance_m") is not None
+            i["distance_m"]
+            for i in items
+            if i.get("severity") == "plus" and i.get("distance_m") is not None
         ]
         water_m = min(dists) if dists else None
-        flood = "затоплен" in json.dumps(loc, ensure_ascii=False).lower()
-    return terrain_summary(geometry, water_distance_m=water_m, flood_zone=flood)
+        flood = any(i.get("severity") == "risk" and i.get("distance_m") == 0 for i in items)
+        water_zone = any(i.get("severity") == "neutral" and i.get("distance_m") == 0 for i in items)
+    return terrain_summary(
+        geometry, water_distance_m=water_m, flood_zone=flood, water_zone=water_zone
+    )
 
 
 @router.get("/checks/{check_id}/items/{cad_num}/docs", response_class=HTMLResponse)

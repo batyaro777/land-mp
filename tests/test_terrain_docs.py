@@ -35,6 +35,8 @@ def test_steep_slope_and_lowland_near_water_are_risks():
     assert t["level"] == "risk" and any("риск подтопления" in n for n in t["notes"])
     t = terrain_summary(SQUARE, fetch=lowland)
     assert t["level"] == "neutral" and any("низина" in n for n in t["notes"])
+    t = terrain_summary(SQUARE, fetch=lowland, water_zone=True)
+    assert t["level"] == "risk" and any("водоохранной зоне" in n for n in t["notes"])
     hill = lambda points: [110.0] * 9 + [105.0] * 8  # noqa: E731
     assert terrain_summary(SQUARE, fetch=hill)["level"] == "plus"
     assert terrain_summary(SQUARE, fetch=lambda p: [None] * 17)["error"]
@@ -69,6 +71,9 @@ def test_docs_classification_and_search():
 
     assert is_lookup("https://egrp365.org/reestr?cad=50:09:1", "Участок 50:09:1 — ЕГРП365")
     assert is_lookup("https://pkk.rosreestr.ru/#/search/50:09", "ПКК")
+    assert is_lookup("https://e-ecolog.ru/e-cad/04:05:050201:306", "Участок")
+    assert is_lookup("https://any-site.ru/uchastok/04:05:050201:306", "Участок", "04:05:050201:306")
+    assert not is_lookup("https://torgi.gov.ru/lots/04:05:050201:306", "Лот", "04:05:050201:306")
     assert classify("https://sudact.ru/regular/doc/1", "Решение по делу 2-123/2026", "") == "court"
     assert classify("https://torgi.gov.ru/new/public/lots/1", "Лот", "") == "torgi"
     assert classify("https://www.avito.ru/x", "Продам участок 10 сот", "") == "ads"

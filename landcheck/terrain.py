@@ -100,6 +100,7 @@ def terrain_summary(
     *,
     water_distance_m: float | None = None,
     flood_zone: bool = False,
+    water_zone: bool = False,
     fetch: Callable[[list[tuple[float, float]]], list[float | None]] | None = None,
 ) -> dict[str, Any] | None:
     """Сводка рельефа: высота, уклон, положение относительно окружения, уровень риска."""
@@ -145,9 +146,14 @@ def terrain_summary(
         notes.append(f"ровно: уклон {slope:.0f} % ({slope_scope})")
     near_water = water_distance_m is not None and water_distance_m <= 300
     if relief <= LOWLAND_M:
-        if flood_zone or near_water:
+        if flood_zone or near_water or water_zone:
             level = "risk"
-            why = "участок в зоне затопления" if flood_zone else f"вода в {water_distance_m:.0f} м"
+            if flood_zone:
+                why = "участок в зоне затопления"
+            elif near_water:
+                why = f"вода в {water_distance_m:.0f} м"
+            else:
+                why = "участок в водоохранной зоне или прибрежной полосе, вода рядом"
             notes.append(
                 f"низина: на {abs(relief):.0f} м ниже окружения в радиусе {RING_M:.0f} м, {why} — "
                 "риск подтопления, уточнить отметки паводка и дренаж"

@@ -42,8 +42,15 @@ _LOOKUP_HOSTS = (
     "ktotam",
     "reformagkh",
     "dom.mingkh",
+    "e-ecolog",
+    "egrpo",
+    "kadnet",
+    "rosreestr-",
     "выписка",
     "vypiska",
+)
+_PRIMARY_HOSTS = re.compile(
+    r"(sudact|sudrf|arbitr|torgi\.gov|gosuslugi|gov\.ru|\.gov\b|\.рф)", re.I
 )
 _COURT = re.compile(
     r"(sudact|sudrf|судебн|\bсуд[аеу]?\b|решени[ея] по делу|дело №|арбитраж|mos-gorsud|"
@@ -63,10 +70,22 @@ _ADS = re.compile(
 )
 
 
-def is_lookup(url: str, title: str = "") -> bool:
-    host = urlparse(url).netloc.lower()
-    hay = f"{host} {urlparse(url).path.lower()} {title.lower()}"
-    return any(h in hay for h in _LOOKUP_HOSTS)
+def is_lookup(url: str, title: str = "", cad_num: str | None = None) -> bool:
+    """Страница-справочник: известный хост или кадастровый номер прямо в адресе страницы
+    (`/e-cad/04:05:050201:306` — карточка участка, не документ), кроме судов, торгов и
+    официальных сайтов."""
+    from urllib.parse import unquote
+
+    u = urlparse(url)
+    host = u.netloc.lower()
+    path = u.path.lower()
+    hay = f"{host} {path} {title.lower()}"
+    if any(h in hay for h in _LOOKUP_HOSTS):
+        return True
+    if cad_num and not _PRIMARY_HOSTS.search(host):
+        if cad_num in unquote(path) or cad_num.replace(":", "") in path:
+            return True
+    return False
 
 
 def classify(url: str, title: str, snippet: str = "") -> str:
@@ -105,10 +124,10 @@ def search_documents(
             url = (it.get("url") or "").split("#")[0]
             title = (it.get("title") or "").strip()
             snippet = (it.get("snippet") or "").strip()
-            if not url or url in seen or is_lookup(url, title):
+            if not url or url in seen or is_lookup(url, title, cad_num):
                 continue
             # страница должна упоминать номер (поисковики любят подсовывать похожие)
-            if cad_num not in f"{title} {snippet}" and cad_num.replace(":", "") not in url:
+            if cad_num not in f"{title} {snippet}":
                 continue
             seen.add(url)
             items.append(
