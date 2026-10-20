@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass
@@ -55,6 +56,8 @@ BASE_URLS = {
     # в LANDCHECK_LLM (например, «groq,gemini»).
     "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
 }
+log = logging.getLogger(__name__)
+
 RETRY_STATUSES = {408, 409, 425, 429, 500, 502, 503, 504}
 
 
@@ -137,6 +140,10 @@ def chat(
                         body["response_format"] = {"type": "json_object"}
                     if p.name == "openrouter":
                         body["reasoning"] = {"enabled": False}
+                    if p.name == "deepseek":
+                        # V4.1 Flash по умолчанию «думает» (reasoning_tokens даже на простом
+                        # вопросе); без размышлений ответ на 35 % быстрее и дешевле (замер 20.10).
+                        body["thinking"] = {"type": "disabled"}
                 try:
                     r = httpx.post(
                         f"{p.base_url}/chat/completions",
@@ -146,7 +153,8 @@ def chat(
                     )
                 except Exception as e:  # noqa: BLE001 — сеть
                     r = None
-                    last_error = f"{p.name}/{model}: {type(e).__name__}"
+                    last_error = f"{p.name}/{model}: {type(e).__name__}: {e}"
+                    log.warning("llm %s", last_error)
                     break
                 if r.status_code != 400 or not strict:
                     break
@@ -154,6 +162,7 @@ def chat(
                 continue
             if r.status_code != 200:
                 last_error = f"{p.name}/{model}: HTTP {r.status_code}"
+                log.warning("llm %s: %s", last_error, (r.text or "")[:300].replace("\n", " "))
                 if r.status_code in RETRY_STATUSES or r.status_code in (400, 404):
                     continue
                 break
@@ -167,10 +176,12 @@ def chat(
                 last_error = f"{p.name}/{model}: пустой ответ" + (
                     " (все токены ушли в рассуждения)" if message.get("reasoning") else ""
                 )
+                log.warning("llm %s", last_error)
                 continue
             data = parse_json_text(text) if json_object else None
             if json_object and data is None:
                 last_error = f"{p.name}/{model}: ответ не JSON"
+                log.warning("llm %s: %s", last_error, text[:200].replace("\n", " "))
                 continue
             return {
                 "text": text,
