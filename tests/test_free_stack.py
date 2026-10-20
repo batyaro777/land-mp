@@ -570,6 +570,9 @@ def test_generic_guides_are_junk():
     assert is_junk("https://shestakov-dom.com/blog/1", "Участок под глэмпинг: что нужно знать")
     assert is_junk("https://site.ru/a", "Как выбрать участок под дом — советы")
     assert not is_junk("https://tolknews.ru/news/1", "Обзор рынка земли Алтайского края 2026")
+    assert is_junk("https://bankturov.kz/hotels/1", "Отель в Чемальском районе — туры")
+    assert is_junk("https://www.wildberries.ru/catalog/1", "Флаг Чемальский район")
+    assert not is_junk("https://admchemal.ru/news/1", "Чемальский район: ремонт дороги")
 
 
 def test_district_queries_relevance_and_mark():
@@ -586,8 +589,8 @@ def test_district_queries_relevance_and_mark():
     assert district_of(loc) == "Чемальский район" and district_stem(loc) == "чемальск"
     assert district_of("Алтайский край, г. Белокуриха") is None
     qs = build_queries(loc, Purpose.IZHS)
-    assert len(qs) == 9 and qs[6]["q"] == '"Чемальский район" газификация дорога'
-    assert qs[8] == {"q": "Элекмонар новости", "news": True, "recent": True}
+    assert len(qs) == 9 and qs[6]["q"] == '"Чемальский район" газификация'
+    assert qs[8] == {"q": "Элекмонар новости", "news": False, "recent": True}
     assert len(build_queries("Алтайский край, г. Белокуриха", Purpose.IZHS)) == 6
     doc = {"title": "В Чемальском районе газифицируют сёла", "snippet": "", "text": ""}
     assert is_relevant(doc, "Элекмонар", ["чемальск"]) and not is_relevant(doc, "Элекмонар")
