@@ -816,3 +816,26 @@ def test_postprocess_collapses_model_double_marks_and_keeps_conclusion():
     assert first.startswith("По региону в целом:") and first.count("(по региону в целом)") == 0
     assert second.count("(по региону в целом)") == 1 and second.endswith("[2]")
     assert out[1]["items"] == ["Генплан расширяет зону ИЖС до 806 га и предусматривает школы [4]"]
+
+
+def test_same_fact_by_shared_source_and_object():
+    from landcheck.region import _same_fact, postprocess_sections
+
+    bridge_a = "2 августа в Элекмонаре обрушился деревянный мост, второй мост аварийный [3]"
+    bridge_b = "Паводок в конце июля — августе 2026 года привёл к разрушению моста и аварийному состоянию переправ [3]"
+    assert _same_fact(bridge_a, bridge_b)
+    dump_a = "Несанкционированная свалка 4,8 га закрыта в 2014 году, рекультивирована, 42,5 млн руб. [3, 7]"
+    dump_b = (
+        "Полигон ТБО в микрорайоне Северном около 5 га закрыт в 2021 году и рекультивирован [7]"
+    )
+    assert _same_fact(dump_a, dump_b)
+    # общий источник, но разные объекты — разные факты
+    assert not _same_fact("Строится школа на 275 мест [4]", "Догазификация 300 домов завершена [4]")
+    # без общего источника объект не склеивает
+    assert not _same_fact("Мост через Катунь отремонтирован [2]", "Мост в Чепоше закрыт [5]")
+    secs = [
+        {"title": "Дороги и инфраструктура", "items": [bridge_a]},
+        {"title": "Негативные факторы", "items": [bridge_b, dump_a, dump_b]},
+    ]
+    out = postprocess_sections(secs, "Элекмонар", "Республика Алтай")
+    assert out[1]["items"] == [dump_a]

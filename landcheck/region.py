@@ -641,6 +641,34 @@ _PAREN_MARK_RE = re.compile(
 _WORD_RE = re.compile(r"[а-яёa-z]{4,}", re.IGNORECASE)
 
 
+# Объект факта: модель каждый раз формулирует по-новому (без даты и суммы), но мост, полигон или
+# школа при общем источнике — тот же факт (прод 21.10: мост «2 августа» → «паводок … мост»)
+_OBJECTS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
+    (k, re.compile(p, re.IGNORECASE))
+    for k, p in (
+        ("мост", r"\bмост|переправ"),
+        ("полигон", r"полигон|свалк"),
+        ("скотомогильник", r"скотомогильн"),
+        ("школа", r"\bшкол"),
+        ("детсад", r"детск\w*\s+сад|детсад"),
+        ("газ", r"газификац|газопровод|догазификац"),
+        ("вода", r"водоснабж|водопровод|водозабор"),
+        ("дорога", r"\bдорог|\bобход\b|\bтрасс"),
+        ("аэропорт", r"аэропорт|аэродром"),
+        ("карьер", r"карьер"),
+        ("кладбище", r"кладбищ"),
+        ("очистные", r"очистн"),
+        ("котельная", r"котельн"),
+        ("электросети", r"\bлэп\b|электросет|подстанц"),
+        ("медицина", r"больниц|\bфап\b|поликлиник"),
+    )
+)
+
+
+def _objects(it: str) -> set[str]:
+    return {k for k, p in _OBJECTS if p.search(it)}
+
+
 def _cites(it: str) -> set[str]:
     return {n for m in re.findall(r"\[([\d,\s]+)\]", it) for n in re.split(r"[,\s]+", m) if n}
 
@@ -677,7 +705,7 @@ def _same_fact(a: str, b: str) -> bool:
     money_b = {re.sub(r"\s", "", m[0]) + m[1].lower() for m in _MONEY_RE.findall(b)}
     dates_a = {f"{d} {m.lower()}" for d, m in _DATE_RE.findall(a)}
     dates_b = {f"{d} {m.lower()}" for d, m in _DATE_RE.findall(b)}
-    if shared_cite and (money_a & money_b or dates_a & dates_b):
+    if shared_cite and (money_a & money_b or dates_a & dates_b or _objects(a) & _objects(b)):
         return True
     ta, tb = _tokens(a), _tokens(b)
     if not ta or not tb:
