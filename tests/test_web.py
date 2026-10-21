@@ -435,3 +435,79 @@ def test_telegram_summary_short_flags_and_webhook_secret_masked(caplog):
             200,
         )
     assert "abcdef0123456789abcdef01" not in caplog.text and "/tg/webhook/***" in caplog.text
+
+
+def test_api_v1_key_checks_export_and_revoke(client: TestClient, monkeypatch):
+    import re
+
+    r = client.get("/api/v1")
+    assert r.status_code == 200 and "POST /api/v1/checks" in r.json()["endpoints"]
+    assert client.post("/api/v1/checks", json={"numbers": ["50:09:0060202:104"]}).status_code == 401
+    login(client)
+    page = client.get("/profile").text
+    assert "Выпустить ключ API" in page and "lmp_" not in page
+    assert client.post("/profile/api-key").status_code == 303
+    page = client.get("/profile").text
+    key = re.search(r"lmp_[A-Za-z0-9_-]+", page).group(0)
+    assert "curl -X POST" in page and key in page
+    h = {"Authorization": f"Bearer {key}"}
+
+    r = client.post(
+        "/api/v1/checks",
+        json={
+            "numbers": ["50:09:0060202:104", "50:09:0060202:101"],
+            "purpose": "izhs",
+            "title": "Для юриста",
+        },
+        headers=h,
+    )
+    assert r.status_code == 202 and r.json()["status"] == "queued"
+    cid = r.json()["id"]
+    j = client.get(f"/api/v1/checks/{cid}", headers={"X-Api-Key": key}).json()
+    assert j["status"] == "done" and j["title"] == "Для юриста" and len(j["items"]) == 2
+    it = next(i for i in j["items"] if i["cad_num"] == "50:09:0060202:104")
+    assert it["verdict"] == "проверить" and it["flags"][0]["rule_id"] == "R10"
+    assert it["parcel"]["has_borders"] is True and it["report_url"].endswith(
+        "/items/50:09:0060202:104"
+    )
+    assert "R10" not in str(
+        next(i for i in j["items"] if i["cad_num"] == "50:09:0060202:101")["flags"]
+    )
+    lst = client.get("/api/v1/checks", headers=h).json()["checks"]
+    assert lst[0]["id"] == cid and "items" not in lst[0]
+    csv = client.get(f"/api/v1/checks/{cid}/export.csv", headers=h)
+    assert (
+        csv.status_code == 200
+        and "50:09:0060202:104" in csv.text
+        and csv.headers["content-type"].startswith("text/csv")
+    )
+    assert client.get(f"/api/v1/checks/{cid}/export.xlsx", headers=h).status_code == 200
+    assert client.get(f"/api/v1/checks/{cid}/export.pdf", headers=h).status_code == 404
+    pj = client.get("/api/v1/parcels/50:09:0060202:104", headers=h).json()
+    assert pj["check_id"] == cid and pj["verdict"] == "проверить"
+    assert client.get("/api/v1/parcels/50:09:0060202:999", headers=h).status_code == 404
+    assert client.get(f"/api/v1/checks/{cid + 100}", headers=h).status_code == 404
+    # ошибки входа
+    assert client.post("/api/v1/checks", json={"text": "ничего"}, headers=h).status_code == 400
+    assert (
+        client.post(
+            "/api/v1/checks", json={"numbers": ["50:09:0060202:104"], "purpose": "villa"}, headers=h
+        ).status_code
+        == 400
+    )
+    monkeypatch.setattr(settings, "max_items", 1)
+    assert (
+        client.post(
+            "/api/v1/checks",
+            json={"numbers": ["50:09:0060202:104", "50:09:0060202:101"]},
+            headers=h,
+        ).status_code
+        == 400
+    )
+    # отзыв ключа
+    assert client.post("/profile/api-key/off").status_code == 303
+    assert client.get("/api/v1/checks", headers=h).status_code == 401
+    assert (
+        client.get("/api/v1/checks", headers={"Authorization": "Bearer lmp_wrong"}).status_code
+        == 401
+    )

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Профиль — {{ brand }}<form id="tg-off" method="post" action="/profile/telegram/off"></form>
+{% block title %}Профиль — {{ brand }}<form id="tg-off" method="post" action="/profile/telegram/off"></form><form id="api-on" method="post" action="/profile/api-key"></form><form id="api-off" method="post" action="/profile/api-key/off"></form>
 {% endblock %}
 {% block content %}
 <article class="narrow">
@@ -40,5 +40,24 @@
     {% endif %}
     <button type="submit">Сохранить</button>
   </form>
+</article>
+<article id="api">
+  <h4>API для интеграций <small class="muted">(юристам, инженерам, CRM)</small></h4>
+  {% if user.api_key %}
+  <p>Ключ: <code id="api-key">{{ user.api_key }}</code> <button type="button" class="outline sm" onclick="navigator.clipboard.writeText(document.getElementById('api-key').textContent);this.textContent='Скопировано'">Скопировать</button>
+    <button type="submit" form="api-on" class="outline sm secondary" onclick="return confirm('Старый ключ перестанет работать. Перевыпустить?')">Перевыпустить</button>
+    <button type="submit" form="api-off" class="outline sm secondary">Отозвать</button></p>
+  <details><summary class="small">Как пользоваться</summary>
+<pre class="small">curl -X POST {{ base_url }}/api/v1/checks \
+  -H "Authorization: Bearer {{ user.api_key }}" -H "Content-Type: application/json" \
+  -d '{"numbers": ["50:09:0060202:101"], "purpose": "izhs"}'
+# → {"id": 12, "status": "queued", ...}; затем:
+curl -H "Authorization: Bearer {{ user.api_key }}" {{ base_url }}/api/v1/checks/12
+curl -H "Authorization: Bearer {{ user.api_key }}" -o result.csv {{ base_url }}/api/v1/checks/12/export.csv</pre>
+    <p class="muted small">Описание всех методов: <a href="/api/v1" target="_blank">/api/v1</a>. Цели: {{ purposes }}. До {{ max_items }} участков за запрос.</p>
+  </details>
+  {% else %}
+  <p class="muted small">Ключ даёт доступ к проверкам из своих программ: POST номера → JSON/CSV/XLSX с вердиктами и флагами. <button type="submit" form="api-on" class="outline sm">Выпустить ключ API</button></p>
+  {% endif %}
 </article>
 {% endblock %}

@@ -84,6 +84,7 @@ class User(Base):
     # Уведомления (план 20.10, п.5): в кабинете всегда; email и Telegram — если настроены.
     telegram_chat_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     notify_email: Mapped[bool] = mapped_column(default=True, server_default="1")
+    api_key: Mapped[str | None] = mapped_column(String(64), nullable=True)  # R10: ключ API
 
     checks: Mapped[list[Check]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
@@ -298,6 +299,7 @@ _NEW_COLUMNS: dict[str, dict[str, str]] = {
         "referred_by": "INTEGER",
         "telegram_chat_id": "VARCHAR(32)",
         "notify_email": "BOOLEAN NOT NULL DEFAULT 1",
+        "api_key": "VARCHAR(64)",
     },
     "invites": {"role": "VARCHAR(16)"},
     "listings": {
@@ -311,6 +313,7 @@ _NEW_COLUMNS: dict[str, dict[str, str]] = {
 }
 _NEW_INDEXES = (
     "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email ON users(email)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_api_key ON users(api_key)",
     "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_ref_code ON users(ref_code)",
 )
 

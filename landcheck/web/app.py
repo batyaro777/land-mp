@@ -119,6 +119,9 @@ def create_app() -> FastAPI:
     uploads.mkdir(parents=True, exist_ok=True)
     app.mount("/uploads", StaticFiles(directory=str(uploads)), name="uploads")
     app.include_router(router)
+    from landcheck.web.api import router as api_router
+
+    app.include_router(api_router)
     resumed = jobs.resume_pending()
     if resumed:
         log.warning("возобновлено незавершённых проверок после рестарта: %s", resumed)
@@ -891,6 +894,9 @@ def profile_form(request: Request, user: UserDep, saved: int = 0, error: str | N
         saved=saved,
         error=error,
         tg_link=link_url(user.id),
+        base_url=settings.base_url.rstrip("/") or "https://land-mp.dnai.engineering",
+        max_items=settings.max_items,
+        purposes=", ".join(p.value for p in Purpose),
     )
 
 
@@ -1942,6 +1948,27 @@ async def telegram_webhook(request: Request, secret: str):
         result = handle_update(db, update if isinstance(update, dict) else {})
     log.info("telegram update: %s", result)
     return {"ok": True}
+
+
+@router.post("/profile/api-key")
+def profile_api_key(user: UserDep):
+    """Выпустить (или перевыпустить) ключ API; старый перестаёт работать."""
+    import secrets as _secrets
+
+    with session() as db:
+        u = db.get(User, user.id)
+        u.api_key = "lmp_" + _secrets.token_urlsafe(24)
+        db.commit()
+    return RedirectResponse("/profile?saved=1#api", status_code=303)
+
+
+@router.post("/profile/api-key/off")
+def profile_api_key_off(user: UserDep):
+    with session() as db:
+        u = db.get(User, user.id)
+        u.api_key = None
+        db.commit()
+    return RedirectResponse("/profile?saved=1#api", status_code=303)
 
 
 @router.post("/profile/telegram/off")
