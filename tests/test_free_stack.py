@@ -879,7 +879,8 @@ def test_same_fact_ignores_locality_quotes_and_directions_and_merges_by_sum():
 
     dump_a = "Несанкционированная свалка площадью 4,8 га в черте Белокурихи, 42,5 млн руб. — устранено (2023) [3]"
     dump_b = "Полигон ТБО в микрорайоне Северном около 5 га, контракт 42,5 млн руб. по нацпроекту «Экология» — устранено (2024) [7]"
-    assert _same_fact(dump_a, dump_b, strict=True)  # та же сумма и объект — без общего источника
+    # та же сумма и объект — без общего источника; локация (Белокуриха) — не имя объекта
+    assert _same_fact(dump_a, dump_b, strict=True, skip_names={"белокурих"})
     bridge = "2 августа обрушился мост через реку Эликманар в сторону села Каракол [3]"
     detour = "Власти решили организовать объезд разрушенных мостов, переговоры о проезде к селу Каракол [3]"
     assert not _same_fact(bridge, detour, strict=True)  # Каракол — направление, не объект
@@ -893,3 +894,31 @@ def test_same_fact_ignores_locality_quotes_and_directions_and_merges_by_sum():
     out = postprocess_sections(secs, "Белокуриха", "Алтайский край")
     assert len(out[0]["items"]) == 2
     assert out[1]["items"] == [dump_a, "Свалка у Белокурихи закрыта [9]"]
+
+
+def test_same_fact_names_guard_money_rule_and_locality_and_status_moves_to_development():
+    from landcheck.region import _same_fact, postprocess_sections
+
+    a = "Школа в Чепоше: контракт 120 млн руб. [2]"
+    b = "В Аскате подрядчик получил 120 млн руб. на новую школу [5]"
+    assert not _same_fact(a, b) and not _same_fact(a, b, strict=True)
+    c = "Строительство школы в Чепоше отстаёт от графика [2]"
+    d = "Новая школа в Элекмонаре откроется в 2027 году [2]"
+    assert not _same_fact(c, d, skip_names={"элекмонар"})  # локация не делает имена «пустыми»
+    secs = [
+        {"title": "Развитие и инвестиции", "items": ["Курортный кластер на 2 млрд [2]"]},
+        {"title": "Негативные факторы", "items": [c, d]},
+        {
+            "title": "Статус территории",
+            "items": [
+                "Развитие идёт на двух площадках: «Белокуриха Горная» и старая часть города [1, 5]",
+                "Генплан принят в сентябре, границы населённого пункта установлены [5]",
+            ],
+        },
+    ]
+    out = postprocess_sections(secs, "Элекмонар", "Республика Алтай")
+    assert out[1]["items"] == [c, d]
+    assert len(out[0]["items"]) == 2 and "двух площадках" in out[0]["items"][1]
+    assert out[2]["items"] == [
+        "Генплан принят в сентябре, границы населённого пункта установлены [5]"
+    ]

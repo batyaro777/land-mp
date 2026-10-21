@@ -735,9 +735,15 @@ def _same_fact(a: str, b: str, *, strict: bool = False, skip_names: set[str] | N
     if shared_cite and (money_a & money_b or dates_a & dates_b):
         return True
     if money_a & money_b and _objects(a) & _objects(b):
-        return True  # та же сумма и тот же объект — один контракт, даже если источники разные
-    if shared_cite and _objects(a) & _objects(b):
+        # та же сумма и тот же объект — один контракт, даже если источники разные; но школа в
+        # Чепоше и школа в Аскате по 120 млн — разные (имена без локации не должны расходиться)
         na, nb = _names(a, skip_names), _names(b, skip_names)
+        if not (na and nb and not na & nb):
+            return True
+    if shared_cite and _objects(a) & _objects(b):
+        # имена сравниваем полностью: «школа в Чепоше» и «школа в Элекмонаре» — разные, даже
+        # если Элекмонар — сама локация
+        na, nb = _names(a), _names(b)
         if na and nb and not na & nb:
             pass  # один объект, разные имена — разные факты
         elif not strict or na & nb:
@@ -791,6 +797,7 @@ def postprocess_sections(
     skip = {stem, dstem or ""}  # сама локация и район — не имена объектов
     out: list[dict[str, Any]] = []
     moved: list[str] = []
+    moved_dev: list[str] = []
     for sec in sections:
         items: list[str] = []
         for it in sec["items"]:
@@ -805,6 +812,7 @@ def postprocess_sections(
             if district and any(m != district for m in _CAD_RE.findall(it)):
                 continue  # участок из другого кадастрового района — не про эту локацию
             if sec["title"] == "Статус территории" and not _STATUS_RE.search(it):
+                moved_dev.append(it)  # не про генплан/ПЗЗ/границы — это развитие, не статус
                 continue
             local = bool(stem) and stem in low
             regional = _REGIONAL_RE.search(it) or (region_re is not None and region_re.search(low))
@@ -835,6 +843,13 @@ def postprocess_sections(
             if not any(_same_fact(it, x, skip_names=skip) for x in base):
                 base.append(it)
         status["items"] = base
+    dev = next((o for o in out if o["title"] == "Развитие и инвестиции"), None)
+    if dev is not None and moved_dev:
+        base = [] if dev["items"] == ["данных не найдено"] else list(dev["items"])
+        for it in moved_dev:
+            if not any(_same_fact(it, x, strict=True, skip_names=skip) for x in base):
+                base.append(it)
+        dev["items"] = base
     # один факт — в одном разделе: аварийный мост из «Дорог» не повторять в «Негативных»
     roads = next((o["items"] for o in out if o["title"] == "Дороги и инфраструктура"), [])
     for o in out:
