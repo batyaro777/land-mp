@@ -839,3 +839,36 @@ def test_same_fact_by_shared_source_and_object():
     ]
     out = postprocess_sections(secs, "Элекмонар", "Республика Алтай")
     assert out[1]["items"] == [dump_a]
+
+
+def test_same_fact_strict_mode_and_names():
+    from landcheck.region import _same_fact, postprocess_sections
+
+    bridge_a = "2 августа в Элекмонаре обрушился мост через Эликманар, второй мост аварийный [3]"
+    other_bridge = "Мост через Катунь у Чемала закрыт на ремонт до октября [3]"
+    detour = "Власти решили организовать объезд разрушенных мостов через частные территории к селу Каракол [3]"
+    gas_a = "Газопровод для газификации сёл Узнезя и Элекмонар построен на 66,6% [3]"
+    gas_b = "Пятилетняя программа газификации: 570 км газопроводов в республике [3]"
+    assert not _same_fact(bridge_a, other_bridge)  # один объект, разные реки
+    assert not _same_fact(bridge_a, detour)  # Эликманар против Каракол
+    assert not _same_fact(gas_a, gas_b, strict=True)  # внутри «Дорог» объект сам не склеивает
+    assert _same_fact(gas_a, gas_b) is True  # в «Негативных» и между разделами — склеивает
+    cable = "Канатная дорога на гору Церковка работает круглый год [4]"
+    road = "Ремонт дороги Белокуриха — Солоновка завершён [4]"
+    assert not _same_fact(cable, road, strict=True) and not _same_fact(cable, road)
+    out = postprocess_sections(
+        [
+            {
+                "title": "Дороги и инфраструктура",
+                "items": [bridge_a, other_bridge, detour, gas_a, gas_b],
+            },
+            {
+                "title": "Негативные факторы",
+                "items": ["Паводок привёл к разрушению моста через Эликманар [3]"],
+            },
+        ],
+        "Элекмонар",
+        "Республика Алтай",
+    )
+    assert len(out[0]["items"]) == 5
+    assert out[1]["items"] == ["данных не найдено"]

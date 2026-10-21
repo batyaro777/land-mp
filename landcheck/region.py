@@ -653,7 +653,6 @@ _OBJECTS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
         ("детсад", r"детск\w*\s+сад|детсад"),
         ("газ", r"газификац|газопровод|догазификац"),
         ("вода", r"водоснабж|водопровод|водозабор"),
-        ("дорога", r"\bдорог|\bобход\b|\bтрасс"),
         ("аэропорт", r"аэропорт|аэродром"),
         ("карьер", r"карьер"),
         ("кладбище", r"кладбищ"),
@@ -667,6 +666,19 @@ _OBJECTS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
 
 def _objects(it: str) -> set[str]:
     return {k for k, p in _OBJECTS if p.search(it)}
+
+
+_NAME_RE = re.compile(r"\b[А-ЯЁ][а-яё-]{3,}\b")
+
+
+def _names(it: str) -> set[str]:
+    """Имена собственные (река, село, трасса) без первого слова пункта: разные имена при одном
+    объекте — разные факты (мост через Эликманар и мост через Катунь)."""
+    bare = re.sub(r"\[[\d,\s]+\]", "", it).strip()
+    words = _NAME_RE.findall(bare)
+    if words and bare.startswith(words[0]):
+        words = words[1:]
+    return {w.lower().replace("ё", "е")[:6] for w in words}
 
 
 def _cites(it: str) -> set[str]:
@@ -696,17 +708,26 @@ def _collapse_marks(it: str) -> str:
 _NO_AREA_MOVE = ("Статус территории", "Вывод для покупателя", "Негативные факторы")
 
 
-def _same_fact(a: str, b: str) -> bool:
-    """Один факт двумя пунктами: та же сумма или дата при общем источнике, либо сильное
-    совпадение слов (мост в «Дорогах» и в «Негативных»; полигон 42,5 млн дважды)."""
+def _same_fact(a: str, b: str, *, strict: bool = False) -> bool:
+    """Один факт двумя пунктами: та же сумма или дата при общем источнике; тот же объект при
+    общем источнике, если имена собственные не расходятся (мост в «Дорогах» и в «Негативных»;
+    полигон 42,5 млн дважды); либо сильное совпадение слов. strict — внутри «Дорог» и прочих
+    разделов объект сам по себе не склеивает (две разные газовые программы из одного источника),
+    нужно ещё общее имя."""
     ca, cb = _cites(a), _cites(b)
     shared_cite = bool(ca & cb)
     money_a = {re.sub(r"\s", "", m[0]) + m[1].lower() for m in _MONEY_RE.findall(a)}
     money_b = {re.sub(r"\s", "", m[0]) + m[1].lower() for m in _MONEY_RE.findall(b)}
     dates_a = {f"{d} {m.lower()}" for d, m in _DATE_RE.findall(a)}
     dates_b = {f"{d} {m.lower()}" for d, m in _DATE_RE.findall(b)}
-    if shared_cite and (money_a & money_b or dates_a & dates_b or _objects(a) & _objects(b)):
+    if shared_cite and (money_a & money_b or dates_a & dates_b):
         return True
+    if shared_cite and _objects(a) & _objects(b):
+        na, nb = _names(a), _names(b)
+        if na and nb and not na & nb:
+            pass  # один объект, разные имена — разные факты
+        elif not strict or na & nb:
+            return True
     ta, tb = _tokens(a), _tokens(b)
     if not ta or not tb:
         return False
@@ -787,7 +808,8 @@ def postprocess_sections(
             if sec["title"] not in _NO_AREA_MOVE and _GENPLAN_AREA_RE.search(it):
                 moved.append(it)  # площади зон генплана — в «Статус территории», не в дороги
                 continue
-            if any(_same_fact(it, prev) for prev in items):
+            strict = sec["title"] != "Негативные факторы"
+            if any(_same_fact(it, prev, strict=strict) for prev in items):
                 continue  # тот же факт вторым пунктом (полигон с тем же контрактом)
             items.append(it)
         out.append({"title": sec["title"], "items": items or ["данных не найдено"]})
