@@ -21,7 +21,7 @@ import httpx
 USER_AGENT = "Mozilla/5.0 (compatible; landcheck/0.1; +https://land-mp.dnai.engineering)"
 MAX_PAGE_CHARS = 3500
 MAX_HTML_CHARS = 1_500_000  # больше — не статья; и память воркера
-EXTRACT_TIMEOUT = 20.0
+EXTRACT_TIMEOUT = 45.0  # вместе с ожиданием в очереди: 6 потоков загрузки делят 2 воркера
 log = logging.getLogger(__name__)
 SKIP_HOSTS = ("vk.com", "vk.ru", "ok.ru", "t.me", "youtube.com", "instagram.com", "facebook.com")
 
@@ -171,8 +171,9 @@ def extract_text(html: str) -> str:
         _reset_pool()
         return ""
     except FutureTimeout:
-        log.warning("extract timeout after %ss, pool reset", EXTRACT_TIMEOUT)
-        _reset_pool()
+        # пул не трогаем: сброс с cancel_futures отменил бы соседние страницы этого прогона,
+        # а зависший воркер он всё равно не убивает (Клавдий, прод 21.10)
+        log.warning("extract timeout after %ss", EXTRACT_TIMEOUT)
         return ""
     except Exception as exc:  # noqa: BLE001
         log.warning("extract failed: %s", type(exc).__name__)
