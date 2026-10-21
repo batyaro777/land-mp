@@ -922,3 +922,15 @@ def test_same_fact_names_guard_money_rule_and_locality_and_status_moves_to_devel
     assert out[2]["items"] == [
         "Генплан принят в сентябре, границы населённого пункта установлены [5]"
     ]
+
+
+def test_same_fact_locality_container_vs_different_villages():
+    from landcheck.region import _same_fact
+
+    dump_a = "Несанкционированная свалка площадью 4,8 га в черте Белокурихи закрыта в 2014 году, рекультивирована — устранено (2023–2024) [3, 7]"
+    dump_b = "Полигон ТБО в микрорайоне Северном площадью около 5 га закрыт в 2021 году и рекультивирован по нацпроекту «Экология» — устранено (2024) [7]"
+    assert _same_fact(dump_a, dump_b, skip_names={"белокурих"})  # один объект, локация — контейнер
+    assert not _same_fact(dump_a, dump_b, strict=True, skip_names={"белокурих"})
+    c = "Строительство школы в Чепоше отстаёт от графика [2]"
+    d = "Новая школа в Элекмонаре откроется в 2027 году [2]"
+    assert not _same_fact(c, d, skip_names={"элекмонар"})  # разные сёла, слов общих нет

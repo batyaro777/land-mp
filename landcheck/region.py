@@ -741,11 +741,17 @@ def _same_fact(a: str, b: str, *, strict: bool = False, skip_names: set[str] | N
         if not (na and nb and not na & nb):
             return True
     if shared_cite and _objects(a) & _objects(b):
-        # имена сравниваем полностью: «школа в Чепоше» и «школа в Элекмонаре» — разные, даже
-        # если Элекмонар — сама локация
-        na, nb = _names(a), _names(b)
+        # «школа в Чепоше» и «школа в Элекмонаре» — разные, даже если Элекмонар — сама локация;
+        # но «свалка в черте Белокурихи» и «полигон в микрорайоне Северном» — одна (локация —
+        # контейнер): когда расходятся только полные имена, нужно хоть какое-то совпадение слов
+        na_full, nb_full = _names(a), _names(b)
+        na, nb = _names(a, skip_names), _names(b, skip_names)
         if na and nb and not na & nb:
             pass  # один объект, разные имена — разные факты
+        elif na_full and nb_full and not na_full & nb_full:
+            ta, tb = _tokens(a), _tokens(b)
+            if not strict and ta and tb and len(ta & tb) / len(ta | tb) >= 0.2:
+                return True
         elif not strict or na & nb:
             return True
     ta, tb = _tokens(a), _tokens(b)
