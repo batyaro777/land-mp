@@ -33,8 +33,13 @@ FIELDS: tuple[tuple[str, str], ...] = (
 
 
 def _zone_names(zones: list[dict[str, Any]] | None) -> list[str]:
+    """Как в таблице отчёта: «вид · название (реестровый номер)»; у терзон без ПЗЗ в НСПД
+    есть только слой и номер — тогда «Территориальные зоны (04:05-7.124)»."""
     return sorted(
-        {(z.get("kind") or z.get("name") or z.get("reg_number") or "") for z in zones or []}
+        {
+            (z.get("describe") or z.get("kind") or z.get("name") or z.get("reg_number") or "")
+            for z in zones or []
+        }
     )
 
 
