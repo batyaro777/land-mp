@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from landcheck.market_ads import collect_ads, parse_ad
 from landcheck.web.content import valuation
+from tests.test_web import client  # noqa: F401 — фикстура клиента кабинета
 
 
 def test_parse_ad_prices_and_areas():
@@ -123,3 +124,59 @@ def test_valuation_range_verdict_and_confidence():
     assert valuation(_item(pps=None, area=1.0), corridor=None, ads=None, median_batch=None) is None
     v = valuation(_item(), corridor=None, ads=None, median_batch=None)
     assert v["verdict"] is None and len(v["anchors"]) == 2
+
+
+def test_report_loads_ads_block_lazily_and_caches(client, monkeypatch):  # noqa: F811
+    from landcheck import market_ads
+    from tests.test_verification import _register
+
+    _register(client, "val@example.com", role="broker")
+    r = client.post(
+        "/checks",
+        data={"title": "t", "numbers": "50:09:0060202:101; 2 500 000; 10 сот", "purpose": "izhs"},
+    )
+    assert r.status_code == 303
+    url = r.headers["location"]
+    import time
+
+    for _ in range(50):
+        page = client.get(url).text
+        if "Проверено за" in page:
+            break
+        time.sleep(0.1)
+    report = client.get(url + "/items/50:09:0060202:101").text
+    assert 'hx-get="' in report and "/items/50:09:0060202:101/ads" in report
+    monkeypatch.setattr(
+        market_ads,
+        "collect_ads",
+        lambda loc, kind, **k: {
+            "ads": [
+                {
+                    "title": "Участок 10 сот",
+                    "url": "https://avito.ru/1",
+                    "host": "avito.ru",
+                    "price_rub": 2_000_000.0,
+                    "area_m2": 1000.0,
+                    "pps": 200_000.0,
+                }
+            ]
+            * 3,
+            "n": 3,
+            "median": 200_000.0,
+            "p25": 200_000.0,
+            "p75": 200_000.0,
+            "queries": [],
+            "fetched_at": "2026-10-21T00:00:00+00:00",
+            "error": None,
+        },
+    )
+    import landcheck.web.app as app_mod
+
+    monkeypatch.setattr(app_mod, "collect_ads", market_ads.collect_ads, raising=False)
+    block = client.get(url + "/items/50:09:0060202:101/ads").text
+    assert "Оценка стоимости" in block and "Объявления в локации (3)" in block
+    report = client.get(url + "/items/50:09:0060202:101").text
+    assert (
+        "Объявления в локации (3)" in report
+        and "/ads" not in report.split("Оценка стоимости")[1][:200]
+    )
