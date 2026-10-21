@@ -669,16 +669,28 @@ def _objects(it: str) -> set[str]:
 
 
 _NAME_RE = re.compile(r"\b[А-ЯЁ][а-яё-]{3,}\b")
+# Пункт назначения — не объект: «мост … в сторону села Каракол» и «объезд … к селу Каракол»
+_DIRECTION_RE = re.compile(
+    r"(в сторону|к селу|до села|в село|в направлении|в сторону села)\s+(села\s+)?[А-ЯЁ][а-яё-]+",
+    re.IGNORECASE,
+)
 
 
-def _names(it: str) -> set[str]:
-    """Имена собственные (река, село, трасса) без первого слова пункта: разные имена при одном
+def _names(it: str, skip: set[str] | None = None) -> set[str]:
+    """Имена собственные (река, село, трасса) без первого слова пункта, без названий в кавычках
+    (нацпроект «Экология»), без пунктов назначения и без самой локации: разные имена при одном
     объекте — разные факты (мост через Эликманар и мост через Катунь)."""
     bare = re.sub(r"\[[\d,\s]+\]", "", it).strip()
+    bare = re.sub(r"[«\"][^»\"]*[»\"]", " ", bare)
+    bare = _DIRECTION_RE.sub(" ", bare)
     words = _NAME_RE.findall(bare)
-    if words and bare.startswith(words[0]):
+    if words and it.strip().startswith(words[0]):
         words = words[1:]
-    return {w.lower().replace("ё", "е")[:6] for w in words}
+    out = {w.lower().replace("ё", "е")[:6] for w in words}
+    for sk in skip or ():
+        if sk:
+            out = {w for w in out if not w.startswith(sk[:5])}
+    return out
 
 
 def _cites(it: str) -> set[str]:
@@ -708,7 +720,7 @@ def _collapse_marks(it: str) -> str:
 _NO_AREA_MOVE = ("Статус территории", "Вывод для покупателя", "Негативные факторы")
 
 
-def _same_fact(a: str, b: str, *, strict: bool = False) -> bool:
+def _same_fact(a: str, b: str, *, strict: bool = False, skip_names: set[str] | None = None) -> bool:
     """Один факт двумя пунктами: та же сумма или дата при общем источнике; тот же объект при
     общем источнике, если имена собственные не расходятся (мост в «Дорогах» и в «Негативных»;
     полигон 42,5 млн дважды); либо сильное совпадение слов. strict — внутри «Дорог» и прочих
@@ -722,8 +734,10 @@ def _same_fact(a: str, b: str, *, strict: bool = False) -> bool:
     dates_b = {f"{d} {m.lower()}" for d, m in _DATE_RE.findall(b)}
     if shared_cite and (money_a & money_b or dates_a & dates_b):
         return True
+    if money_a & money_b and _objects(a) & _objects(b):
+        return True  # та же сумма и тот же объект — один контракт, даже если источники разные
     if shared_cite and _objects(a) & _objects(b):
-        na, nb = _names(a), _names(b)
+        na, nb = _names(a, skip_names), _names(b, skip_names)
         if na and nb and not na & nb:
             pass  # один объект, разные имена — разные факты
         elif not strict or na & nb:
@@ -774,6 +788,7 @@ def postprocess_sections(
         if cad_num and cad_num.count(":") == 3
         else None
     )
+    skip = {stem, dstem or ""}  # сама локация и район — не имена объектов
     out: list[dict[str, Any]] = []
     moved: list[str] = []
     for sec in sections:
@@ -809,7 +824,7 @@ def postprocess_sections(
                 moved.append(it)  # площади зон генплана — в «Статус территории», не в дороги
                 continue
             strict = sec["title"] != "Негативные факторы"
-            if any(_same_fact(it, prev, strict=strict) for prev in items):
+            if any(_same_fact(it, prev, strict=strict, skip_names=skip) for prev in items):
                 continue  # тот же факт вторым пунктом (полигон с тем же контрактом)
             items.append(it)
         out.append({"title": sec["title"], "items": items or ["данных не найдено"]})
@@ -817,14 +832,18 @@ def postprocess_sections(
     if status is not None and moved:
         base = [] if status["items"] == ["данных не найдено"] else list(status["items"])
         for it in moved:
-            if not any(_same_fact(it, x) for x in base):
+            if not any(_same_fact(it, x, skip_names=skip) for x in base):
                 base.append(it)
         status["items"] = base
     # один факт — в одном разделе: аварийный мост из «Дорог» не повторять в «Негативных»
     roads = next((o["items"] for o in out if o["title"] == "Дороги и инфраструктура"), [])
     for o in out:
         if o["title"] == "Негативные факторы" and roads:
-            kept = [it for it in o["items"] if not any(_same_fact(it, r) for r in roads)]
+            kept = [
+                it
+                for it in o["items"]
+                if not any(_same_fact(it, r, skip_names=skip) for r in roads)
+            ]
             o["items"] = kept or ["данных не найдено"]
     return out
 

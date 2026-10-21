@@ -850,7 +850,7 @@ def test_same_fact_strict_mode_and_names():
     gas_a = "Газопровод для газификации сёл Узнезя и Элекмонар построен на 66,6% [3]"
     gas_b = "Пятилетняя программа газификации: 570 км газопроводов в республике [3]"
     assert not _same_fact(bridge_a, other_bridge)  # один объект, разные реки
-    assert not _same_fact(bridge_a, detour)  # Эликманар против Каракол
+    assert not _same_fact(bridge_a, detour, strict=True)  # в «Дорогах»: Каракол — направление
     assert not _same_fact(gas_a, gas_b, strict=True)  # внутри «Дорог» объект сам не склеивает
     assert _same_fact(gas_a, gas_b) is True  # в «Негативных» и между разделами — склеивает
     cable = "Канатная дорога на гору Церковка работает круглый год [4]"
@@ -872,3 +872,24 @@ def test_same_fact_strict_mode_and_names():
     )
     assert len(out[0]["items"]) == 5
     assert out[1]["items"] == ["данных не найдено"]
+
+
+def test_same_fact_ignores_locality_quotes_and_directions_and_merges_by_sum():
+    from landcheck.region import _same_fact, postprocess_sections
+
+    dump_a = "Несанкционированная свалка площадью 4,8 га в черте Белокурихи, 42,5 млн руб. — устранено (2023) [3]"
+    dump_b = "Полигон ТБО в микрорайоне Северном около 5 га, контракт 42,5 млн руб. по нацпроекту «Экология» — устранено (2024) [7]"
+    assert _same_fact(dump_a, dump_b, strict=True)  # та же сумма и объект — без общего источника
+    bridge = "2 августа обрушился мост через реку Эликманар в сторону села Каракол [3]"
+    detour = "Власти решили организовать объезд разрушенных мостов, переговоры о проезде к селу Каракол [3]"
+    assert not _same_fact(bridge, detour, strict=True)  # Каракол — направление, не объект
+    secs = [
+        {"title": "Дороги и инфраструктура", "items": [bridge, detour]},
+        {
+            "title": "Негативные факторы",
+            "items": [dump_a, dump_b, "Свалка у Белокурихи закрыта [9]"],
+        },
+    ]
+    out = postprocess_sections(secs, "Белокуриха", "Алтайский край")
+    assert len(out[0]["items"]) == 2
+    assert out[1]["items"] == [dump_a, "Свалка у Белокурихи закрыта [9]"]
