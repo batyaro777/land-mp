@@ -24,6 +24,9 @@
       <label>Email для входа<input type="email" name="email" value="{{ user.email or '' }}" placeholder="you@example.com"></label>
       <label>Новый пароль <small class="muted">(пусто — не менять)</small><input type="password" name="password" minlength="8" autocomplete="new-password"></label>
     </div>
+    <label>Telegram chat ID для уведомлений <small class="muted">(число; узнать — написать боту @userinfobot; работает, когда у сервиса подключён бот)</small>
+      <input name="telegram_chat_id" value="{{ user.telegram_chat_id or '' }}" placeholder="123456789" inputmode="numeric"></label>
+    <label class="inline-check"><input type="checkbox" name="notify_email" value="1" {{ 'checked' if user.notify_email else '' }}> присылать уведомления на email</label>
     <label>Логотип <small class="muted">(PNG, JPG или WebP до 2 МБ; в отчёте высота 40 px)</small>
       <input type="file" name="logo" accept=".png,.jpg,.jpeg,.webp"></label>
     {% if logo_url %}

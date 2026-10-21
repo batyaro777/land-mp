@@ -80,6 +80,9 @@ class User(Base):
     # Инфопартнёр (К4): своя ссылка у каждого, два уровня привлечения.
     ref_code: Mapped[str | None] = mapped_column(String(16), nullable=True)
     referred_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Уведомления (план 20.10, п.5): в кабинете всегда; email и Telegram — если настроены.
+    telegram_chat_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    notify_email: Mapped[bool] = mapped_column(default=True, server_default="1")
 
     checks: Mapped[list[Check]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
@@ -220,6 +223,21 @@ class Connection(Base):
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class Notification(Base):
+    """Уведомление пользователю: новый подходящий участок, запрос контакта, решение модератора."""
+
+    __tablename__ = "notifications"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(24))  # match|connect|decision|moderation|system
+    text: Mapped[str] = mapped_column(Text, default="")
+    url: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    delivered: Mapped[str | None] = mapped_column(String(40), nullable=True)  # email,telegram
+
+
 class Favorite(Base):
     """Сохранённый объект покупателя для сравнения."""
 
@@ -261,6 +279,8 @@ _NEW_COLUMNS: dict[str, dict[str, str]] = {
         "role": "VARCHAR(16) NOT NULL DEFAULT 'broker'",
         "ref_code": "VARCHAR(16)",
         "referred_by": "INTEGER",
+        "telegram_chat_id": "VARCHAR(32)",
+        "notify_email": "BOOLEAN NOT NULL DEFAULT 1",
     },
     "invites": {"role": "VARCHAR(16)"},
     "listings": {

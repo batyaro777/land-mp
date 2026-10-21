@@ -52,6 +52,14 @@ class Settings:
     gemini_model: str = field(
         default_factory=lambda: os.environ.get("LANDCHECK_GEMINI_MODEL") or "gemini-3.8-flash"
     )
+    # Доставка уведомлений: smtp://user:pass@host:587?from=land@example.com (STARTTLS),
+    # smtps://…:465 — TLS сразу; Telegram — токен бота, chat_id пользователь вводит в профиле.
+    smtp_url: str | None = field(
+        default_factory=lambda: os.environ.get("LANDCHECK_SMTP_URL") or None
+    )
+    telegram_bot_token: str | None = field(
+        default_factory=lambda: os.environ.get("LANDCHECK_TG_BOT_TOKEN") or None
+    )
 
     @property
     def llm_enabled(self) -> bool:

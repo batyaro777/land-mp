@@ -93,3 +93,4 @@ fieldset legend { margin-bottom: 0.3rem; }
 fieldset label { display: inline-block; margin-right: 1.2rem; }
 .onboarding { background: #f3f6fb; border-left: 4px solid #2E75B6; padding: 0.75rem 1rem; border-radius: 6px; margin: 0.5rem 0 1rem; }
 .onboarding ol { margin-bottom: 0.5rem; }
+.check-card.unread { border-left: 4px solid #2E75B6; padding-left: 0.75rem; }

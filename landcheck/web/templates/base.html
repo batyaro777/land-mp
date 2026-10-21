@@ -39,12 +39,14 @@
       <li><a href="/search">Поиск</a></li>
       <li><a href="/listings">Объявления</a></li>
       {% endif %}
+      <li><a href="/notifications" title="Уведомления">🔔{% if unread %} <span class="badge v-check">{{ unread }}</span>{% endif %}</a></li>
       <li><details class="dropdown">
         <summary>{{ user.brand or user.name }} <small class="muted">· {{ user.role_label|lower }}</small></summary>
         <ul dir="rtl">
           <li><a href="/profile">Профиль и логотип</a></li>
           <li><a href="/partner">Партнёрская ссылка</a></li>
           <li><a href="/connections">Запросы контакта</a></li>
+          <li><a href="/notifications">Уведомления</a></li>
           <li><form method="post" action="/logout"><button class="outline secondary">Выйти</button></form></li>
         </ul>
       </details></li>

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import quote
@@ -138,6 +139,14 @@ UserDep = Annotated[User, Depends(require_user)]
 
 def render(request: Request, name: str, status_code: int = 200, **ctx: Any) -> HTMLResponse:
     ctx.setdefault("user", current_user(request))
+    if ctx.get("user") is not None and "unread" not in ctx:
+        from landcheck.web.notify import unread_count
+
+        try:
+            with session() as db:
+                ctx["unread"] = unread_count(db, ctx["user"].id)
+        except Exception:  # noqa: BLE001 — счётчик не должен ронять страницу
+            ctx["unread"] = 0
     # Кнопка «Голосом» есть всегда: в браузере распознаёт Web Speech API (бесплатно),
     # серверный путь (Groq Whisper / локальный whisper / Gemini) — запасной.
     ctx.setdefault("voice_enabled", True)
@@ -822,6 +831,8 @@ async def profile_save(
     email: Annotated[str, Form()] = "",
     password: Annotated[str, Form()] = "",
     remove_logo: Annotated[str, Form()] = "",
+    telegram_chat_id: Annotated[str, Form()] = "",
+    notify_email: Annotated[str, Form()] = "",
     logo: Annotated[UploadFile | None, File()] = None,
 ):
     from landcheck.web.db import EMAIL_RE, MIN_PASSWORD, hash_password
@@ -848,6 +859,8 @@ async def profile_save(
         u.contact = contact.strip()[:200] or None
         if role in PUBLIC_ROLES and not u.is_admin:
             u.role = role  # администратор роль в профиле не меняет: только через CLI
+        u.telegram_chat_id = re.sub(r"[^\d-]", "", telegram_chat_id)[:32] or None
+        u.notify_email = bool(notify_email)
         new_email = normalize_email(email)
         if new_email and new_email != (u.email or ""):
             taken = db.scalar(select(User.id).where(User.email == new_email, User.id != u.id))
@@ -1356,9 +1369,55 @@ def listing_publish(user: UserDep, listing_id: int, action: Annotated[str, Form(
             err = "warnings"
         else:
             row.published = True
+            _notify_buyers_about(db, row)
         db.commit()
     suffix = f"?err={err}" if err else ""
     return RedirectResponse(f"/listing/{listing_id}{suffix}", status_code=303)
+
+
+def _notify_buyers_about(db, row) -> int:
+    """Покупатели с подходящими запросами узнают о новом участке в базе (п.5 плана 20.10).
+    Один участок — одно уведомление на запрос."""
+    from landcheck.buyer import match_listing
+    from landcheck.web.db import BuyerRequest
+    from landcheck.web.notify import already_notified, notify
+
+    owner = db.get(User, row.user_id)
+    card = _market_card(row, owner)
+    d = row.data or {}
+    text = f"{d.get('description') or ''} {d.get('notes') or ''}"
+    sent = 0
+    for req in db.scalars(select(BuyerRequest).order_by(BuyerRequest.id.desc()).limit(500)):
+        if req.user_id == row.user_id:
+            continue
+        m = match_listing(
+            card,
+            text=text,
+            purpose=_purpose_of(req.purpose),
+            budget_rub=req.budget_rub,
+            min_area_m2=req.min_area_m2,
+            max_area_m2=req.max_area_m2,
+            region=req.region,
+            answers=dict(req.answers or {}),
+        )
+        if not m:
+            continue
+        url = f"/search/{req.id}"
+        if already_notified(db, req.user_id, "match", f"{url}#l{row.id}"):
+            continue
+        price = f", {d['price_rub']:,.0f} ₽".replace(",", " ") if d.get("price_rub") else ""
+        verdict = (m.get("verdict") or {}).get("text") or m.get("level") or ""
+        notify(
+            db,
+            req.user_id,
+            "match",
+            f"Новый участок под ваш запрос «{(req.text or '').strip()[:60] or 'без текста'}»: "
+            f"{card.get('title') or row.cad_num}{price}."
+            + (f" Под цель: {verdict}." if verdict else ""),
+            f"{url}#l{row.id}",
+        )
+        sent += 1
+    return sent
 
 
 def _market_card(row, owner: User | None) -> dict[str, Any]:
@@ -1789,6 +1848,33 @@ def partner_page(request: Request, user: UserDep):
         )
 
 
+# --- уведомления (план 20.10, п.5) ---------------------------------------------------------
+@router.get("/notifications", response_class=HTMLResponse)
+def notifications_page(request: Request, user: UserDep):
+    from landcheck.web.db import Notification
+    from landcheck.web.notify import KIND_LABELS, mark_all_read
+
+    with session() as db:
+        rows = db.scalars(
+            select(Notification)
+            .where(Notification.user_id == user.id)
+            .order_by(Notification.id.desc())
+            .limit(100)
+        ).all()
+        unread_ids = {n.id for n in rows if n.read_at is None}
+        mark_all_read(db, user.id)
+        db.commit()
+    return render(
+        request,
+        "notifications.html",
+        rows=rows,
+        unread_ids=unread_ids,
+        labels=KIND_LABELS,
+        unread=0,
+        user=user,
+    )
+
+
 # --- межагентский контур (К3): запрос контакта по объявлению ------------------------------
 @router.post("/l/{listing_id}/connect")
 def connection_create(user: UserDep, listing_id: int, note: Annotated[str, Form()] = ""):
@@ -1815,6 +1901,19 @@ def connection_create(user: UserDep, listing_id: int, note: Annotated[str, Form(
                     note=note.strip()[:1000],
                 )
             )
+            from landcheck.web.notify import notify
+
+            who = user.brand or user.name
+            title = (row.data or {}).get("title") or row.cad_num
+            notify(
+                db,
+                row.user_id,
+                "connect",
+                f"{who} запрашивает контакт по объявлению «{title}»"
+                + (f": {note.strip()[:200]}" if note.strip() else "")
+                + ". Примите или отклоните в разделе «Запросы контакта».",
+                "/connections",
+            )
             db.commit()
     return RedirectResponse(f"/l/{listing_id}", status_code=303)
 
@@ -1832,6 +1931,26 @@ def connection_decide(user: UserDep, conn_id: int, decision: Annotated[str, Form
         if decision in ("accepted", "declined"):
             conn.status = decision
             conn.decided_at = datetime.now(UTC)
+            from landcheck.web.db import Listing as ListingRow
+            from landcheck.web.notify import notify
+
+            lst = db.get(ListingRow, conn.listing_id)
+            title = ((lst.data or {}).get("title") if lst else None) or (
+                lst.cad_num if lst else f"#{conn.listing_id}"
+            )
+            verdict = "принял" if decision == "accepted" else "отклонил"
+            notify(
+                db,
+                conn.from_user_id,
+                "decision",
+                f"Владелец {verdict} ваш запрос контакта по объявлению «{title}»"
+                + (
+                    ". Контакты открыты в разделе «Запросы контакта»."
+                    if decision == "accepted"
+                    else "."
+                ),
+                "/connections",
+            )
             db.commit()
     return RedirectResponse("/connections", status_code=303)
 
@@ -2013,6 +2132,16 @@ def admin_decide(
         else:
             raise HTTPException(400)
         row.moderation_note = note.strip()[:1000] or None
+        from landcheck.web.notify import notify
+
+        title = (row.data or {}).get("title") or row.cad_num
+        if decision == "approve":
+            msg = f"Право на участок «{title}» подтверждено: можно публиковать в базу."
+        else:
+            msg = f"Подтверждение права по «{title}» отклонено" + (
+                f": {row.moderation_note}" if row.moderation_note else "."
+            )
+        notify(db, row.user_id, "moderation", msg, f"/listing/{row.id}")
         db.commit()
     _delete_proofs(listing_id)
     return RedirectResponse("/admin/listings", status_code=303)
