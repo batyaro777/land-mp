@@ -944,3 +944,27 @@ def test_same_template_different_villages_not_merged():
     assert not _same_fact(c, d) and not _same_fact(c, d, strict=True)
     e = "Школа в Чепоше строится с отставанием от графика, подрядчик сменён [2]"
     assert _same_fact(c, e)  # то же село, та же формулировка — один факт
+
+
+def test_citation_ranges_subplaces_and_same_template_villages():
+    from landcheck.region import _cites, _same_fact, postprocess_sections
+
+    assert _cites("Факт [1–7] и ещё [9, 11]") == {"1", "2", "3", "4", "5", "6", "7", "9", "11"}
+    secs = [
+        {
+            "title": "Негативные факторы",
+            "items": [
+                "Сведений о полигонах, свалках, карьерах, промзонах и скотомогильниках в Элекмонаре в документах не найдено [1–7]",
+                "Школа в Чепоше строится с отставанием от графика [2]",
+                "Школа в Элекмонаре строится с отставанием от графика [2]",
+            ],
+        }
+    ]
+    out = postprocess_sections(secs, "Элекмонар", "Республика Алтай")
+    assert len(out[0]["items"]) == 2 and all("Школа" in i for i in out[0]["items"])
+    dump_a = (
+        "Несанкционированная свалка 4,8 га в черте Белокурихи закрыта и рекультивирована [3, 7]"
+    )
+    dump_b = "Полигон ТБО в микрорайоне Северном площадью около 5 га закрыт в 2021 году [7]"
+    assert _same_fact(dump_a, dump_b, skip_names={"белокурих"})
+    assert _same_fact("Свалка у реки [3]", "Полигон на улице Славского закрыт [3]")

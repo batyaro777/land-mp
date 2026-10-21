@@ -669,6 +669,12 @@ def _objects(it: str) -> set[str]:
 
 
 _NAME_RE = re.compile(r"\b[А-ЯЁ][а-яё-]{3,}\b")
+# Внутри локации: «в микрорайоне Северном», «на улице Славского» — не другое село
+_SUBPLACE_RE = re.compile(
+    r"\b(микрорайон\w*|мкр\.?|квартал\w*|улиц\w*|ул\.|переул\w*|пер\.|проезд\w*|урочищ\w*|"
+    r"снт|днт|тер\.|территори\w*|плато)\s+[А-ЯЁ][а-яё-]+",
+    re.IGNORECASE,
+)
 # Пункт назначения — не объект: «мост … в сторону села Каракол» и «объезд … к селу Каракол»
 _DIRECTION_RE = re.compile(
     r"(в сторону|к селу|до села|в село|в направлении|в сторону села)\s+(села\s+)?[А-ЯЁ][а-яё-]+",
@@ -680,9 +686,10 @@ def _names(it: str, skip: set[str] | None = None) -> set[str]:
     """Имена собственные (река, село, трасса) без первого слова пункта, без названий в кавычках
     (нацпроект «Экология»), без пунктов назначения и без самой локации: разные имена при одном
     объекте — разные факты (мост через Эликманар и мост через Катунь)."""
-    bare = re.sub(r"\[[\d,\s]+\]", "", it).strip()
+    bare = re.sub(r"\[[\d,\s–\-]+\]", "", it).strip()
     bare = re.sub(r"[«\"][^»\"]*[»\"]", " ", bare)
     bare = _DIRECTION_RE.sub(" ", bare)
+    bare = _SUBPLACE_RE.sub(" ", bare)
     words = _NAME_RE.findall(bare)
     if words and it.strip().startswith(words[0]):
         words = words[1:]
@@ -694,11 +701,19 @@ def _names(it: str, skip: set[str] | None = None) -> set[str]:
 
 
 def _cites(it: str) -> set[str]:
-    return {n for m in re.findall(r"\[([\d,\s]+)\]", it) for n in re.split(r"[,\s]+", m) if n}
+    out: set[str] = set()
+    for m in re.findall(r"\[([\d,\s–\-]+)\]", it):
+        for n in re.split(r"[,\s]+", m):
+            lo, _, hi = n.partition("–") if "–" in n else n.partition("-")
+            if lo.isdigit() and hi.isdigit():
+                out.update(str(i) for i in range(int(lo), int(hi) + 1))  # «[1–7]»
+            elif n:
+                out.add(n)
+    return out
 
 
 def _tokens(it: str) -> set[str]:
-    bare = re.sub(r"\[[\d,\s]+\]", "", it).lower().replace("ё", "е")
+    bare = re.sub(r"\[[\d,\s–\-]+\]", "", it).lower().replace("ё", "е")
     return {w[:5] for w in _WORD_RE.findall(bare)}
 
 
@@ -713,7 +728,7 @@ def _collapse_marks(it: str) -> str:
     m = _PAREN_MARK_RE.search(it)
     mark = f"({m.group(1)})" if m else ""
     if re.search(r"\[\d", stripped):
-        return re.sub(r"\s*(\[[\d,\s]+\])\s*\.?\s*$", rf" {mark} \1", stripped, count=1)
+        return re.sub(r"\s*(\[[\d,\s–\-]+\])\s*\.?\s*$", rf" {mark} \1", stripped, count=1)
     return f"{stripped} {mark}".strip()
 
 
@@ -742,17 +757,12 @@ def _same_fact(a: str, b: str, *, strict: bool = False, skip_names: set[str] | N
             return True
     if shared_cite and _objects(a) & _objects(b):
         # «школа в Чепоше» и «школа в Элекмонаре» — разные, даже если Элекмонар — сама локация;
-        # но «свалка в черте Белокурихи» и «полигон в микрорайоне Северном» — одна (локация —
-        # контейнер): когда расходятся только полные имена, нужно хоть какое-то совпадение слов
+        # «свалка в черте Белокурихи» и «полигон в микрорайоне Северном» — одна: микрорайон
+        # внутри локации именем не считается (_SUBPLACE_RE), остаётся только сама локация
         na_full, nb_full = _names(a), _names(b)
-        na, nb = _names(a, skip_names), _names(b, skip_names)
-        if na and nb and not na & nb:
+        if na_full and nb_full and not na_full & nb_full:
             pass  # один объект, разные имена — разные факты
-        elif na_full and nb_full and not na_full & nb_full:
-            ta, tb = _tokens(a), _tokens(b)
-            if not strict and ta and tb and len(ta & tb) / len(ta | tb) >= 0.2:
-                return True
-        elif not strict or na & nb:
+        elif not strict or _names(a, skip_names) & _names(b, skip_names):
             return True
     ta, tb = _tokens(a), _tokens(b)
     if not ta or not tb:
@@ -813,7 +823,7 @@ def postprocess_sections(
             low = it.lower()
             if "данных не найдено" in low or "данные не найдены" in low:
                 continue  # «Данных не найдено», «[данных не найдено]», рассуждения об отсутствии
-            bare = re.sub(r"\[[\d,\s]+\]", "", it)
+            bare = re.sub(r"\[[\d,\s–\-]+\]", "", it)
             if _EMPTY_RE.search(bare) and not re.search(r"\d", bare):
                 continue  # «Сведений о газификации не найдено [3]» — пустой пункт со ссылкой
             if sec["title"] != "Вывод для покупателя" and not re.search(r"\[\d", it):
@@ -833,7 +843,7 @@ def postprocess_sections(
             elif not local and dstem and dstem in low:
                 mark = DISTRICT_MARK
             if mark:
-                it = re.sub(r"\s*(\[[\d,\s]+\])\s*\.?\s*$", rf" {mark} \1", it, count=1)
+                it = re.sub(r"\s*(\[[\d,\s–\-]+\])\s*\.?\s*$", rf" {mark} \1", it, count=1)
                 if mark not in it:
                     it = f"{it} {mark}"
             it = _collapse_marks(it)
