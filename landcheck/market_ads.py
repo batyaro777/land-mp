@@ -38,6 +38,7 @@ _LOOKUP = (
     "ok.ru",
     "t.me",
     "youtube.",
+    "instagram.com",
     "egrp365",
     "rosreestr",
     "pkk",

@@ -685,8 +685,14 @@ def test_nearest_place_and_settlement_fallback(monkeypatch):
     assert (
         resolve_locality(addr, square) == "Республика Алтай, муниципальный район Чемальский, Узнезя"
     )
-    # Overpass ничего не нашёл — остаётся адрес с поселением
-    monkeypatch.setattr(region.httpx, "post", lambda *a, **k: httpx.Response(500))
+    # кэш: повторный вызов не ходит в сеть
+    assert nearest_place(square) == "Узнезя" and len(calls) == 1
+    # Overpass перегружен — остаётся адрес с поселением, отказ кэшируется
+    region._PLACE_CACHE.clear()
+    monkeypatch.setattr(region.httpx, "post", lambda *a, **k: httpx.Response(502))
     assert resolve_locality(addr, square) == (
         "Республика Алтай, муниципальный район Чемальский, сельское поселение Узнезинское"
     )
+    monkeypatch.setattr(region.httpx, "post", lambda *a, **k: (_ for _ in ()).throw(AssertionError))
+    assert nearest_place(square) is None  # из кэша, без сети
+    region._PLACE_CACHE.clear()

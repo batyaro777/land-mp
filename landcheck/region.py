@@ -15,9 +15,11 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 import re
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -120,6 +122,7 @@ def locality_from_address(address: str | None) -> str | None:
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+log = logging.getLogger(__name__)
 _UA = "landcheck/0.1 (land-mp.dnai.engineering; broker land check)"
 
 
@@ -191,13 +194,19 @@ def overpass_url() -> str | None:
     return None if url.strip().lower() in ("", "off", "0", "false") else url.strip()
 
 
+_PLACE_CACHE: dict[tuple[float, float], tuple[float, str | None]] = {}
+PLACE_CACHE_TTL = (
+    3600.0  # Overpass бывает перегружен (502 «queue is full»): не ходить чаще раза в час
+)
+
+
 def nearest_place(
-    parcel_geojson: dict[str, Any] | None, *, radius_m: int = 7000, timeout: float = 10.0
+    parcel_geojson: dict[str, Any] | None, *, radius_m: int = 7000, timeout: float = 6.0
 ) -> str | None:
     """Ближайший населённый пункт (OSM place=city/town/village/hamlet) к центру участка через
     Overpass. Нужен, когда адрес заканчивается поселением («сельское поселение Узнезинское»),
     а Nominatim по точке за границей села отдаёт только район: объявления и новости пишут
-    «с. Узнезя»."""
+    «с. Узнезя». Отказ логируется и кэшируется на час, чтобы не держать отчёт по 10 с."""
     url = overpass_url()
     if not url or not parcel_geojson:
         return None
@@ -205,27 +214,38 @@ def nearest_place(
         from landcheck.location import centroid
 
         lat, lon = centroid(parcel_geojson)
+    except Exception:  # noqa: BLE001 — кривая геометрия
+        return None
+    key = (round(lat, 3), round(lon, 3))
+    now = time.monotonic()
+    hit = _PLACE_CACHE.get(key)
+    if hit and now - hit[0] < PLACE_CACHE_TTL:
+        return hit[1]
+    name: str | None = None
+    try:
         q = (
-            f"[out:json][timeout:10];node(around:{radius_m},{lat},{lon})"
+            f"[out:json][timeout:{int(timeout)}];node(around:{radius_m},{lat},{lon})"
             '[place~"^(city|town|village|hamlet)$"];out body;'
         )
         resp = httpx.post(url, data={"data": q}, headers={"User-Agent": _UA}, timeout=timeout)
         if resp.status_code != 200:
-            return None
-        elements = (resp.json() or {}).get("elements") or []
-    except Exception:  # noqa: BLE001 — сеть, кривая геометрия
-        return None
-    best: tuple[float, str] | None = None
-    k = math.cos(math.radians(lat))
-    for e in elements:
-        tags = e.get("tags") or {}
-        name = tags.get("name:ru") or tags.get("name")
-        if not name or "lat" not in e or "lon" not in e:
-            continue
-        d = (e["lat"] - lat) ** 2 + ((e["lon"] - lon) * k) ** 2
-        if best is None or d < best[0]:
-            best = (d, name)
-    return best[1] if best else None
+            log.warning("overpass %s: HTTP %s", url, resp.status_code)
+        else:
+            best: tuple[float, str] | None = None
+            k = math.cos(math.radians(lat))
+            for e in (resp.json() or {}).get("elements") or []:
+                tags = e.get("tags") or {}
+                nm = tags.get("name:ru") or tags.get("name")
+                if not nm or "lat" not in e or "lon" not in e:
+                    continue
+                d = (e["lat"] - lat) ** 2 + ((e["lon"] - lon) * k) ** 2
+                if best is None or d < best[0]:
+                    best = (d, nm)
+            name = best[1] if best else None
+    except Exception as exc:  # noqa: BLE001 — сеть, таймаут, не-JSON
+        log.warning("overpass %s: %s", url, type(exc).__name__)
+    _PLACE_CACHE[key] = (now, name)
+    return name
 
 
 _ADMIN_LAST_RE = re.compile(r"\bрайон\b|\bокруг\b|поселени|сельсовет", re.IGNORECASE)
