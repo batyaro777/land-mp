@@ -17,6 +17,7 @@
   </details>
   {% elif ads and ads.error %}<p class="muted small">Объявления: {{ ads.error }}.</p>
   {% elif ads %}<p class="muted small">Объявлений с ценой и площадью по этой локации в поиске не нашлось.</p>{% endif %}
+  {% if ads and ads.off_scale %}<p class="muted small">Не учтены, площадь несопоставима с участком ({{ ads.off_scale|length }}): {% for a in ads.off_scale %}<a href="{{ a.url }}" target="_blank" rel="noopener">{{ a.host }}</a> — {{ (a.area_m2 / 100)|round(1) }} сот. за {{ a.price_rub|money }}{% if not loop.last %}; {% endif %}{% endfor %}.</p>{% endif %}
   {% if not public %}<p class="muted small"><a href="{{ ads_url }}?refresh=1" hx-get="{{ ads_url }}?refresh=1" hx-target="#valuation" hx-swap="outerHTML">обновить объявления</a></p>{% endif %}
   <p class="muted small">{{ valuation.disclaimer }}</p>
   {% endif %}

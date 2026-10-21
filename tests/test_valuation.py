@@ -243,3 +243,30 @@ def test_is_catalog_by_text_and_url():
     assert is_catalog("Земельные участки в Чепоше", "", "https://x.ru/a")
     assert is_catalog("Участок Чепош", "", "https://www.cian.ru/kupit-zemelnyj-uchastok-chepos/")
     assert is_catalog("Участок Чепош", "", "https://domclick.ru/altai/pokupka/uchastki/chepos")
+
+
+def test_collect_ads_off_scale_area():
+    def search_fn(q, max_results, news, recent=False):
+        return {
+            "results": [
+                {
+                    "title": "Продам земельный участок Белокуриха, 73 га",
+                    "url": "https://altay.sibdom.ru/sale/land/123456/",
+                    "snippet": "30 млн руб",
+                },
+                {
+                    "title": "Участок 10 сот ИЖС Белокуриха",
+                    "url": "https://avito.ru/x_123456789",
+                    "snippet": "2 млн ₽",
+                },
+            ],
+            "error": None,
+        }
+
+    r = collect_ads("Белокуриха", "izhs", area_m2=1000, search_fn=search_fn)
+    assert r["n"] == 1 and r["ads"][0]["host"] == "avito.ru" and r["median"] == 200_000
+    assert [a["host"] for a in r["off_scale"]] == ["altay.sibdom.ru"]
+    assert r["off_scale"][0]["area_m2"] == 730_000
+    # без площади участка (или с мусорной площадью из ЕГРН) фильтра нет
+    assert collect_ads("Белокуриха", "izhs", search_fn=search_fn)["n"] == 2
+    assert collect_ads("Белокуриха", "izhs", area_m2=0.5, search_fn=search_fn)["n"] == 2

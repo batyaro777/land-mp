@@ -637,6 +637,7 @@ def report_ads(request: Request, user: UserDep, check_id: int, cad_num: str, ref
                 ads = collect_ads(
                     short_place(locality),
                     land_kind(parcel.get("category"), parcel.get("permitted_use")),
+                    area_m2=parcel.get("area_m2"),
                 )
                 ads["locality"] = locality
             else:

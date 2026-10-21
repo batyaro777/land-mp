@@ -128,14 +128,25 @@ def build_queries(locality_short: str, kind: str) -> list[str]:
     return [f"{locality_short} {what} купить цена", f"{locality_short} {what} продажа соток"]
 
 
+AREA_BAND = 5.0  # сопоставимая площадь: от 1/5 до 5 площадей участка
+
+
 def collect_ads(
-    locality_short: str, kind: str, *, search_fn=None, max_results: int = 10
+    locality_short: str,
+    kind: str,
+    *,
+    area_m2: float | None = None,
+    search_fn=None,
+    max_results: int = 10,
 ) -> dict[str, Any]:
+    """Объявления в локации; при известной площади участка несопоставимые по площади
+    (73 га против 10 соток ИЖС) уходят в off_scale и в медиану не входят."""
     from landcheck import websearch
 
     search_fn = search_fn or websearch.search
     seen: set[str] = set()
     ads: list[dict[str, Any]] = []
+    off_scale: list[dict[str, Any]] = []
     errors: list[str] = []
     queries = build_queries(locality_short, kind)
     stem = locality_short.lower()[:-1] if len(locality_short) > 5 else locality_short.lower()
@@ -158,6 +169,13 @@ def collect_ads(
             if not parsed:
                 continue
             seen.add(url)
+            if (
+                area_m2
+                and area_m2 >= 100
+                and not (area_m2 / AREA_BAND <= parsed["area_m2"] <= area_m2 * AREA_BAND)
+            ):
+                off_scale.append({"title": title[:120], "url": url, "host": host, **parsed})
+                continue
             twin = next(
                 (
                     a
@@ -183,6 +201,7 @@ def collect_ads(
     return {
         "ads": ads,
         "n": len(ads),
+        "off_scale": off_scale[:MAX_ADS],
         "median": _quantile(pps, 0.5) if pps else None,
         "p25": _quantile(pps, 0.25) if pps else None,
         "p75": _quantile(pps, 0.75) if pps else None,
