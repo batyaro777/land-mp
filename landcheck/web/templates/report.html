@@ -112,6 +112,8 @@
   {% if not d.flags %}<p class="muted">Замечаний нет.</p>{% endif %}
 </article>
 
+{% include "_actions.html" %}
+
 {% if p.zouit %}
 <article>
   <h4>Зоны с особыми условиями использования ({{ p.zouit|length }})</h4>

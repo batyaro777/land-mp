@@ -280,3 +280,14 @@ def test_resume_pending_reenqueues(client: TestClient, monkeypatch):
     seen: list[int] = []
     monkeypatch.setattr(jobs, "enqueue", lambda cid: seen.append(cid))
     assert jobs.resume_pending() == 1 and seen == [stuck_id]
+
+
+def test_report_shows_action_plan_for_flags_only(client: TestClient):
+    login(client)
+    r = client.post("/checks", data={"numbers": "50:09:0060202:104\n50:09:0060202:101"})
+    url = r.headers["location"]
+    with_lep = client.get(url + "/items/50:09:0060202:104").text
+    assert "План действий по рискам" in with_lep and "Что подтвердить" in with_lep
+    assert "сетевая организация" in with_lep and "Документы к запросу" in with_lep
+    clean = client.get(url + "/items/50:09:0060202:101").text
+    assert "План действий по рискам" not in clean

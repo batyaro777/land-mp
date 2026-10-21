@@ -22,6 +22,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 
 from landcheck import __version__
+from landcheck.actions import action_plan
 from landcheck.export import DISCLAIMER, to_csv, to_markdown, to_xlsx
 from landcheck.inputs import CAD_RE, load_listings, parse_csv, parse_xlsx
 from landcheck.intent import parse_request
@@ -687,6 +688,7 @@ def _report_ctx(check: Check, item: CheckItem, public: bool) -> dict[str, Any]:
         "docs_url": f"/checks/{check.id}/items/{item.cad_num}/docs",
         "region_enabled": settings.region_enabled,
         "checklist": CHECKLIST,
+        "plan": action_plan(data),
         "price": price_orientation(data, (check.stats or {}).get("median_price_per_sotka")),
         "price_pos": price_position(data, median),
         "corridor": (corridor := _corridor_for(data)),
