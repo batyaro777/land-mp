@@ -65,3 +65,29 @@ def test_action_plan_levels_and_variants():
     assert "регистрации права" in temp["steps"][0]["actions"][0]["what"]
     assert action_plan({"flags": []}) == {"steps": [], "documents": []}
     assert action_plan({}) == {"steps": [], "documents": []}
+
+
+def test_action_plan_zouit_kinds_from_prod():
+    item = {
+        "flags": [
+            _flag(
+                "R10",
+                "проверить",
+                "ЗОУИТ",
+                {
+                    "zouit": [
+                        {"kind": "Придорожная полоса автомобильной дороги", "name": "Р-256"},
+                        {"kind": "Округ санитарной охраны курорта", "name": "Белокуриха"},
+                        {
+                            "kind": "Зона санитарной охраны источников водоснабжения",
+                            "name": "ЗСО 2 пояс",
+                        },
+                    ]
+                },
+            )
+        ]
+    }
+    acts = action_plan(item)["steps"][0]["actions"]
+    assert acts[0]["what"].startswith("Ширина придорожной полосы")
+    assert acts[1]["what"].startswith("Какая зона округа санитарной охраны курорта")
+    assert acts[2]["what"].startswith("Пояс зоны санитарной охраны источника")

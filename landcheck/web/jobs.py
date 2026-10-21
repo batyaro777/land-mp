@@ -230,6 +230,13 @@ def run_check(check_id: int) -> None:
         notify_telegram_result(check_id)
 
 
+def _short(text: str, limit: int = 160) -> str:
+    """Флаг в одну строку чата: длинные (ЗОУИТ со списком зон) режем по слову."""
+    if len(text) <= limit:
+        return text
+    return text[:limit].rsplit(" ", 1)[0].rstrip(",;:—- ") + "…"
+
+
 def telegram_summary(check: Check, items: list[CheckItem]) -> str:
     """Короткий итог проверки для чата: вердикт, до трёх флагов, ссылка на отчёт."""
     base = settings.base_url.rstrip("/")
@@ -241,7 +248,7 @@ def telegram_summary(check: Check, items: list[CheckItem]) -> str:
             f for f in (it.data or {}).get("flags", []) if f.get("level") in ("стоп", "проверить")
         ][:3]
         lines = [f"{it.cad_num} — {it.verdict.upper()}"]
-        lines += [f"• {f['message']}" for f in flags]
+        lines += [f"• {_short(f['message'])}" for f in flags]
         lines.append(f"Отчёт: {base}/checks/{check.id}/items/{it.cad_num}")
         return "\n".join(lines)
     counts = {"стоп": 0, "проверить": 0, "ок": 0}

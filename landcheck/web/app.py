@@ -110,6 +110,9 @@ def _configure_logging() -> None:
 def create_app() -> FastAPI:
     _configure_logging()
     init_db(settings.db_path)
+    from landcheck.web.logmask import install as _install_logmask
+
+    _install_logmask()
     app = FastAPI(title="landcheck", version=__version__, docs_url=None, redoc_url=None)
     app.mount("/static", StaticFiles(directory=str(BASE / "static")), name="static")
     uploads = settings.db_path.parent / "uploads"

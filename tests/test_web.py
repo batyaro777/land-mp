@@ -394,3 +394,44 @@ def test_watch_toggle_run_and_notify(client: TestClient, fixtures_dir: Path):
     client.post(f"/watch/{cad}", data={"back": "/watch"})
     with session() as db:
         assert db.scalar(select(Watch)) is None
+
+
+def test_telegram_summary_short_flags_and_webhook_secret_masked(caplog):
+    import logging
+    from types import SimpleNamespace
+
+    from landcheck.web.jobs import telegram_summary
+    from landcheck.web.logmask import install
+
+    long_flag = "участок пересекает ЗОУИТ (6): " + "; ".join(
+        f"зона номер {i} с длинным названием" for i in range(12)
+    )
+    item = SimpleNamespace(
+        cad_num="1:2:3:4",
+        verdict="проверить",
+        data={
+            "flags": [{"level": "проверить", "message": long_flag}, {"level": "ок", "message": "x"}]
+        },
+    )
+    check = SimpleNamespace(id=7, status="done", error=None)
+    text = telegram_summary(check, [item])
+    lines = text.split("\n")
+    assert lines[0] == "1:2:3:4 — ПРОВЕРИТЬ" and lines[1].startswith("• участок пересекает ЗОУИТ")
+    assert (
+        lines[1].endswith("…")
+        and len(lines[1]) <= 165
+        and lines[-1].endswith("/checks/7/items/1:2:3:4")
+    )
+
+    install()
+    logger = logging.getLogger("uvicorn.access")
+    with caplog.at_level(logging.INFO, logger="uvicorn.access"):
+        logger.info(
+            '%s - "%s %s HTTP/%s" %d',
+            "1.2.3.4:1",
+            "POST",
+            "/tg/webhook/abcdef0123456789abcdef01",
+            "1.1",
+            200,
+        )
+    assert "abcdef0123456789abcdef01" not in caplog.text and "/tg/webhook/***" in caplog.text
