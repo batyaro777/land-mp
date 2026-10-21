@@ -121,6 +121,13 @@ def cut_title(title: str, limit: int) -> str:
     t = re.sub(r"\s+", " ", title).strip()
     if len(t) <= limit:
         return t
+    # Сначала отбрасываем целые части после «, »: «…для ИЖС, земли населенных пунктов» → «…для ИЖС»
+    # (прод 21.10: по слову оставался обрубок «земли населенных»).
+    parts = re.split(r",\s+", t)
+    while len(parts) > 1 and len(", ".join(parts)) > limit:
+        parts.pop()
+    if len(parts) > 1 or len(parts[0]) <= limit:
+        return ", ".join(parts).rstrip(" ,.;:—-")
     cut = t[:limit]
     if " " in cut[limit // 2 :]:
         cut = cut[: cut.rfind(" ")]
