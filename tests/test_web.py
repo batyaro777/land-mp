@@ -291,3 +291,49 @@ def test_report_shows_action_plan_for_flags_only(client: TestClient):
     assert "сетевая организация" in with_lep and "Документы к запросу" in with_lep
     clean = client.get(url + "/items/50:09:0060202:101").text
     assert "План действий по рискам" not in clean
+
+
+def test_telegram_bot_runs_check_from_cad_number(client: TestClient, monkeypatch):
+    from sqlalchemy import select
+
+    from landcheck.web import jobs, notify
+    from landcheck.web.db import Check, User, session
+
+    login(client)
+    sent: list[tuple[str, str]] = []
+    monkeypatch.setattr(notify, "send_telegram", lambda chat, text, **k: sent.append((chat, text)))
+    monkeypatch.setattr(jobs.settings, "base_url", "https://land-mp.test")
+    with session() as db:
+        user = db.scalar(select(User))
+        user.telegram_chat_id = "777"
+        db.commit()
+        # не подключённый чат с номером — подсказка, проверки нет
+        upd = {"message": {"chat": {"id": 555}, "text": "50:09:0060202:104"}}
+        assert notify.handle_update(db, upd, enqueue=jobs.run_check) == "unlinked-check"
+        assert "подключите" in sent[-1][1].lower() and db.scalar(select(Check)) is None
+        # подключённый чат: номер + цель → проверка, итог в тот же чат
+        upd = {"message": {"chat": {"id": 777}, "text": "50:09:0060202:104 под ИЖС"}}
+        res = notify.handle_update(db, upd, enqueue=jobs.run_check)
+        assert res.startswith("check:")
+        check = db.get(Check, int(res.split(":")[1]))
+        assert check.request["tg_chat"] == "777" and check.request["purpose"] == "izhs"
+        assert check.status == "done" and check.title == "Проверка из Telegram 50:09:0060202:104"
+    assert (
+        sent[-2][1].startswith("Проверяю участок 50:09:0060202:104") and "Цель: izhs" in sent[-2][1]
+    )
+    final = sent[-1]
+    assert final[0] == "777" and final[1].startswith("50:09:0060202:104 — ПРОВЕРИТЬ")
+    assert "• участок пересекает ЗОУИТ" in final[1]
+    assert f"https://land-mp.test/checks/{check.id}/items/50:09:0060202:104" in final[1]
+    # несколько номеров — сводка и ссылка на подборку
+    with session() as db:
+        upd = {"message": {"chat": {"id": 777}, "text": "50:09:0060202:101, 50:09:0060202:105"}}
+        res = notify.handle_update(db, upd, enqueue=jobs.run_check)
+    assert sent[-1][1].startswith("Проверено 2: стоп 1, проверить 0, ок 1")
+    assert "/checks/" in sent[-1][1]
+    # обычный текст без номера — помощь с подсказкой про номер
+    with session() as db:
+        assert (
+            notify.handle_update(db, {"message": {"chat": {"id": 777}, "text": "привет"}}) == "help"
+        )
+    assert "кадастровый номер" in sent[-1][1]

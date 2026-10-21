@@ -195,9 +195,51 @@ def run_check(check_id: int) -> None:
             check.stats = stats_of(batch)
             check.finished_at = datetime.now(UTC)
             db.commit()
+        notify_telegram_result(check_id)
     except Exception as e:  # noqa: BLE001 — любая ошибка должна попасть в карточку проверки
         log.exception("check %s failed", check_id)
         _set(check_id, status="error", error=f"{type(e).__name__}: {e}")
+        notify_telegram_result(check_id)
+
+
+def telegram_summary(check: Check, items: list[CheckItem]) -> str:
+    """Короткий итог проверки для чата: вердикт, до трёх флагов, ссылка на отчёт."""
+    base = settings.base_url.rstrip("/")
+    if check.status == "error":
+        return f"Не удалось проверить: {check.error or 'ошибка'}. Попробуйте позже."
+    if len(items) == 1:
+        it = items[0]
+        flags = [
+            f for f in (it.data or {}).get("flags", []) if f.get("level") in ("стоп", "проверить")
+        ][:3]
+        lines = [f"{it.cad_num} — {it.verdict.upper()}"]
+        lines += [f"• {f['message']}" for f in flags]
+        lines.append(f"Отчёт: {base}/checks/{check.id}/items/{it.cad_num}")
+        return "\n".join(lines)
+    counts = {"стоп": 0, "проверить": 0, "ок": 0}
+    for it in items:
+        counts[it.verdict] = counts.get(it.verdict, 0) + 1
+    return (
+        f"Проверено {len(items)}: стоп {counts['стоп']}, проверить {counts['проверить']}, "
+        f"ок {counts['ок']}\nПодборка: {base}/checks/{check.id}"
+    )
+
+
+def notify_telegram_result(check_id: int) -> None:
+    """Проверка запущена из бота (request["tg_chat"]) — отправить итог в тот же чат."""
+    from landcheck.web import notify
+
+    with session() as db:
+        check = db.get(Check, check_id)
+        chat = (check.request or {}).get("tg_chat") if check else None
+        if not check or not chat:
+            return
+        items = sorted(check.items, key=lambda i: i.position)
+        text = telegram_summary(check, items)
+    try:
+        notify.send_telegram(str(chat), text)
+    except Exception as exc:  # noqa: BLE001 — итог в чат не должен ломать проверку
+        log.warning("telegram result for check %s failed: %s", check_id, exc)
 
 
 # --- модуль «Локация»: окружение по запросу из отчёта -----------------------------------

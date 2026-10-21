@@ -18,7 +18,7 @@ import httpx
 from sqlalchemy import func, select
 
 from landcheck.web.config import settings
-from landcheck.web.db import Notification, User
+from landcheck.web.db import Check, Notification, User
 
 log = logging.getLogger(__name__)
 KIND_LABELS = {
@@ -216,7 +216,43 @@ def link_url(user_id: int) -> str | None:
     return f"https://t.me/{name}?start={link_token(user_id)}" if name else None
 
 
-def handle_update(db, update: dict[str, Any], send=None) -> str:
+MAX_BOT_NUMBERS = 20
+
+
+def _enqueue_default(check_id: int) -> None:
+    from landcheck.web import jobs  # ленивый импорт: jobs шлёт итог через этот модуль
+
+    jobs.enqueue(check_id)
+
+
+def start_bot_check(db, user: User, text: str, chat_id: str) -> Check:
+    """Проверка по кадастровым номерам из сообщения в боте: цель/бюджет/площадь — из текста
+    (как в голосовом вводе), итог придёт в этот же чат (request["tg_chat"]). В очередь ставит
+    вызывающий — после ответа пользователю, чтобы итог не пришёл раньше подтверждения."""
+    from landcheck.inputs import CAD_RE
+    from landcheck.intent import parse_request
+    from landcheck.web.serialize import request_to_dict
+
+    nums = list(dict.fromkeys(m.group(0) for m in CAD_RE.finditer(text)))[:MAX_BOT_NUMBERS]
+    req = parse_request(text)
+    title = (
+        f"Проверка из Telegram {nums[0]}"
+        if len(nums) == 1
+        else f"Проверка из Telegram ({len(nums)})"
+    )
+    check = Check(
+        user_id=user.id,
+        title=title,
+        request={**request_to_dict(req), "tg_chat": chat_id},
+        input_text="\n".join(nums),
+        total=len(nums),
+    )
+    db.add(check)
+    db.commit()
+    return check
+
+
+def handle_update(db, update: dict[str, Any], send=None, enqueue=None) -> str:
     """Обработка апдейта Telegram: /start <код> привязывает чат к пользователю, /stop отвязывает.
     Возвращает, что сделано (для логов и тестов)."""
     raw_send = send or send_telegram
@@ -259,9 +295,31 @@ def handle_update(db, update: dict[str, Any], send=None) -> str:
         db.commit()
         send(chat_id, "Уведомления отключены. Подключить снова можно из профиля в Land-MP.")
         return "unlinked"
+    from landcheck.inputs import CAD_RE
+
+    if CAD_RE.search(text):
+        user = db.scalar(select(User).where(User.telegram_chat_id == chat_id))
+        if user is None:
+            send(
+                chat_id,
+                "Чтобы проверять участки из Telegram, подключите чат: профиль на сайте → "
+                "«Подключить Telegram».",
+            )
+            return "unlinked-check"
+        check = start_bot_check(db, user, text, chat_id)
+        what = f"участок {check.input_text}" if check.total == 1 else f"{check.total} участков"
+        purpose = (check.request or {}).get("purpose")
+        goal = "" if purpose in (None, "any") else f" Цель: {purpose}."
+        send(
+            chat_id,
+            f"Проверяю {what}: обычно 1–2 минуты. Пришлю вердикт и ссылку на отчёт.{goal}",
+        )
+        (enqueue or _enqueue_default)(check.id)
+        return f"check:{check.id}"
     send(
         chat_id,
-        "Это бот уведомлений Land-MP. Чтобы подключить, откройте профиль на сайте и нажмите "
-        "«Подключить Telegram».",
+        "Это бот Land-MP. Пришлите кадастровый номер (можно несколько и цель: «под ИЖС») — "
+        "проверю участок и пришлю вердикт со ссылкой на отчёт. Подключить уведомления: профиль "
+        "на сайте → «Подключить Telegram».",
     )
     return "help"
