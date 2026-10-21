@@ -217,7 +217,14 @@ def link_url(user_id: int) -> str | None:
 def handle_update(db, update: dict[str, Any], send=None) -> str:
     """Обработка апдейта Telegram: /start <код> привязывает чат к пользователю, /stop отвязывает.
     Возвращает, что сделано (для логов и тестов)."""
-    send = send or send_telegram
+    raw_send = send or send_telegram
+
+    def send(chat: str, text: str) -> None:
+        try:
+            raw_send(chat, text)
+        except Exception as exc:  # noqa: BLE001 — вебхук должен отвечать 200 всегда
+            log.warning("telegram reply to %s failed: %s", chat, exc)
+
     msg = update.get("message") or update.get("edited_message") or {}
     chat_id = str((msg.get("chat") or {}).get("id") or "")
     text = (msg.get("text") or "").strip()

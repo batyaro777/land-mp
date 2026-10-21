@@ -195,6 +195,15 @@ def test_telegram_link_and_webhook(client, monkeypatch):  # noqa: F811
         )
     client.post(f"/tg/webhook/{secret}", json={"message": {"chat": {"id": 777}, "text": "привет"}})
     assert "Подключить Telegram" in sent[-1][1]
+    # ответ бота упал (чата нет) — вебхук всё равно 200
+    monkeypatch.setattr(
+        notify, "send_telegram", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("400"))
+    )
+    r = client.post(f"/tg/webhook/{secret}", json={"message": {"chat": {"id": 1}, "text": "x"}})
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    monkeypatch.setattr(
+        notify, "send_telegram", lambda chat_id, text, **k: sent.append((chat_id, text))
+    )
     # кнопка «отключить» в профиле
     client.post(f"/tg/webhook/{secret}", json=upd)
     assert client.post("/profile/telegram/off").status_code == 303

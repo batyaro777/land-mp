@@ -15,9 +15,8 @@ def test_parse_ad_prices_and_areas():
     a = parse_ad("Продам 1,2 га сельхоз", "1,8 млн руб, Чемальский район")
     assert a["area_m2"] == 12_000 and a["price_rub"] == 1_800_000 and round(a["pps"]) == 15_000
     assert parse_ad("Участок 12 соток", "торг") is None  # нет цены
-    assert (
-        parse_ad("Дом 120 м²", "6 млн") is None
-    )  # площадь дома — слишком мала для участка? 120 ≥ 100 → считается
+    # дом с участком: берём землю (сотки), а не метры дома
+    assert parse_ad("Дом 120 м² на участке 10 сот", "6 млн")["area_m2"] == 1000.0
     assert parse_ad("Участок", "850 тыс. руб, 6 сот") == {
         "price_rub": 850_000.0,
         "area_m2": 600.0,
@@ -58,6 +57,11 @@ def test_collect_ads_filters_and_stats():
                     "title": "Карточка участка",
                     "url": "https://egrp365.org/x",
                     "snippet": "Белокуриха 10 сот 1 млн",
+                },
+                {
+                    "title": "Дом 150 м² Белокуриха, 10 сот",
+                    "url": "https://x.ru/6",
+                    "snippet": "9 млн",
                 },
                 {
                     "title": "Участок 10 сот ИЖС Белокуриха",

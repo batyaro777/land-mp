@@ -40,6 +40,10 @@ _LOOKUP = (
     "geo-risk",
     "zembaza",
 )
+# Дом с участком — цена дома, а не земли: в оценку земли не берём
+_HOUSE_RE = re.compile(
+    r"(\bдом[а-я]*\b|коттедж|таунхаус|дуплекс|\bбаня\b|дача с домом)", re.IGNORECASE
+)
 
 
 def _price_rub(m: re.Match) -> float | None:
@@ -72,7 +76,11 @@ def parse_ad(title: str, snippet: str) -> dict[str, float] | None:
     """Цена и площадь из текста объявления; None, если чего-то нет."""
     text = f"{title} {snippet}"
     price = next((p for m in _PRICE_RE.finditer(text) if (p := _price_rub(m))), None)
-    area = next((a for m in _AREA_RE.finditer(text) if (a := _area_m2(m))), None)
+    # Площадь земли — сотки или гектары; «м²» берём, только если соток/га в тексте нет
+    # (в «дом 120 м² на участке 10 сот» нужна земля).
+    matches = [m for m in _AREA_RE.finditer(text) if _area_m2(m)]
+    land = [m for m in matches if m.group(2).lower().startswith(("сот", "га"))]
+    area = _area_m2((land or matches)[0]) if (land or matches) else None
     if not price or not area:
         return None
     return {"price_rub": price, "area_m2": area, "pps": price / (area / SOTKA_M2)}
@@ -113,6 +121,8 @@ def collect_ads(
                 continue
             title, snippet = it.get("title") or "", it.get("snippet") or ""
             if stem and stem not in f"{title} {snippet}".lower():
+                continue
+            if _HOUSE_RE.search(title):
                 continue
             parsed = parse_ad(title, snippet)
             if not parsed:
