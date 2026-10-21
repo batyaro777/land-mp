@@ -624,7 +624,43 @@ def _region_scope_re(region: str) -> re.Pattern[str] | None:
 
 
 # Модель пишет пометку по-своему («данные по району в целом») — свою не дублировать
-_MARKED_RE = re.compile(r"по (району|региону|республике|краю|области) в целом", re.IGNORECASE)
+_MARKED_RE = re.compile(
+    r"(по (району|региону|республике|краю|области) в целом"
+    r"|в целом по (району|региону|республике|краю|области))",
+    re.IGNORECASE,
+)
+# Площади зон генплана («жилой застройки … с 754 до 806 га») — не инфраструктура и не рынок
+_GENPLAN_AREA_RE = re.compile(r"генплан\w*.*\d\s*га\b|\d\s*га\b.*генплан\w*", re.IGNORECASE)
+_MONEY_RE = re.compile(r"(\d[\d\s]*[,.]?\d*)\s*(млн|млрд|тыс)", re.IGNORECASE)
+_DATE_RE = re.compile(r"\b\d{1,2}\s+[а-яё]+\s+\d{4}\b", re.IGNORECASE)
+_WORD_RE = re.compile(r"[а-яёa-z]{4,}", re.IGNORECASE)
+
+
+def _cites(it: str) -> set[str]:
+    return {n for m in re.findall(r"\[([\d,\s]+)\]", it) for n in re.split(r"[,\s]+", m) if n}
+
+
+def _tokens(it: str) -> set[str]:
+    bare = re.sub(r"\[[\d,\s]+\]", "", it).lower().replace("ё", "е")
+    return {w[:5] for w in _WORD_RE.findall(bare)}
+
+
+def _same_fact(a: str, b: str) -> bool:
+    """Один факт двумя пунктами: та же сумма или дата при общем источнике, либо сильное
+    совпадение слов (мост в «Дорогах» и в «Негативных»; полигон 42,5 млн дважды)."""
+    ca, cb = _cites(a), _cites(b)
+    shared_cite = bool(ca & cb)
+    money_a = {re.sub(r"\s", "", m[0]) + m[1].lower() for m in _MONEY_RE.findall(a)}
+    money_b = {re.sub(r"\s", "", m[0]) + m[1].lower() for m in _MONEY_RE.findall(b)}
+    if shared_cite and (money_a & money_b or set(_DATE_RE.findall(a)) & set(_DATE_RE.findall(b))):
+        return True
+    ta, tb = _tokens(a), _tokens(b)
+    if not ta or not tb:
+        return False
+    jaccard = len(ta & tb) / len(ta | tb)
+    return jaccard >= (0.35 if shared_cite else 0.5)
+
+
 # Пустые пункты: «данных не найдено», «сведений о газификации не найдено», «информации нет»
 _EMPTY_RE = re.compile(
     r"(данн\w*|сведени\w*|информаци\w*)[^.\[]{0,80}?(не\s+(найден|обнаружен|приводит|указан|сообщ)|"
@@ -693,8 +729,18 @@ def postprocess_sections(
                 it = re.sub(r"\s*(\[[\d,\s]+\])\s*\.?\s*$", rf" {mark} \1", it, count=1)
                 if mark not in it:
                     it = f"{it} {mark}"
+            if sec["title"] != "Статус территории" and _GENPLAN_AREA_RE.search(it):
+                continue  # площади зон генплана — не дороги и не рынок
+            if any(_same_fact(it, prev) for prev in items):
+                continue  # тот же факт вторым пунктом (полигон с тем же контрактом)
             items.append(it)
         out.append({"title": sec["title"], "items": items or ["данных не найдено"]})
+    # один факт — в одном разделе: аварийный мост из «Дорог» не повторять в «Негативных»
+    roads = next((o["items"] for o in out if o["title"] == "Дороги и инфраструктура"), [])
+    for o in out:
+        if o["title"] == "Негативные факторы" and roads:
+            kept = [it for it in o["items"] if not any(_same_fact(it, r) for r in roads)]
+            o["items"] = kept or ["данных не найдено"]
     return out
 
 
