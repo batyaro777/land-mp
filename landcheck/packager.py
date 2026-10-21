@@ -99,7 +99,9 @@ _SERVICE_RE = re.compile(
 def scrub_service_phrases(title: str, desc: str) -> tuple[str, str]:
     """Модель пишет покупателю «Точный населённый пункт не указан в предоставленных данных»
     и «категория не установлена» (прод 20.10) — такие предложения убираем кодом."""
-    parts = [p.strip() for p in title.split(",")]
+    # Делим только по «запятая + пробел»: «12,3 сот.» — десятичная запятая, не разделитель
+    # (прод 21.10: заголовок превращался в «12, 3 сот.»).
+    parts = [p.strip() for p in re.split(r",\s+", title)]
     title = ", ".join(p for p in parts if p and not _SERVICE_RE.search(p)) or "Земельный участок"
     paragraphs: list[str] = []
     for para in re.split(r"\n\s*\n", desc):

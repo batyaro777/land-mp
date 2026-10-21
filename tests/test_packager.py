@@ -136,6 +136,9 @@ def test_service_phrases_are_scrubbed_from_ai_text():
         "\n\nПродавец отмечает: ровный участок."
     )
     assert scrub_service_phrases("Категория не установлена", "")[0] == "Земельный участок"
+    assert scrub_service_phrases(
+        "Земельный участок 12,3 сот. для ИЖС, категория не установлена", ""
+    )[0] == ("Земельный участок 12,3 сот. для ИЖС")
     p = build_prompt(
         facts=[], zouit_notes=[], notes="", object_type="", price_rub=None, fetched="2026-10-20"
     )

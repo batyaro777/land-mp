@@ -1942,21 +1942,23 @@ def connection_decide(user: UserDep, conn_id: int, decision: Annotated[str, Form
                 lst.cad_num if lst else f"#{conn.listing_id}"
             )
             verdict = "принял" if decision == "accepted" else "отклонил"
+            has_contact = bool(
+                user.contact or user.email or (lst and (lst.data or {}).get("phone"))
+            )
+            if decision != "accepted":
+                tail = "."
+            elif has_contact:
+                tail = ". Контакты открыты в разделе «Запросы контакта»."
+            else:
+                tail = ", но контакт в профиле не указан — мы попросили его заполнить."
             notify(
                 db,
                 conn.from_user_id,
                 "decision",
-                f"Владелец {verdict} ваш запрос контакта по объявлению «{title}»"
-                + (
-                    ". Контакты открыты в разделе «Запросы контакта»."
-                    if decision == "accepted"
-                    else "."
-                ),
+                f"Владелец {verdict} ваш запрос контакта по объявлению «{title}»" + tail,
                 "/connections",
             )
-            if decision == "accepted" and not (
-                user.contact or user.email or (lst and (lst.data or {}).get("phone"))
-            ):
+            if decision == "accepted" and not has_contact:
                 # Принял, а показать нечего (прод 21.10: «Контакт: —») — подсказать владельцу
                 notify(
                     db,
