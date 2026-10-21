@@ -270,3 +270,52 @@ def test_collect_ads_off_scale_area():
     # без площади участка (или с мусорной площадью из ЕГРН) фильтра нет
     assert collect_ads("Белокуриха", "izhs", search_fn=search_fn)["n"] == 2
     assert collect_ads("Белокуриха", "izhs", area_m2=0.5, search_fn=search_fn)["n"] == 2
+
+
+def test_is_catalog_cian_code_olan_list_and_domclick_suffix():
+    from landcheck.market_ads import is_catalog
+
+    # код локации cian после дефиса — не id объявления, путь /kupit- каталожный
+    assert is_catalog(
+        "Купить участок в Чепоше",
+        "",
+        "https://www.cian.ru/kupit-zemelnyj-uchastok-cheposh-01164480/",
+    )
+    # olan: id в адресе, но сниппет — список карточек с разными площадями и ценами
+    assert is_catalog(
+        "Купить земельный участок с/п Аносинское в Чемальском",
+        "11 сот, 1 799 999 руб · 11,98 сот, 1 000 000 руб · агент",
+        "https://olan.ru/zemlya/chemal/1234567",
+    )
+
+    # одиночное объявление domclick с припиской «— Домклик» — не дом и не каталог
+    def search_fn(q, max_results, news, recent=False):
+        return {
+            "results": [
+                {
+                    "title": "Купить участок, 24 сот., ИЖС — Домклик",
+                    "url": "https://domclick.ru/card/sale__land__2165263839",
+                    "snippet": "3 000 000 ₽, два смежных участка по 12 соток, Чепош",
+                }
+            ],
+            "error": None,
+        }
+
+    r = collect_ads("Чепош", "izhs", search_fn=search_fn)
+    assert r["n"] == 1 and r["ads"][0]["host"] == "domclick.ru"
+
+
+def test_collect_ads_matches_village_by_settlement_stem():
+    def search_fn(q, max_results, news, recent=False):
+        return {
+            "results": [
+                {
+                    "title": "Участок 10 сот ИЖС, село Узнезя",
+                    "url": "https://avito.ru/x_123456789",
+                    "snippet": "1 200 000 ₽, Чемальский район",
+                }
+            ],
+            "error": None,
+        }
+
+    assert collect_ads("Узнезинское", "izhs", search_fn=search_fn)["n"] == 1

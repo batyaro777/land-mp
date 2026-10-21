@@ -607,3 +607,38 @@ def test_district_queries_relevance_and_mark():
         "Чемальский район",
     )
     assert out[0]["items"] == [f"Газ придёт в Чемальский район в 2027 {DISTRICT_MARK} [2]"]
+
+
+def test_place_stem_and_settlement_locality(monkeypatch):
+    from landcheck import region
+    from landcheck.region import place_stem, resolve_locality, short_place
+
+    assert short_place("Республика Алтай, Чемальский район, сельское поселение Узнезинское") == (
+        "Узнезинское"
+    )
+    assert place_stem("Узнезинское") == "узнез"
+    assert place_stem("Чепошское") == "чепош"
+    assert place_stem("Белокуриха") == "белокурих"
+    assert place_stem("Чепош") == "чепош"
+    assert place_stem("Элекмонар") == "элекмона"
+
+    addr = "Республика Алтай, Чемальский район, сельское поселение Узнезинское, з/у 12"
+    # по контуру нашлось село — берём его
+    monkeypatch.setattr(
+        region, "locality_from_geometry", lambda g: "Республика Алтай, Чемальский район, Узнезя"
+    )
+    assert resolve_locality(addr, {"type": "Point"}) == "Республика Алтай, Чемальский район, Узнезя"
+    # по контуру только район — оставляем поселение из адреса
+    monkeypatch.setattr(
+        region, "locality_from_geometry", lambda g: "Республика Алтай, Чемальский район"
+    )
+    assert resolve_locality(addr, {"type": "Point"}) == (
+        "Республика Алтай, Чемальский район, сельское поселение Узнезинское"
+    )
+    # обычный адрес с селом — геометрия не нужна
+    monkeypatch.setattr(
+        region, "locality_from_geometry", lambda g: (_ for _ in ()).throw(AssertionError)
+    )
+    assert resolve_locality(
+        "Республика Алтай, Чемальский район, с. Элекмонар, ул. Береговая", None
+    ) == ("Республика Алтай, Чемальский район, с. Элекмонар")

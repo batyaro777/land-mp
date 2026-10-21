@@ -161,9 +161,16 @@ def locality_from_geometry(
 def resolve_locality(address: str | None, parcel_geojson: dict[str, Any] | None) -> str | None:
     """Локация для поиска: адрес НСПД до улицы; если в нём только регион — уточняем по контуру."""
     loc = locality_from_address(address)
-    if loc and loc.count(",") >= 1:
+    settlement = bool(loc) and bool(_SETTLEMENT_RE.search(loc.split(",")[-1]))
+    if loc and loc.count(",") >= 1 and not settlement:
         return loc
     by_geom = locality_from_geometry(parcel_geojson)
+    if by_geom and settlement:
+        # село по контуру лучше поселения; один район без села — хуже, оставляем адрес
+        last = by_geom.split(",")[-1]
+        if by_geom.count(",") >= 1 and not re.search(r"\bрайон\b|\bокруг\b", last, re.IGNORECASE):
+            return by_geom
+        return loc
     if by_geom:
         return by_geom
     return loc
@@ -246,10 +253,30 @@ def research_region(
 
 # --- бесплатный путь: поиск → страницы → модель ------------------------------------------
 _PLACE_PREFIX = re.compile(
-    r"^(городской округ|муниципальный округ|муниципальный район|город|г\.|с\.|село|пос\.|посёлок|"
+    r"^(городской округ|муниципальный округ|муниципальный район|муниципальное образование|"
+    r"сельское поселение|городское поселение|сельсовет|с/п|с/с|город|г\.|с\.|село|пос\.|посёлок|"
     r"поселок|д\.|деревня|ст-ца|станица|рп|пгт)\s+",
     re.IGNORECASE,
 )
+# Последняя часть адреса — поселение, а не населённый пункт («сельское поселение Узнезинское»):
+# для поиска лучше село по контуру (Nominatim), объявления и новости пишут «с. Узнезя»
+_SETTLEMENT_RE = re.compile(
+    r"\b(сельское поселение|городское поселение|сельсовет|с/п|с/с|муниципальное образование)\b",
+    re.IGNORECASE,
+)
+_ADJ_SUFFIX = re.compile(
+    r"(инское|инский|инская|овское|овский|овская|евское|евский|евская|ское|ский|ская|ое|ий|ая)$"
+)
+
+
+def place_stem(name: str) -> str:
+    """Основа названия для поиска упоминаний: «Узнезинское» → «узнез» (село Узнезя),
+    «Чепошское» → «чепош», «Белокуриха» → «белокурих», «Чепош» → «чепош»."""
+    w = name.lower().replace("ё", "е")
+    cut = _ADJ_SUFFIX.sub("", w)
+    if cut != w and len(cut) >= 4:
+        return cut
+    return w[:-1] if len(w) > 5 else w
 
 
 def short_place(locality: str) -> str:

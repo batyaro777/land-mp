@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from landcheck.models import SOTKA_M2
+from landcheck.region import place_stem
 
 KIND_QUERY = {
     "izhs": "участок ИЖС",
@@ -57,11 +58,13 @@ _CATALOG_PATHS = (
     "/zemelnye-uchastki",
     "/zemelnye_uchastki/prodam-",
 )
-_AD_ID_RE = re.compile(r"\d{6,}")  # у страницы одного объявления в пути есть числовой id
+# У страницы одного объявления в пути есть числовой id после «/» или «_» (cian /sale/suburban/312…/,
+# domclick sale__land__216…, avito …_123…); код локации cian «-cheposh-01164480/» стоит после дефиса
+_AD_ID_RE = re.compile(r"(?<=[/_])\d{6,}")
 _LEAD_JUNK_RE = re.compile(r"^[^A-Za-zА-Яа-яЁё0-9]+")  # «ᐉ» (буква по \w), «➤», кавычки
 # Дом с участком — цена дома, а не земли: в оценку земли не берём
 _HOUSE_RE = re.compile(
-    r"(\bдом[а-я]*\b|коттедж|таунхаус|дуплекс|\bбаня\b|дача с домом)", re.IGNORECASE
+    r"(\bдом(?!клик)[а-я]*\b|коттедж|таунхаус|дуплекс|\bбаня\b|дача с домом)", re.IGNORECASE
 )
 
 
@@ -91,10 +94,23 @@ def _area_m2(m: re.Match) -> float | None:
     return v if 100 <= v <= 5_000_000 else None
 
 
+def _list_like(snippet: str) -> bool:
+    """Сниппет со списком карточек (olan, mirkvartir): несколько разных площадей и цен."""
+    areas = {
+        m.group(1)
+        for m in _AREA_RE.finditer(snippet)
+        if m.group(2).lower().startswith(("сот", "га")) and _area_m2(m)
+    }
+    prices = {m.group(1) for m in _PRICE_RE.finditer(snippet) if _price_rub(m)}
+    return len(areas) >= 2 and len(prices) >= 2
+
+
 def is_catalog(title: str, snippet: str, url: str) -> bool:
     """Страница списка объявлений, а не одного участка."""
     t = _LEAD_JUNK_RE.sub("", title)
     if _CATALOG_RE.search(t) or re.search(r"\d+\s*объявлени", snippet, re.IGNORECASE):
+        return True
+    if _list_like(snippet):
         return True
     path = urlparse(url).path.lower()
     if _AD_ID_RE.search(path):  # конкретное объявление: /card/sale__land__2165263839
@@ -149,7 +165,7 @@ def collect_ads(
     off_scale: list[dict[str, Any]] = []
     errors: list[str] = []
     queries = build_queries(locality_short, kind)
-    stem = locality_short.lower()[:-1] if len(locality_short) > 5 else locality_short.lower()
+    stem = place_stem(locality_short)
     for q in queries:
         res = search_fn(q, max_results=max_results, news=False, recent=True)
         if res.get("error"):
@@ -161,7 +177,7 @@ def collect_ads(
             if not url or url in seen or any(x in host for x in _LOOKUP):
                 continue
             title, snippet = it.get("title") or "", it.get("snippet") or ""
-            if stem and stem not in f"{title} {snippet}".lower():
+            if stem and stem not in f"{title} {snippet}".lower().replace("ё", "е"):
                 continue
             if _HOUSE_RE.search(title) or is_catalog(title, snippet, url):
                 continue
