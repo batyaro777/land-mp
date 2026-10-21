@@ -41,11 +41,24 @@ _LOOKUP = (
     "zembaza",
 )
 # Страницы-каталоги агрегаторов («Купить земельный участок в с. Чепош — 37 объявлений»):
-# цена там первая попавшаяся из списка, а не конкретного участка
+# цена там первая попавшаяся из списка, а не конкретного участка. Признаки: счётчик
+# объявлений, множественное число в начале заголовка, каталожный путь без id объявления.
+# «Продам …» — наоборот, типичное одиночное объявление.
 _CATALOG_RE = re.compile(
-    r"^(купить|продажа|продам|земельные участки|участки)\b|\d+\s*объявлени|каталог|все объявления",
+    r"\d+\s*(объявлени|предложени|вариант)|каталог|все объявления|по цене от"
+    r"|^(купить|продажа|продаю?тся)?\s*(земельн\w+\s+)?участк(и|ов)\b",
     re.IGNORECASE,
 )
+_CATALOG_START_RE = re.compile(r"^(купить|продажа)\b", re.IGNORECASE)
+_CATALOG_PATHS = (
+    "/pokupka/",
+    "/kupit-",
+    "/prodazha-",
+    "/zemelnye-uchastki",
+    "/zemelnye_uchastki/prodam-",
+)
+_AD_ID_RE = re.compile(r"\d{6,}")  # у страницы одного объявления в пути есть числовой id
+_LEAD_JUNK_RE = re.compile(r"^[^A-Za-zА-Яа-яЁё0-9]+")  # «ᐉ» (буква по \w), «➤», кавычки
 # Дом с участком — цена дома, а не земли: в оценку земли не берём
 _HOUSE_RE = re.compile(
     r"(\bдом[а-я]*\b|коттедж|таунхаус|дуплекс|\bбаня\b|дача с домом)", re.IGNORECASE
@@ -76,6 +89,17 @@ def _area_m2(m: re.Match) -> float | None:
     elif unit.startswith("сот"):
         v *= SOTKA_M2
     return v if 100 <= v <= 5_000_000 else None
+
+
+def is_catalog(title: str, snippet: str, url: str) -> bool:
+    """Страница списка объявлений, а не одного участка."""
+    t = _LEAD_JUNK_RE.sub("", title)
+    if _CATALOG_RE.search(t) or re.search(r"\d+\s*объявлени", snippet, re.IGNORECASE):
+        return True
+    path = urlparse(url).path.lower()
+    if _AD_ID_RE.search(path):  # конкретное объявление: /card/sale__land__2165263839
+        return False
+    return bool(_CATALOG_START_RE.search(t)) or any(x in path for x in _CATALOG_PATHS)
 
 
 def parse_ad(title: str, snippet: str) -> dict[str, float] | None:
@@ -128,7 +152,7 @@ def collect_ads(
             title, snippet = it.get("title") or "", it.get("snippet") or ""
             if stem and stem not in f"{title} {snippet}".lower():
                 continue
-            if _HOUSE_RE.search(title) or _CATALOG_RE.search(title):
+            if _HOUSE_RE.search(title) or is_catalog(title, snippet, url):
                 continue
             parsed = parse_ad(title, snippet)
             if not parsed:

@@ -206,3 +206,40 @@ def test_report_loads_ads_block_lazily_and_caches(client, monkeypatch):  # noqa:
         "Объявления в локации (3)" in report
         and "/ads" not in report.split("Оценка стоимости")[1][:200]
     )
+
+
+def test_is_catalog_by_text_and_url():
+    from landcheck.market_ads import is_catalog
+
+    # одиночные объявления (реальные заголовки с прода): «Продам …» — не каталог
+    assert not is_catalog(
+        "Продам земельный участок Белокуриха Чехова ул",
+        "10 сот, 1,2 млн",
+        "https://altay.sibdom.ru/sale/land/123456/",
+    )
+    assert not is_catalog(
+        "Продам земельный участок ижс село Чепош",
+        "15 соток, 3 млн ₽",
+        "https://olan.ru/ad/zemlya-chepos",
+    )
+    # «Купить …» с числовым id в пути — страница одного объявления
+    assert not is_catalog(
+        "Купить участок 10 сот. в селе Чепош",
+        "2,1 млн ₽",
+        "https://domclick.ru/card/sale__land__2165263839",
+    )
+    # каталоги: счётчик, значок перед заголовком, каталожный путь, множественное число
+    assert is_catalog(
+        "Купить земельный участок в с. Чепош — 37 объявлений", "", "https://domclick.ru/x"
+    )
+    assert is_catalog(
+        "ᐉ Купить участок ИЖС в Белокурихе",
+        "цены от 500 000",
+        "https://barnaul.etagi.com/belokurikha/realty_zem/",
+    )
+    assert is_catalog(
+        "Участок ИЖС Чепош", "по 37 объявлениям цены от 1 млн", "https://cian.ru/sale/suburban/1/"
+    )
+    assert is_catalog("Земельные участки в Чепоше", "", "https://x.ru/a")
+    assert is_catalog("Участок Чепош", "", "https://www.cian.ru/kupit-zemelnyj-uchastok-chepos/")
+    assert is_catalog("Участок Чепош", "", "https://domclick.ru/altai/pokupka/uchastki/chepos")

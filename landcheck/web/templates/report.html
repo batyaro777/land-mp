@@ -156,10 +156,10 @@
 {% if d.get('market_ads') is not none or public %}
   {% include "_valuation.html" %}
 {% else %}
-<article id="valuation" hx-get="{{ ads_url }}" hx-trigger="load delay:3s" hx-swap="outerHTML">
+<div id="valuation-slot" hx-get="{{ ads_url }}" hx-trigger="load delay:3s" hx-swap="outerHTML">
   {% include "_valuation.html" %}
   <p class="muted small" aria-busy="true">Ищу объявления о продаже участков в локации…</p>
-</article>
+</div>
 {% endif %}
 
 {% if price %}
