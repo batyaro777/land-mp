@@ -99,7 +99,10 @@ _RAG_PROMPT = """Локация: {locality}. Цель покупателя: {act
 «проект» или «планируется». Если источники расходятся в датах или суммах — приведи оба
 варианта с пометкой «по разным источникам». Пометку «(по региону в целом)» ставь только когда
 факт относится к региону или республике целиком, а не потому, что в тексте рядом с локацией
-упомянут регион.
+упомянут регион. Один факт — в одном разделе: аварийный мост в «Дорогах» не повторяй в
+«Негативных», один и тот же полигон или контракт не описывай двумя пунктами. В «Рынке земли»
+площади зон генплана и число участков не пиши — только цены и их динамика, иначе «данных не
+найдено».
 «Вывод для покупателя» — 2–3 пункта по цели, на правильном русском без повторов.
 Поле "used" — номера документов, на которые ты сослался.
 
@@ -601,8 +604,31 @@ def _render_docs(docs: list[dict[str, Any]]) -> str:
 
 
 _CAD_RE = re.compile(r"\b(\d{2}:\d{2}):\d{6,7}:\d+\b")
+# Факт о регионе в целом — по обороту «по краю / в республике / в регионе / по стране», а не по
+# любому слову «регион» («власти региона анонсировали обход Бийска» — про одну дорогу; прод 21.10)
 _REGIONAL_RE = re.compile(
-    r"(республик|\bкра[йяею]\b|област[ьи]|\bрегион|\bокруг[аеу]?\b|по стране|в россии|субъект)",
+    r"(\b(по|в|во)\s+(?:[\wё-]+\s+){0,2}(республик\w*|кра[юе]\b|област[иь]\b|регион[еу]\b|"
+    r"округ[еу]\b|стране\b|россии\b)|в целом по\b|в среднем по\b|по стране\b|"
+    r"субъект\w*\s+(рф|федерации))",
+    re.IGNORECASE,
+)
+
+
+def _region_scope_re(region: str) -> re.Pattern[str] | None:
+    """«в Алтайском крае», «по Республике Алтай» — по основам слов названия региона."""
+    words = [w for w in re.split(r"\s+", region.lower().strip()) if w]
+    if not words:
+        return None
+    stems = [re.escape(w[:-2] if len(w) > 4 else w) + r"\w*" for w in words]
+    return re.compile(r"\b(по|в|во)\s+" + r"\s+".join(stems), re.IGNORECASE)
+
+
+# Модель пишет пометку по-своему («данные по району в целом») — свою не дублировать
+_MARKED_RE = re.compile(r"по (району|региону|республике|краю|области) в целом", re.IGNORECASE)
+# Пустые пункты: «данных не найдено», «сведений о газификации не найдено», «информации нет»
+_EMPTY_RE = re.compile(
+    r"(данн\w*|сведени\w*|информаци\w*)[^.\[]{0,80}?(не\s+(найден|обнаружен|приводит|указан|сообщ)|"
+    r"\bнет\b|отсутству)|не\s+найден[оы]\b|отсутству\w+\s+(данн|сведени|информаци)",
     re.IGNORECASE,
 )
 _STATUS_RE = re.compile(
@@ -628,6 +654,7 @@ def postprocess_sections(
     stem = (locality_short or "").lower()
     stem = stem[:-1] if len(stem) > 5 else stem
     region = (region_name or "").lower().strip()
+    region_re = _region_scope_re(region) if region else None
     dstem = None
     if district_name:
         d_clean = re.sub(r"\s*(район|р-н)\s*", " ", district_name, flags=re.IGNORECASE).strip()
@@ -644,6 +671,9 @@ def postprocess_sections(
             low = it.lower()
             if "данных не найдено" in low or "данные не найдены" in low:
                 continue  # «Данных не найдено», «[данных не найдено]», рассуждения об отсутствии
+            bare = re.sub(r"\[[\d,\s]+\]", "", it)
+            if _EMPTY_RE.search(bare) and not re.search(r"\d", bare):
+                continue  # «Сведений о газификации не найдено [3]» — пустой пункт со ссылкой
             if sec["title"] != "Вывод для покупателя" and not re.search(r"\[\d", it):
                 continue  # пункт без ссылки на документ — не обоснован
             if district and any(m != district for m in _CAD_RE.findall(it)):
@@ -651,11 +681,13 @@ def postprocess_sections(
             if sec["title"] == "Статус территории" and not _STATUS_RE.search(it):
                 continue
             local = bool(stem) and stem in low
-            regional = _REGIONAL_RE.search(it) or (region and region in low)
+            regional = _REGIONAL_RE.search(it) or (region_re is not None and region_re.search(low))
             mark = None
-            if not local and REGIONAL_MARK not in low and regional:
+            if _MARKED_RE.search(low):
+                pass  # модель уже пометила по-своему
+            elif not local and regional:
                 mark = REGIONAL_MARK
-            elif not local and dstem and dstem in low and DISTRICT_MARK not in low:
+            elif not local and dstem and dstem in low:
                 mark = DISTRICT_MARK
             if mark:
                 it = re.sub(r"\s*(\[[\d,\s]+\])\s*\.?\s*$", rf" {mark} \1", it, count=1)

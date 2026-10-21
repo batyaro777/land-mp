@@ -33,14 +33,19 @@ FIELDS: tuple[tuple[str, str], ...] = (
 
 
 def _zone_names(zones: list[dict[str, Any]] | None) -> list[str]:
-    """Как в таблице отчёта: «вид · название (реестровый номер)»; у терзон без ПЗЗ в НСПД
-    есть только слой и номер — тогда «Территориальные зоны (04:05-7.124)»."""
-    return sorted(
-        {
-            (z.get("describe") or z.get("kind") or z.get("name") or z.get("reg_number") or "")
-            for z in zones or []
-        }
-    )
+    """Короткая подпись зоны без обрезки реестрового номера: «вид (номер)»; у терзон без ПЗЗ
+    в НСПД есть только номер — «терзона (04:05-7.124)». describe() из отчёта режет длинные
+    названия многоточием и теряет номер (прод 21.10), поэтому собираем сами."""
+    out: set[str] = set()
+    for z in zones or []:
+        label = (z.get("kind") or z.get("name") or "").strip()
+        if not label:
+            d = str(z.get("describe") or "")
+            label = d.split(" (")[0].strip() or "зона"
+        label = label[:80].rstrip()
+        reg = (z.get("reg_number") or "").strip()
+        out.add(f"{label} ({reg})" if reg else label)
+    return sorted(out)
 
 
 def snapshot(parcel: dict[str, Any]) -> dict[str, Any]:

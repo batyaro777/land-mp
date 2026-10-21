@@ -721,3 +721,30 @@ def test_extract_text_in_worker_process_survives_crash(monkeypatch):
     websearch._reset_pool()
     monkeypatch.setenv("LANDCHECK_EXTRACT_INPROCESS", "1")
     assert websearch.extract_text("<html><body><p>" + "Коротко. " * 50 + "</p></body></html>")
+
+
+def test_postprocess_marks_scope_not_word_and_drops_empty_cited_items():
+    from landcheck.region import DISTRICT_MARK, REGIONAL_MARK, postprocess_sections
+
+    secs = [
+        {
+            "title": "Дороги и инфраструктура",
+            "items": [
+                "Власти региона не раз анонсировали обход Бийска, 7,3 км, 2,9 млрд, 2027–2030 [1]",
+                "Сведений о газификации Элекмонара в документах не найдено [3]",
+                "Информации о ремонте дороги нет [2]",
+                "Газификация (проект «Земля для стройки», данные по району в целом) [3]",
+                "В Алтайском крае отремонтировано 120 км дорог [4]",
+                "В Чемальском районе газифицируют 3 села [5]",
+            ],
+        }
+    ]
+    out = postprocess_sections(
+        secs, "Элекмонар", "Алтайский край", district_name="Чемальский район"
+    )
+    items = out[0]["items"]
+    assert items[0].startswith("Власти региона") and REGIONAL_MARK not in items[0]
+    assert not any("не найдено" in i or "нет [2]" in i for i in items)
+    assert items[1].count("в целом") == 1  # пометка модели остаётся одна, своя не добавляется
+    assert items[2].endswith(f"{REGIONAL_MARK} [4]")
+    assert items[3].endswith(f"{DISTRICT_MARK} [5]")
