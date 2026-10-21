@@ -51,9 +51,9 @@
 <pre class="small">curl -X POST {{ base_url }}/api/v1/checks \
   -H "Authorization: Bearer {{ user.api_key }}" -H "Content-Type: application/json" \
   -d '{"numbers": ["50:09:0060202:101"], "purpose": "izhs"}'
-# → {"id": 12, "status": "queued", ...}; затем:
-curl -H "Authorization: Bearer {{ user.api_key }}" {{ base_url }}/api/v1/checks/12
-curl -H "Authorization: Bearer {{ user.api_key }}" -o result.csv {{ base_url }}/api/v1/checks/12/export.csv</pre>
+# → {"id": <id>, "status": "queued", ...}; затем, подставив id:
+curl -H "Authorization: Bearer {{ user.api_key }}" {{ base_url }}/api/v1/checks/<id>
+curl -H "Authorization: Bearer {{ user.api_key }}" -o result.csv {{ base_url }}/api/v1/checks/<id>/export.csv</pre>
     <p class="muted small">Описание всех методов: <a href="/api/v1" target="_blank">/api/v1</a>. Цели: {{ purposes }}. До {{ max_items }} участков за запрос.</p>
   </details>
   {% else %}
