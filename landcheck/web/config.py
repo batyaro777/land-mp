@@ -42,6 +42,10 @@ class Settings:
         default_factory=lambda: os.environ.get("LANDCHECK_BRAND", "Проверка участков")
     )
     base_url: str = field(default_factory=lambda: os.environ.get("LANDCHECK_BASE_URL", ""))
+    # Слежение за участками (R9): период перепроверки в часах, 0 — выключено
+    watch_hours: float = field(
+        default_factory=lambda: float(os.environ.get("LANDCHECK_WATCH_HOURS", "24"))
+    )
     debug: bool = field(default_factory=lambda: os.environ.get("LANDCHECK_DEBUG", "") == "1")
     # Модуль «Регион»: Gemini с поиском Google. Без ключа блок честно говорит, что выключен.
     gemini_api_key: str | None = field(

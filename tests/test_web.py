@@ -337,3 +337,60 @@ def test_telegram_bot_runs_check_from_cad_number(client: TestClient, monkeypatch
             notify.handle_update(db, {"message": {"chat": {"id": 777}, "text": "привет"}}) == "help"
         )
     assert "кадастровый номер" in sent[-1][1]
+
+
+def test_watch_toggle_run_and_notify(client: TestClient, fixtures_dir: Path):
+    import json
+
+    from sqlalchemy import select
+
+    from landcheck.web.db import Notification, Watch, session
+    from landcheck.web.watch import run_watches
+
+    login(client)
+    cad = "50:09:0060202:104"
+    assert (
+        client.post(f"/watch/{cad}", data={"back": "/watch"}).status_code == 404
+    )  # ещё не проверен
+    r = client.post("/checks", data={"numbers": cad})
+    report = r.headers["location"] + f"/items/{cad}"
+    assert "Следить за изменениями" in client.get(report).text
+    r = client.post(f"/watch/{cad}", data={"back": report})
+    assert r.status_code == 303 and r.headers["location"] == report
+    assert "Слежу за изменениями" in client.get(report).text
+    page = client.get("/watch").text
+    assert cad in page and "нет" in page and "Перепроверить все сейчас" not in page  # не админ
+    assert client.post("/watch/run").status_code == 404
+
+    # без изменений — проверено, уведомлений нет
+    res = run_watches(max_age_h=0)
+    assert res == {"checked": 1, "changed": 0, "errors": []}
+    with session() as db:
+        w = db.scalar(select(Watch))
+        assert w.checked_at is not None and w.last_diff == [] and w.changed_at is None
+        assert db.scalar(select(Notification)) is None
+
+    # участок изменился в НСПД: статус и ЗОУИТ
+    path = fixtures_dir / "50_09_0060202_104.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    props = payload["landplot"]["properties"]["options"]
+    props["status"] = "Архивный"
+    payload["zouit"] = []
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    res = run_watches(max_age_h=0)
+    assert res["checked"] == 1 and res["changed"] == 1
+    with session() as db:
+        w = db.scalar(select(Watch))
+        fields = [c["field"] for c in w.last_diff]
+        assert "статус" in fields and "ЗОУИТ" in fields and w.changed_at is not None
+        n = db.scalar(select(Notification))
+        assert n.kind == "watch" and "Архивный" in n.text and n.url == f"/watch#{cad}"
+    page = client.get("/watch").text
+    assert "Архивный" in page and "статус:" in page
+    assert "Изменения по участку" in client.get("/notifications").text
+    # свежепроверенный участок при суточном пороге не трогаем
+    assert run_watches(max_age_h=24) == {"checked": 0, "changed": 0, "errors": []}
+    # выключить слежение
+    client.post(f"/watch/{cad}", data={"back": "/watch"})
+    with session() as db:
+        assert db.scalar(select(Watch)) is None

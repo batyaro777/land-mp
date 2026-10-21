@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import Any
@@ -104,6 +105,33 @@ def _history_for(db, check: Check, cad_num: str, verdict: str, had_history: bool
         "prev_verdict": prev_verdict,
         "changed": prev_verdict != verdict,
     }
+
+
+def run_watches_safe() -> None:
+    from landcheck.web.watch import run_watches
+
+    try:
+        run_watches(max_age_h=settings.watch_hours)
+    except Exception:  # noqa: BLE001 — фоновый обход не должен падать
+        log.exception("watch run failed")
+
+
+def start_watch_loop(*, first_delay_s: float = 300.0) -> threading.Thread | None:
+    """Фоновая перепроверка участков под слежением раз в settings.watch_hours (0 — выключено).
+    В демо-режиме на фикстурах живого НСПД нет — не запускаем."""
+    hours = settings.watch_hours
+    if hours <= 0 or settings.fixtures is not None:
+        return None
+
+    def loop() -> None:
+        time.sleep(first_delay_s)
+        while True:
+            run_watches_safe()
+            time.sleep(hours * 3600)
+
+    t = threading.Thread(target=loop, name="landcheck-watch", daemon=True)
+    t.start()
+    return t
 
 
 def resume_pending() -> int:

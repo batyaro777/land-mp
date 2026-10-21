@@ -119,6 +119,7 @@ def create_app() -> FastAPI:
     resumed = jobs.resume_pending()
     if resumed:
         log.warning("возобновлено незавершённых проверок после рестарта: %s", resumed)
+    jobs.start_watch_loop()
     return app
 
 
@@ -712,7 +713,15 @@ def report_private(request: Request, user: UserDep, check_id: int, cad_num: str)
         if item is None:
             raise HTTPException(404)
         _ = check.user  # подгрузить
-        return render(request, "report.html", **_report_ctx(check, item, public=False), user=user)
+        from landcheck.web.watch import is_watched
+
+        return render(
+            request,
+            "report.html",
+            **_report_ctx(check, item, public=False),
+            watched=is_watched(db, user.id, cad_num),
+            user=user,
+        )
 
 
 @router.get("/r/{token}", response_class=HTMLResponse)
@@ -2101,6 +2110,63 @@ def require_admin(request: Request) -> User:
 
 
 AdminDep = Annotated[User, Depends(require_admin)]
+
+
+# --- слежение за участками (R9) -----------------------------------------------------------
+@router.get("/watch", response_class=HTMLResponse)
+def watch_page(request: Request, user: UserDep, ran: int = 0, checked: int = 0, changed: int = 0):
+    from landcheck.web.watch import latest_item, watches_of
+
+    with session() as db:
+        rows = []
+        for w in watches_of(db, user.id):
+            it = latest_item(db, user.id, w.cad_num)
+            parcel = ((it.data or {}).get("parcel") or {}) if it else {}
+            rows.append(
+                {
+                    "w": w,
+                    "address": parcel.get("address"),
+                    "report_url": f"/checks/{it.check_id}/items/{w.cad_num}" if it else None,
+                }
+            )
+    return render(
+        request,
+        "watch.html",
+        rows=rows,
+        user=user,
+        ran=ran,
+        checked=checked,
+        changed=changed,
+        hours=settings.watch_hours,
+    )
+
+
+@router.post("/watch/run")
+def watch_run(admin: AdminDep):
+    """Перепроверить все участки под слежением сейчас (админ, для QA)."""
+    from landcheck.web.watch import run_watches
+
+    res = run_watches(max_age_h=0)
+    return RedirectResponse(
+        f"/watch?ran=1&checked={res['checked']}&changed={res['changed']}", status_code=303
+    )
+
+
+@router.post("/watch/{cad_num}")
+def watch_toggle(user: UserDep, cad_num: str, back: Annotated[str, Form()] = "/watch"):
+    from landcheck.web.watch import add_watch, is_watched, latest_item, remove_watch
+
+    with session() as db:
+        if is_watched(db, user.id, cad_num):
+            remove_watch(db, user.id, cad_num)
+        else:
+            item = latest_item(db, user.id, cad_num)
+            if item is None:
+                raise HTTPException(404, "Сначала проверьте участок")
+            add_watch(db, user.id, cad_num, (item.data or {}).get("parcel") or {})
+        db.commit()
+    target = back if back.startswith("/") and not back.startswith("//") else "/watch"
+    return RedirectResponse(target, status_code=303)
 
 
 def _aware(dt):

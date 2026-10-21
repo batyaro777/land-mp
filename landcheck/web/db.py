@@ -22,6 +22,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     create_engine,
     event,
     inspect,
@@ -236,6 +237,22 @@ class Notification(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     delivered: Mapped[str | None] = mapped_column(String(40), nullable=True)  # email,telegram
+
+
+class Watch(Base):
+    """Слежение за участком (R9): снимок ключевых полей ЕГРН/ЗОУИТ и уведомление при изменениях."""
+
+    __tablename__ = "watches"
+    __table_args__ = (UniqueConstraint("user_id", "cad_num", name="uq_watch_user_cad"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    cad_num: Mapped[str] = mapped_column(String(32), index=True)
+    snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_diff: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
 
 
 class Favorite(Base):

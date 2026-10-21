@@ -28,6 +28,7 @@
   <div><button class="outline sm" onclick="navigator.clipboard.writeText('{{ share_url }}');this.textContent='Ссылка скопирована'">Ссылка для клиента</button>
     <a href="/r/{{ item.token }}" target="_blank" class="small">открыть</a></div>
   <div><button class="outline sm" onclick="window.print()" title="В окне печати выберите «Сохранить как PDF»: шапка с вашим логотипом, все разделы раскрыты">Скачать PDF</button></div>
+  <div><form method="post" action="/watch/{{ item.cad_num }}" style="margin:0"><input type="hidden" name="back" value="/checks/{{ check.id }}/items/{{ item.cad_num }}"><button class="outline sm{% if watched %} secondary{% endif %}" title="Раз в сутки перепроверка в НСПД: изменения статуса, границ, категории, ВРИ, площади, стоимости, ЗОУИТ придут уведомлением">{% if watched %}Слежу за изменениями · выключить{% else %}Следить за изменениями{% endif %}</button></form></div>
 </div>
 {% endif %}
 <script>

@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Слежение за участками{% endblock %}
+{% block content %}
+<h2>Слежение за участками</h2>
+<p class="muted small">Раз в {{ hours|int }} ч участки перепроверяются в НСПД. Изменения статуса, границ, категории, ВРИ, площади, кадастровой стоимости, собственности, ЗОУИТ и терзоны приходят уведомлением (сайт, Telegram, почта). Включить слежение — кнопка «Следить за изменениями» в отчёте участка.</p>
+{% if ran %}<p class="small">Проверено: {{ checked }}, с изменениями: {{ changed }}.</p>{% endif %}
+{% if user.is_admin %}<form method="post" action="/watch/run" class="no-print"><button class="outline sm">Перепроверить все сейчас</button></form>{% endif %}
+{% if not rows %}
+<p class="muted">Пока ни одного участка под слежением.</p>
+{% else %}
+<table>
+  <thead><tr><th>Участок</th><th>С какого времени</th><th>Проверен</th><th>Изменения</th><th></th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+  <tr id="{{ r.w.cad_num }}">
+    <td>{% if r.report_url %}<a href="{{ r.report_url }}">{{ r.w.cad_num }}</a>{% else %}{{ r.w.cad_num }}{% endif %}{% if r.address %}<br><span class="muted small">{{ r.address }}</span>{% endif %}</td>
+    <td class="small">{{ r.w.created_at|dt }}</td>
+    <td class="small">{{ r.w.checked_at|dt if r.w.checked_at else '—' }}</td>
+    <td class="small">{% if r.w.last_diff %}<strong>{{ r.w.changed_at|dt }}</strong><ul class="small">{% for c in r.w.last_diff %}<li>{{ c.field }}: {{ c.old }} → {{ c.new }}</li>{% endfor %}</ul>{% else %}<span class="muted">нет</span>{% endif %}</td>
+    <td><form method="post" action="/watch/{{ r.w.cad_num }}"><input type="hidden" name="back" value="/watch"><button class="outline sm secondary">Перестать следить</button></form></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

@@ -24,6 +24,7 @@
       <li><a href="/admin/listings">Модерация</a></li>
       <li><a href="/checks">Подборки</a></li>
       <li><a href="/single">Один участок</a></li>
+      <li><a href="/watch">Слежение</a></li>
       <li><a href="/search">Поиск</a></li>
       <li><a href="/listings">Объявления</a></li>
       {% elif user.role == 'seller' %}
@@ -32,10 +33,12 @@
       {% elif user.role == 'buyer' %}
       <li><a href="/search">Поиск</a></li>
       <li><a href="/saved">Сохранённое</a></li>
+      <li><a href="/watch">Слежение</a></li>
       <li><a href="/single">Проверить участок</a></li>
       {% else %}
       <li><a href="/">Подборки</a></li>
       <li><a href="/single">Один участок</a></li>
+      <li><a href="/watch">Слежение</a></li>
       <li><a href="/search">Поиск</a></li>
       <li><a href="/listings">Объявления</a></li>
       {% endif %}
