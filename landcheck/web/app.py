@@ -577,6 +577,29 @@ def _loc_extras(loc: dict[str, Any] | None, region: dict[str, Any] | None) -> di
     return {"water": water_summary(loc), "negatives": negative_factors(loc, region)}
 
 
+def _corridor_for(data: dict[str, Any]) -> dict[str, Any] | None:
+    """Коридор цены за сотку по базе Land-MP для участка отчёта (план 20.10, п.4)."""
+    from landcheck.web.content import collect_price_points, price_corridor
+
+    p = data.get("parcel") or {}
+    if not p.get("address"):
+        return None
+    try:
+        with session() as db:
+            points = collect_price_points(db)
+    except Exception as exc:  # noqa: BLE001 — коридор не должен ронять отчёт
+        log.warning("corridor: %s", exc)
+        return None
+    return price_corridor(
+        points,
+        address=p.get("address"),
+        category=p.get("category"),
+        vri=p.get("permitted_use"),
+        pps=data.get("price_per_sotka"),
+        exclude_cad=p.get("cad_num"),
+    )
+
+
 def _report_ctx(check: Check, item: CheckItem, public: bool) -> dict[str, Any]:
     data = item.data
     purpose = _check_purpose(check)
@@ -600,6 +623,7 @@ def _report_ctx(check: Check, item: CheckItem, public: bool) -> dict[str, Any]:
         "checklist": CHECKLIST,
         "price": price_orientation(data, (check.stats or {}).get("median_price_per_sotka")),
         "price_pos": price_position(data, median),
+        "corridor": _corridor_for(data),
         "logo_url": logo_url(check.user_id),
         **_loc_extras(loc, region),
         "public": public,

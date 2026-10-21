@@ -160,7 +160,14 @@
     {% for label, v in price.points %}<tr><th>{{ label }}</th><td>{{ v|money }}</td></tr>{% endfor %}
   </table>
   {% if price_pos %}<p><strong>Цена к ориентиру:</strong> {{ price_pos.text }}.</p>{% endif %}
+  {% if corridor %}<p><strong>Коридор по базе Land-MP</strong> ({{ corridor.kind_label }}, {{ corridor.where }}, {{ corridor.n }} уч. за {{ corridor.days }} дней): медиана {{ corridor.median|money }} за сотку, середина рынка {{ corridor.p25|money }} – {{ corridor.p75|money }}{% if corridor.position_text %}; цена участка <strong>{{ corridor.position_text }}</strong>{% endif %}.</p>{% endif %}
   <p class="small muted">Диапазон {{ price.low|money }} – {{ price.high|money }}. {{ price.disclaimer }}</p>
+</article>
+{% elif corridor %}
+<article>
+  <h4>Ценовой ориентир за сотку</h4>
+  <p><strong>Коридор по базе Land-MP</strong> ({{ corridor.kind_label }}, {{ corridor.where }}, {{ corridor.n }} уч. за {{ corridor.days }} дней): медиана {{ corridor.median|money }} за сотку, середина рынка {{ corridor.p25|money }} – {{ corridor.p75|money }}.</p>
+  <p class="small muted">Цены из проверок брокеров и объявлений в базе, не сделки. Справочно.</p>
 </article>
 {% endif %}
 

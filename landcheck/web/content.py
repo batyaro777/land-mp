@@ -198,3 +198,187 @@ def goal_summary(item: dict[str, Any], purpose: Purpose) -> dict[str, Any] | Non
         "rows": rows,
         "short": " · ".join(f"{r['title'].split()[0].lower()}: {r['level']}" for r in rows),
     }
+
+
+# --- коридор цены за сотку по базе Land-MP (план 20.10, п.4) -----------------------------
+CORRIDOR_DAYS = 180
+CORRIDOR_MIN_N = 3
+CORRIDOR_MAX_POINTS = 3000
+KIND_LABELS = {
+    "izhs": "ИЖС и жильё в населённом пункте",
+    "snt": "садоводство и дачи",
+    "agri": "сельхозземля",
+    "industry": "промышленность и коммерция",
+    "other": "прочее назначение",
+}
+
+
+def land_kind(category: str | None, vri: str | None) -> str:
+    """Тип участка для сравнения цен: ИЖС/жильё, садоводство, сельхоз, промка, прочее."""
+    from landcheck.rules.purpose import category_class, vri_match
+
+    cls = category_class(category)
+    vri = vri or ""
+    if cls == "industry":
+        return "industry"
+    if vri_match(Purpose.SNT, vri) == "match":
+        return "snt"
+    if cls == "agri":
+        return "agri"
+    if cls == "settlement" or vri_match(Purpose.IZHS, vri) == "match":
+        return "izhs"
+    return "other"
+
+
+def locality_keys(address: str | None) -> list[tuple[str, str]]:
+    """Уровни сравнения от узкого к широкому: населённый пункт → район → регион.
+    «Республика Алтай, Чемальский район, с. Элекмонар» → три ключа."""
+    from landcheck.region import locality_from_address
+
+    loc = locality_from_address(address)
+    if not loc:
+        return []
+    parts = [x.strip() for x in loc.split(",") if x.strip()]
+    out: list[tuple[str, str]] = []
+    for i in range(len(parts), 0, -1):
+        key = ", ".join(parts[:i]).lower()
+        level = "settlement" if i >= 3 else ("district" if i == 2 else "region")
+        if i == len(parts) and i < 3:
+            level = "district" if i == 2 else "region"
+        out.append((level, key))
+    return out
+
+
+def price_point(cad_num: str, *, price_rub, area_m2, category, vri, address, when) -> dict | None:
+    if not price_rub or not area_m2 or area_m2 < MIN_AREA_M2:
+        return None
+    return {
+        "cad_num": cad_num,
+        "pps": price_rub / (area_m2 / SOTKA_M2),
+        "kind": land_kind(category, vri),
+        "keys": {k for _, k in locality_keys(address)},
+        "when": when,
+    }
+
+
+_POINTS_CACHE: dict[str, Any] = {"at": 0.0, "points": []}
+POINTS_CACHE_SECONDS = 60.0
+
+
+def collect_price_points(db, *, days: int = CORRIDOR_DAYS) -> list[dict[str, Any]]:
+    """Цены из проверок брокеров и объявлений за `days` дней; один участок — одна (свежая) цена.
+    Результат кэшируется на минуту: отчёт открывают чаще, чем появляются новые цены."""
+    import time
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import select
+
+    from landcheck.web.db import Check, CheckItem
+    from landcheck.web.db import Listing as ListingRow
+
+    now = time.monotonic()
+    if now - _POINTS_CACHE["at"] < POINTS_CACHE_SECONDS and _POINTS_CACHE["points"]:
+        return _POINTS_CACHE["points"]
+    cutoff = datetime.now(UTC) - timedelta(days=days)
+    points: dict[str, dict[str, Any]] = {}
+    rows = db.execute(
+        select(CheckItem.cad_num, CheckItem.data, Check.created_at)
+        .join(Check, Check.id == CheckItem.check_id)
+        .order_by(Check.created_at.desc())
+        .limit(CORRIDOR_MAX_POINTS)
+    ).all()
+    for cad_num, data, created in rows:
+        if created and created.replace(tzinfo=created.tzinfo or UTC) < cutoff:
+            continue
+        p = (data or {}).get("parcel") or {}
+        lst = (data or {}).get("listing") or {}
+        pt = price_point(
+            cad_num,
+            price_rub=lst.get("price_rub"),
+            area_m2=p.get("area_m2"),
+            category=p.get("category"),
+            vri=p.get("permitted_use"),
+            address=p.get("address"),
+            when=created,
+        )
+        if pt and cad_num not in points:
+            points[cad_num] = pt
+    for row in db.execute(select(ListingRow).order_by(ListingRow.id.desc()).limit(1000)).scalars():
+        d = row.data or {}
+        pf = d.get("parcel_facts") or {}
+        pt = price_point(
+            row.cad_num,
+            price_rub=d.get("price_rub"),
+            area_m2=pf.get("best_area_m2"),
+            category=pf.get("category"),
+            vri=pf.get("permitted_use"),
+            address=d.get("address"),
+            when=row.created_at,
+        )
+        if pt:
+            points[row.cad_num] = pt  # цена продавца свежее цены из чужой подборки
+    out = list(points.values())
+    _POINTS_CACHE.update(at=now, points=out)
+    return out
+
+
+def _quantile(values: list[float], q: float) -> float:
+    xs = sorted(values)
+    pos = (len(xs) - 1) * q
+    lo, hi = int(pos), min(int(pos) + 1, len(xs) - 1)
+    return xs[lo] + (xs[hi] - xs[lo]) * (pos - lo)
+
+
+LEVEL_LABELS = {
+    "settlement": "в этом населённом пункте",
+    "district": "в этом районе",
+    "region": "в этом регионе",
+}
+
+
+def price_corridor(
+    points: list[dict[str, Any]],
+    *,
+    address: str | None,
+    category: str | None,
+    vri: str | None,
+    pps: float | None = None,
+    exclude_cad: str | None = None,
+    min_n: int = CORRIDOR_MIN_N,
+) -> dict[str, Any] | None:
+    """Медиана и квартили ₽/сот по участкам того же типа на самом узком уровне, где есть
+    хотя бы `min_n` цен; позиция цены участка относительно коридора."""
+    kind = land_kind(category, vri)
+    for level, key in locality_keys(address):
+        vals = [
+            p["pps"]
+            for p in points
+            if p["kind"] == kind and key in p["keys"] and p["cad_num"] != exclude_cad
+        ]
+        if len(vals) < min_n:
+            continue
+        med = _quantile(vals, 0.5)
+        out: dict[str, Any] = {
+            "n": len(vals),
+            "median": med,
+            "p25": _quantile(vals, 0.25),
+            "p75": _quantile(vals, 0.75),
+            "level": level,
+            "where": LEVEL_LABELS[level],
+            "kind": kind,
+            "kind_label": KIND_LABELS[kind],
+            "days": CORRIDOR_DAYS,
+            "position": None,
+            "position_text": None,
+        }
+        if pps:
+            diff = pps / med - 1
+            out["position"] = round(diff, 3)
+            if out["p25"] <= pps <= out["p75"]:
+                out["position_text"] = "в коридоре базы"
+            elif diff > 0:
+                out["position_text"] = f"дороже медианы базы на {diff:.0%}"
+            else:
+                out["position_text"] = f"дешевле медианы базы на {-diff:.0%}"
+        return out
+    return None

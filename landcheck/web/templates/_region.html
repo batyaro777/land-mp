@@ -12,7 +12,7 @@
     <div class="grid two">
     {% for sec in region.sections %}
       <div><strong>{{ sec.title }}</strong>
-        <ul class="loc-list">{% for it in sec['items'] %}<li>{{ it }}</li>{% endfor %}</ul>
+        <ul class="loc-list">{% if sec.title == 'Рынок земли' and corridor is defined and corridor %}<li>По базе Land-MP ({{ corridor.kind_label }}, {{ corridor.where }}, {{ corridor.n }} уч.): медиана {{ corridor.median|money }} за сотку, середина {{ corridor.p25|money }} – {{ corridor.p75|money }}</li>{% endif %}{% for it in sec['items'] %}{% if not (it == 'данных не найдено' and sec.title == 'Рынок земли' and corridor is defined and corridor) %}<li>{{ it }}</li>{% endif %}{% endfor %}</ul>
       </div>
     {% endfor %}
     </div>
