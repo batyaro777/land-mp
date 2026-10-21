@@ -159,3 +159,46 @@ def test_cut_title_breaks_on_word():
     )
     assert cut_title("Короткий", 50) == "Короткий"
     assert len(cut_title("а" * 80, 50)) == 50
+
+
+def test_telegram_link_and_webhook(client, monkeypatch):  # noqa: F811
+    from landcheck.web import notify
+
+    monkeypatch.setattr(notify.settings, "telegram_bot_token", "123:ABC")
+    monkeypatch.setattr(notify, "bot_username", lambda token=None: "aimpland_bot")
+    sent: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        notify, "send_telegram", lambda chat_id, text, **k: sent.append((chat_id, text))
+    )
+    _register(client, "tg@example.com", role="broker")
+    page = client.get("/profile").text
+    assert "https://t.me/aimpland_bot?start=" in page and "Подключить Telegram" in page
+    token = page.split("?start=")[1].split('"')[0]
+    secret = notify.webhook_secret()
+    assert client.post("/tg/webhook/wrong", json={}).status_code == 404
+    upd = {"message": {"chat": {"id": 777}, "text": f"/start {token}"}}
+    assert client.post(f"/tg/webhook/{secret}", json=upd).json() == {"ok": True}
+    with session() as db:
+        u = db.scalar(select(User).where(User.email == "tg@example.com"))
+        assert u.telegram_chat_id == "777"
+    assert sent and sent[-1][0] == "777" and "Готово" in sent[-1][1]
+    assert "подключён" in client.get("/profile").text
+    # неверный код, /stop, просто текст
+    client.post(
+        f"/tg/webhook/{secret}", json={"message": {"chat": {"id": 778}, "text": "/start bad"}}
+    )
+    assert "устарела" in sent[-1][1]
+    client.post(f"/tg/webhook/{secret}", json={"message": {"chat": {"id": 777}, "text": "/stop"}})
+    with session() as db:
+        assert (
+            db.scalar(select(User).where(User.email == "tg@example.com")).telegram_chat_id is None
+        )
+    client.post(f"/tg/webhook/{secret}", json={"message": {"chat": {"id": 777}, "text": "привет"}})
+    assert "Подключить Telegram" in sent[-1][1]
+    # кнопка «отключить» в профиле
+    client.post(f"/tg/webhook/{secret}", json=upd)
+    assert client.post("/profile/telegram/off").status_code == 303
+    with session() as db:
+        assert (
+            db.scalar(select(User).where(User.email == "tg@example.com")).telegram_chat_id is None
+        )

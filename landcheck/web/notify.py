@@ -154,3 +154,105 @@ def send_telegram(
     finally:
         if client is None:
             c.close()
+
+
+# --- привязка Telegram одной кнопкой: /start <подписанный код> -----------------------------
+_BOT_CACHE: dict[str, Any] = {}
+
+
+def bot_username(token: str | None = None) -> str | None:
+    """Имя бота по getMe (кэш на процесс); None, если токена нет или Telegram не ответил."""
+    token = token or settings.telegram_bot_token
+    if not token:
+        return None
+    if "username" in _BOT_CACHE:
+        return _BOT_CACHE["username"]
+    try:
+        r = httpx.get(f"https://api.telegram.org/bot{token}/getMe", timeout=10)
+        name = (r.json().get("result") or {}).get("username")
+    except Exception as exc:  # noqa: BLE001 — профиль не должен падать из-за Telegram
+        log.warning("telegram getMe failed: %s", exc)
+        name = None
+    if name:
+        _BOT_CACHE["username"] = name
+    return name
+
+
+def webhook_secret(token: str | None = None) -> str | None:
+    """Неугадываемый хвост адреса вебхука: sha256 от токена, 24 знака."""
+    import hashlib
+
+    token = token or settings.telegram_bot_token
+    if not token:
+        return None
+    return hashlib.sha256(token.encode()).hexdigest()[:24]
+
+
+def _link_serializer():
+    from itsdangerous import URLSafeSerializer
+
+    return URLSafeSerializer(settings.secret, salt="tg-link")
+
+
+def link_token(user_id: int) -> str:
+    return _link_serializer().dumps({"uid": user_id})
+
+
+def parse_link_token(token: str) -> int | None:
+    from itsdangerous import BadSignature
+
+    try:
+        data = _link_serializer().loads(token)
+    except BadSignature:
+        return None
+    uid = data.get("uid") if isinstance(data, dict) else None
+    return int(uid) if isinstance(uid, int) else None
+
+
+def link_url(user_id: int) -> str | None:
+    name = bot_username()
+    return f"https://t.me/{name}?start={link_token(user_id)}" if name else None
+
+
+def handle_update(db, update: dict[str, Any], send=None) -> str:
+    """Обработка апдейта Telegram: /start <код> привязывает чат к пользователю, /stop отвязывает.
+    Возвращает, что сделано (для логов и тестов)."""
+    send = send or send_telegram
+    msg = update.get("message") or update.get("edited_message") or {}
+    chat_id = str((msg.get("chat") or {}).get("id") or "")
+    text = (msg.get("text") or "").strip()
+    if not chat_id or not text:
+        return "ignored"
+    parts = text.split(maxsplit=1)
+    cmd = parts[0].split("@")[0].lower()
+    if cmd == "/start" and len(parts) == 2:
+        uid = parse_link_token(parts[1].strip())
+        user = db.get(User, uid) if uid else None
+        if user is None:
+            send(
+                chat_id,
+                "Ссылка устарела или неверна. Откройте профиль в Land-MP и нажмите "
+                "«Подключить Telegram» ещё раз.",
+            )
+            return "bad-token"
+        user.telegram_chat_id = chat_id
+        db.commit()
+        send(
+            chat_id,
+            f"Готово, {user.brand or user.name}. Уведомления Land-MP будут приходить сюда: "
+            "новые участки под ваши запросы, запросы контакта, решения модератора. "
+            "Отключить — командой /stop.",
+        )
+        return f"linked:{user.id}"
+    if cmd == "/stop":
+        for user in db.scalars(select(User).where(User.telegram_chat_id == chat_id)):
+            user.telegram_chat_id = None
+        db.commit()
+        send(chat_id, "Уведомления отключены. Подключить снова можно из профиля в Land-MP.")
+        return "unlinked"
+    send(
+        chat_id,
+        "Это бот уведомлений Land-MP. Чтобы подключить, откройте профиль на сайте и нажмите "
+        "«Подключить Telegram».",
+    )
+    return "help"

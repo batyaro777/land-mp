@@ -1,5 +1,6 @@
 {% extends "base.html" %}
-{% block title %}Профиль — {{ brand }}{% endblock %}
+{% block title %}Профиль — {{ brand }}<form id="tg-off" method="post" action="/profile/telegram/off"></form>
+{% endblock %}
 {% block content %}
 <article class="narrow">
   <hgroup>
@@ -24,8 +25,13 @@
       <label>Email для входа<input type="email" name="email" value="{{ user.email or '' }}" placeholder="you@example.com"></label>
       <label>Новый пароль <small class="muted">(пусто — не менять)</small><input type="password" name="password" minlength="8" autocomplete="new-password"></label>
     </div>
-    <label>Telegram chat ID для уведомлений <small class="muted">(число; узнать — написать боту @userinfobot; работает, когда у сервиса подключён бот)</small>
-      <input name="telegram_chat_id" value="{{ user.telegram_chat_id or '' }}" placeholder="123456789" inputmode="numeric"></label>
+    <p><strong>Telegram для уведомлений:</strong>
+      {% if user.telegram_chat_id %}<span class="badge v-ok">подключён</span>
+        <button type="submit" form="tg-off" class="outline secondary sm">отключить</button>
+      {% elif tg_link %}<a href="{{ tg_link }}" target="_blank" rel="noopener" role="button" class="sm">Подключить Telegram</a>
+        <small class="muted">откроется бот, нажмите «Start» — и всё</small>
+      {% else %}<span class="muted small">бот не подключён к сервису</span>{% endif %}</p>
+    <input type="hidden" name="telegram_chat_id" value="">
     <label class="inline-check"><input type="checkbox" name="notify_email" value="1" {{ 'checked' if user.notify_email else '' }}> присылать уведомления на email</label>
     <label>Логотип <small class="muted">(PNG, JPG или WebP до 2 МБ; в отчёте высота 40 px)</small>
       <input type="file" name="logo" accept=".png,.jpg,.jpeg,.webp"></label>

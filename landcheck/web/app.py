@@ -815,8 +815,16 @@ def report_region(request: Request, user: UserDep, check_id: int, cad_num: str, 
 # --- профиль брокера: имя, бренд, контакт, логотип для отчётов (ТЗ v2, R2) ---------------
 @router.get("/profile", response_class=HTMLResponse)
 def profile_form(request: Request, user: UserDep, saved: int = 0, error: str | None = None):
+    from landcheck.web.notify import link_url
+
     return render(
-        request, "profile.html", user=user, logo_url=logo_url(user.id), saved=saved, error=error
+        request,
+        "profile.html",
+        user=user,
+        logo_url=logo_url(user.id),
+        saved=saved,
+        error=error,
+        tg_link=link_url(user.id),
     )
 
 
@@ -859,7 +867,8 @@ async def profile_save(
         u.contact = contact.strip()[:200] or None
         if role in PUBLIC_ROLES and not u.is_admin:
             u.role = role  # администратор роль в профиле не меняет: только через CLI
-        u.telegram_chat_id = re.sub(r"[^\d-]", "", telegram_chat_id)[:32] or None
+        if telegram_chat_id.strip():  # ручной ввод остаётся запасным путём
+            u.telegram_chat_id = re.sub(r"[^\d-]", "", telegram_chat_id)[:32] or None
         u.notify_email = bool(notify_email)
         new_email = normalize_email(email)
         if new_email and new_email != (u.email or ""):
@@ -1851,6 +1860,34 @@ def partner_page(request: Request, user: UserDep):
 
 
 # --- уведомления (план 20.10, п.5) ---------------------------------------------------------
+@router.post("/tg/webhook/{secret}")
+async def telegram_webhook(request: Request, secret: str):
+    """Вебхук Telegram: адрес с секретом из токена; тело — update."""
+    from landcheck.web.notify import handle_update, webhook_secret
+
+    expected = webhook_secret()
+    if not expected or secret != expected:
+        raise HTTPException(404)
+    try:
+        update = await request.json()
+    except ValueError:
+        return {"ok": True}
+    with session() as db:
+        result = handle_update(db, update if isinstance(update, dict) else {})
+    log.info("telegram update: %s", result)
+    return {"ok": True}
+
+
+@router.post("/profile/telegram/off")
+def telegram_off(user: UserDep):
+    with session() as db:
+        u = db.get(User, user.id)
+        if u is not None:
+            u.telegram_chat_id = None
+            db.commit()
+    return RedirectResponse("/profile?saved=1", status_code=303)
+
+
 @router.get("/notifications", response_class=HTMLResponse)
 def notifications_page(request: Request, user: UserDep):
     from landcheck.web.db import Notification
