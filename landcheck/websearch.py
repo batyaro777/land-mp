@@ -6,8 +6,13 @@
 
 from __future__ import annotations
 
+import logging
+import multiprocessing
 import os
-from concurrent.futures import ThreadPoolExecutor
+import threading
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
+from concurrent.futures.process import BrokenProcessPool
 from typing import Any
 from urllib.parse import urlparse
 
@@ -15,6 +20,9 @@ import httpx
 
 USER_AGENT = "Mozilla/5.0 (compatible; landcheck/0.1; +https://land-mp.dnai.engineering)"
 MAX_PAGE_CHARS = 3500
+MAX_HTML_CHARS = 1_500_000  # больше — не статья; и память воркера
+EXTRACT_TIMEOUT = 20.0
+log = logging.getLogger(__name__)
 SKIP_HOSTS = ("vk.com", "vk.ru", "ok.ru", "t.me", "youtube.com", "instagram.com", "facebook.com")
 
 
@@ -113,6 +121,64 @@ def _search_ddgs(query: str, *, max_results: int, news: bool, recent: bool = Fal
     return {"results": out, "engine": "ddgs", "error": None}
 
 
+_POOL: ProcessPoolExecutor | None = None
+_POOL_LOCK = threading.Lock()
+
+
+def _extract(html: str) -> str:
+    import trafilatura
+
+    return trafilatura.extract(html, include_comments=False, include_tables=False) or ""
+
+
+def _inprocess() -> bool:
+    return os.environ.get("LANDCHECK_EXTRACT_INPROCESS", "") == "1"
+
+
+def _pool() -> ProcessPoolExecutor:
+    global _POOL
+    with _POOL_LOCK:
+        if _POOL is None:
+            _POOL = ProcessPoolExecutor(
+                max_workers=2, mp_context=multiprocessing.get_context("spawn")
+            )
+        return _POOL
+
+
+def _reset_pool() -> None:
+    global _POOL
+    with _POOL_LOCK:
+        pool, _POOL = _POOL, None
+    if pool is not None:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+def extract_text(html: str) -> str:
+    """Основной текст из HTML. В проде — в отдельном процессе: trafilatura/lxml в шести
+    потоках роняли контейнер без traceback (прод 21.10, «Регион» по Чепошу); падение или
+    зависание воркера теперь стоит одной страницы, а не сервера. `LANDCHECK_EXTRACT_INPROCESS=1`
+    — извлекать в том же процессе (тесты)."""
+    html = html[:MAX_HTML_CHARS]
+    if _inprocess():
+        try:
+            return _extract(html)
+        except Exception:  # noqa: BLE001
+            return ""
+    try:
+        return _pool().submit(_extract, html).result(timeout=EXTRACT_TIMEOUT)
+    except BrokenProcessPool:
+        log.warning("extract worker crashed, pool reset")
+        _reset_pool()
+        return ""
+    except FutureTimeout:
+        log.warning("extract timeout after %ss, pool reset", EXTRACT_TIMEOUT)
+        _reset_pool()
+        return ""
+    except Exception as exc:  # noqa: BLE001
+        log.warning("extract failed: %s", type(exc).__name__)
+        return ""
+
+
 def fetch_text(url: str, *, timeout: float = 10.0, max_chars: int = MAX_PAGE_CHARS) -> str:
     """Основной текст страницы или пустая строка; никаких исключений наружу."""
     host = urlparse(url).netloc.lower()
@@ -127,13 +193,7 @@ def fetch_text(url: str, *, timeout: float = 10.0, max_chars: int = MAX_PAGE_CHA
         html = r.text
     except Exception:  # noqa: BLE001
         return ""
-    try:
-        import trafilatura
-
-        text = trafilatura.extract(html, include_comments=False, include_tables=False) or ""
-    except Exception:  # noqa: BLE001
-        text = ""
-    return text[:max_chars]
+    return extract_text(html)[:max_chars]
 
 
 def fetch_many(urls: list[str], *, timeout: float = 10.0, workers: int = 6) -> dict[str, str]:

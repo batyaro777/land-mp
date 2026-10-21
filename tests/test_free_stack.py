@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import httpx
+import pytest
 
 from landcheck import llm, websearch
 from landcheck.models import Purpose
@@ -696,3 +697,27 @@ def test_nearest_place_and_settlement_fallback(monkeypatch):
     monkeypatch.setattr(region.httpx, "post", lambda *a, **k: (_ for _ in ()).throw(AssertionError))
     assert nearest_place(square) is None  # из кэша, без сети
     region._PLACE_CACHE.clear()
+
+
+def test_extract_text_in_worker_process_survives_crash(monkeypatch):
+    import os
+    from concurrent.futures.process import BrokenProcessPool
+
+    from landcheck import websearch
+
+    monkeypatch.delenv("LANDCHECK_EXTRACT_INPROCESS", raising=False)
+    websearch._reset_pool()
+    html = (
+        "<html><body><article><p>"
+        + "Село Узнезя: новости и планы. " * 40
+        + "</p></article></body></html>"
+    )
+    assert "Узнезя" in websearch.extract_text(html)
+    # воркер умер (как lxml на проде): сервер жив, пул пересоздаётся, следующая страница извлекается
+    with pytest.raises(BrokenProcessPool):
+        websearch._pool().submit(os._exit, 3).result(timeout=30)
+    assert websearch.extract_text(html) == ""  # сломанный пул → пусто и сброс
+    assert "Узнезя" in websearch.extract_text(html)
+    websearch._reset_pool()
+    monkeypatch.setenv("LANDCHECK_EXTRACT_INPROCESS", "1")
+    assert websearch.extract_text("<html><body><p>" + "Коротко. " * 50 + "</p></body></html>")
