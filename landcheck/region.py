@@ -757,6 +757,9 @@ def _same_fact(a: str, b: str, *, strict: bool = False, skip_names: set[str] | N
     ta, tb = _tokens(a), _tokens(b)
     if not ta or not tb:
         return False
+    na_full, nb_full = _names(a), _names(b)
+    if na_full and nb_full and not na_full & nb_full:
+        return False  # один шаблон про разные сёла («школа в Чепоше» / «школа в Элекмонаре»)
     jaccard = len(ta & tb) / len(ta | tb)
     return jaccard >= (0.35 if shared_cite else 0.5)
 

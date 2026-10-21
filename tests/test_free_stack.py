@@ -934,3 +934,13 @@ def test_same_fact_locality_container_vs_different_villages():
     c = "Строительство школы в Чепоше отстаёт от графика [2]"
     d = "Новая школа в Элекмонаре откроется в 2027 году [2]"
     assert not _same_fact(c, d, skip_names={"элекмонар"})  # разные сёла, слов общих нет
+
+
+def test_same_template_different_villages_not_merged():
+    from landcheck.region import _same_fact
+
+    c = "Школа в Чепоше строится с отставанием от графика [2]"
+    d = "Школа в Элекмонаре строится с отставанием от графика [2]"
+    assert not _same_fact(c, d) and not _same_fact(c, d, strict=True)
+    e = "Школа в Чепоше строится с отставанием от графика, подрядчик сменён [2]"
+    assert _same_fact(c, e)  # то же село, та же формулировка — один факт
