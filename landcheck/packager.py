@@ -112,7 +112,9 @@ def scrub_service_phrases(title: str, desc: str) -> tuple[str, str]:
 
 def _finish(title: str, desc: str, model: str) -> dict[str, Any]:
     title, desc = scrub_service_phrases(title, desc)
-    title = re.sub(r"\s+", " ", title).strip()[:TITLE_MAX].rstrip(" ,.;—-")
+    from landcheck.listing import cut_title
+
+    title = cut_title(title, TITLE_MAX)
     return {"title": title, "description": desc.strip(), "model": model, "error": None}
 
 

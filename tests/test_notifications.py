@@ -52,12 +52,13 @@ def test_notifications_flow(client):  # noqa: F811
     assert "Новый участок под ваш запрос" in buyer_notes[0].text and buyer_notes[0].url.startswith(
         "/search/"
     )
+    assert "2 500 000 ₽" in buyer_notes[0].text and "?l=" in buyer_notes[0].url
     # брокер запрашивает контакт → владелец получает уведомление; решение → брокеру
     _register(client, "broker@example.com", role="broker")
-    assert client.post(f"/l/{lid}/connect", data={"note": "есть покупатель"}).status_code == 303
+    assert client.post(f"/l/{lid}/connect", data={"note": "есть покупатель?."}).status_code == 303
     client.post("/logout")
     seller_notes = _notes("seller@example.com")
-    assert seller_notes[-1].kind == "connect" and "есть покупатель" in seller_notes[-1].text
+    assert seller_notes[-1].kind == "connect" and "«есть покупатель»." in seller_notes[-1].text
     client.post("/login/password", data={"email": "seller@example.com", "password": "12345678"})
     page = client.get("/notifications").text
     assert "Запрос контакта" in page and "новое" in page
@@ -142,3 +143,13 @@ def test_delivery_email_and_telegram_with_fakes(monkeypatch):
         {"email": "a@b", "chat_id": "1", "kind": "system", "text": "t", "url": None},
     )
     assert "не задан" in out["email"] and "не задан" in out["telegram"]
+
+
+def test_cut_title_breaks_on_word():
+    from landcheck.listing import cut_title
+
+    assert cut_title("Участок 12.3 сот. для ИЖС, земли населенных пунктов — Чепош", 50) == (
+        "Участок 12.3 сот. для ИЖС, земли населенных"
+    )
+    assert cut_title("Короткий", 50) == "Короткий"
+    assert len(cut_title("а" * 80, 50)) == 50

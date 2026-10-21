@@ -1402,10 +1402,12 @@ def _notify_buyers_about(db, row) -> int:
         )
         if not m:
             continue
-        url = f"/search/{req.id}"
-        if already_notified(db, req.user_id, "match", f"{url}#l{row.id}"):
+        url = f"/search/{req.id}?l={row.id}"  # один участок — одно уведомление на запрос
+        if already_notified(db, req.user_id, "match", url):
             continue
-        price = f", {d['price_rub']:,.0f} ₽".replace(",", " ") if d.get("price_rub") else ""
+        price = ""
+        if d.get("price_rub"):
+            price = ", " + f"{d['price_rub']:,.0f}".replace(",", " ") + " ₽"
         verdict = (m.get("verdict") or {}).get("text") or m.get("level") or ""
         notify(
             db,
@@ -1414,7 +1416,7 @@ def _notify_buyers_about(db, row) -> int:
             f"Новый участок под ваш запрос «{(req.text or '').strip()[:60] or 'без текста'}»: "
             f"{card.get('title') or row.cad_num}{price}."
             + (f" Под цель: {verdict}." if verdict else ""),
-            f"{url}#l{row.id}",
+            url,
         )
         sent += 1
     return sent
@@ -1905,12 +1907,13 @@ def connection_create(user: UserDep, listing_id: int, note: Annotated[str, Form(
 
             who = user.brand or user.name
             title = (row.data or {}).get("title") or row.cad_num
+            note_clean = note.strip()[:200].rstrip(".!?… ")
             notify(
                 db,
                 row.user_id,
                 "connect",
                 f"{who} запрашивает контакт по объявлению «{title}»"
-                + (f": {note.strip()[:200]}" if note.strip() else "")
+                + (f": «{note_clean}»" if note_clean else "")
                 + ". Примите или отклоните в разделе «Запросы контакта».",
                 "/connections",
             )
@@ -1951,6 +1954,19 @@ def connection_decide(user: UserDep, conn_id: int, decision: Annotated[str, Form
                 ),
                 "/connections",
             )
+            if decision == "accepted" and not (
+                user.contact or user.email or (lst and (lst.data or {}).get("phone"))
+            ):
+                # Принял, а показать нечего (прод 21.10: «Контакт: —») — подсказать владельцу
+                notify(
+                    db,
+                    user.id,
+                    "system",
+                    "Вы приняли запрос контакта, но у вас не указаны ни контакт, ни email, "
+                    "ни телефон в объявлении — второй стороне нечего показать. Заполните "
+                    "контакт в профиле.",
+                    "/profile",
+                )
             db.commit()
     return RedirectResponse("/connections", status_code=303)
 

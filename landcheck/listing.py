@@ -116,6 +116,17 @@ def _short_locality(address: str | None) -> str | None:
 MIN_AREA_M2 = 50  # меньше полусотки — ошибка данных ЕГРН (1 м² встречается), не площадь участка
 
 
+def cut_title(title: str, limit: int) -> str:
+    """Заголовок до `limit` знаков с обрезкой по слову: «…земли населенных пункто» (прод 21.10)."""
+    t = re.sub(r"\s+", " ", title).strip()
+    if len(t) <= limit:
+        return t
+    cut = t[:limit]
+    if " " in cut[limit // 2 :]:
+        cut = cut[: cut.rfind(" ")]
+    return cut.rstrip(" ,.;:—-")
+
+
 def _fmt_sotka(m2: float | None) -> str | None:
     if not m2:
         return None
@@ -296,7 +307,7 @@ def build_draft(
     warnings += static_warnings(pf)
     return Draft(
         cad_num=parcel.cad_num,
-        title=title[:50] if len(title) > 50 else title,
+        title=cut_title(title, 50),
         description=description,
         object_type=obj,
         land_area_sotka=(
