@@ -86,7 +86,7 @@ def test_collect_ads_filters_and_stats():
                 },
                 {
                     "title": "Участок 24 сот Чепош",
-                    "url": "https://vk.com/wall-1",
+                    "url": "https://move.ru/objects/123456/",
                     "snippet": "5 000 000 ₽",
                 },
                 {
@@ -99,7 +99,7 @@ def test_collect_ads_filters_and_stats():
         }
 
     r2 = collect_ads("Чепош", "izhs", search_fn=search_dupes)
-    assert r2["n"] == 1 and r2["ads"][0]["host"] == "vk.com"
+    assert r2["n"] == 1 and r2["ads"][0]["host"] == "move.ru"
     assert r2["ads"][0]["also"] == ["realty.yandex.ru"]
     assert r["median"] == 200_000 and r["p25"] == 175_000 and r["p75"] == 250_000
     assert r["error"] is None and len(r["queries"]) == 2
@@ -319,3 +319,37 @@ def test_collect_ads_matches_village_by_settlement_stem():
         }
 
     assert collect_ads("Узнезинское", "izhs", search_fn=search_fn)["n"] == 1
+
+
+def test_slug_mismatch_social_walls_and_settlement_titles():
+    from landcheck.market_ads import is_catalog, slug_mismatch
+
+    parsed = {"price_rub": 1_000_000.0, "area_m2": 1198.0, "pps": 83_472.0}
+    # olan: в адресе 11 сот и 1 799 999 ₽, в сниппете 11,98 сот и 1 000 000 — соседняя карточка
+    assert slug_mismatch("https://olan.ru/zemlya/chemal/163940237-11-0-sot-1799999-rub", parsed)
+    assert not slug_mismatch(
+        "https://olan.ru/zemlya/chemal/163940237-11-98-sot-1000000-rub", parsed
+    )
+    assert not slug_mismatch("https://avito.ru/x_123456789", parsed)
+    assert is_catalog(
+        "Купить земельный участок с/п Аносинское в Чемальском", "", "https://olan.ru/1234567"
+    )
+
+    def search_fn(q, max_results, news, recent=False):
+        return {
+            "results": [
+                {
+                    "title": "Участок 10 сот и дом Чепош",
+                    "url": "https://vk.ru/public151862844",
+                    "snippet": "59 м², 10 сот, 7 600 000 ₽",
+                },
+                {
+                    "title": "Участок 12 сот ИЖС Чепош",
+                    "url": "https://olan.ru/zemlya/chemal/163940237-11-0-sot-1799999-rub",
+                    "snippet": "1 000 000 ₽, 11,98 сот",
+                },
+            ],
+            "error": None,
+        }
+
+    assert collect_ads("Чепош", "izhs", search_fn=search_fn)["n"] == 0

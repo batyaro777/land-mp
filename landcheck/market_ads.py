@@ -31,7 +31,13 @@ _PRICE_RE = re.compile(
 _AREA_RE = re.compile(
     r"(?<![\d:])(\d+(?:[.,]\d+)?)\s*(сот[а-я.]*|га\b|м²|м2|кв\.?\s*м)", re.IGNORECASE
 )
+# Справочники по кадастру и соцсети: стена группы vk.ru/public… — не объявление
 _LOOKUP = (
+    "vk.com",
+    "vk.ru",
+    "ok.ru",
+    "t.me",
+    "youtube.",
     "egrp365",
     "rosreestr",
     "pkk",
@@ -47,6 +53,7 @@ _LOOKUP = (
 # «Продам …» — наоборот, типичное одиночное объявление.
 _CATALOG_RE = re.compile(
     r"\d+\s*(объявлени|предложени|вариант)|каталог|все объявления|по цене от"
+    r"|\bс/п\b|сельское поселение"
     r"|^(купить|продажа|продаю?тся)?\s*(земельн\w+\s+)?участк(и|ов)\b",
     re.IGNORECASE,
 )
@@ -62,6 +69,10 @@ _CATALOG_PATHS = (
 # domclick sale__land__216…, avito …_123…); код локации cian «-cheposh-01164480/» стоит после дефиса
 _AD_ID_RE = re.compile(r"(?<=[/_])\d{6,}")
 _LEAD_JUNK_RE = re.compile(r"^[^A-Za-zА-Яа-яЁё0-9]+")  # «ᐉ» (буква по \w), «➤», кавычки
+# olan: в адресе страницы зашиты площадь и цена («…/163940237-11-0-sot-1799999-rub»); если они
+# не совпадают со сниппетом — поиск показал соседнюю карточку из списка, не это объявление
+_SLUG_AREA_RE = re.compile(r"(?<=[/-])(\d+)-(\d+)-sot(?=[-/]|$)")
+_SLUG_PRICE_RE = re.compile(r"(?<=[/-])(\d{5,})-rub(?=[-/]|$)")
 # Дом с участком — цена дома, а не земли: в оценку земли не берём
 _HOUSE_RE = re.compile(
     r"(\bдом(?!клик)[а-я]*\b|коттедж|таунхаус|дуплекс|\bбаня\b|дача с домом)", re.IGNORECASE
@@ -116,6 +127,19 @@ def is_catalog(title: str, snippet: str, url: str) -> bool:
     if _AD_ID_RE.search(path):  # конкретное объявление: /card/sale__land__2165263839
         return False
     return bool(_CATALOG_START_RE.search(t)) or any(x in path for x in _CATALOG_PATHS)
+
+
+def slug_mismatch(url: str, parsed: dict[str, float]) -> bool:
+    """Площадь/цена в адресе страницы есть и расходятся с распарсенными из сниппета."""
+    path = urlparse(url).path.lower()
+    pm, am = _SLUG_PRICE_RE.search(path), _SLUG_AREA_RE.search(path)
+    if pm and abs(float(pm.group(1)) - parsed["price_rub"]) > parsed["price_rub"] * 0.02:
+        return True
+    if am:
+        sot = float(f"{am.group(1)}.{am.group(2)}") * SOTKA_M2
+        if abs(sot - parsed["area_m2"]) > parsed["area_m2"] * 0.05:
+            return True
+    return False
 
 
 def parse_ad(title: str, snippet: str) -> dict[str, float] | None:
@@ -182,7 +206,7 @@ def collect_ads(
             if _HOUSE_RE.search(title) or is_catalog(title, snippet, url):
                 continue
             parsed = parse_ad(title, snippet)
-            if not parsed:
+            if not parsed or slug_mismatch(url, parsed):
                 continue
             seen.add(url)
             if (

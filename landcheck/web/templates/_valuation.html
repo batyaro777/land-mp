@@ -16,8 +16,9 @@
     <ul class="small">{% for a in ads.ads %}<li><a href="{{ a.url }}" target="_blank" rel="noopener">{{ a.title|truncate(90) }}</a> <span class="muted">{{ a.host }}{% if a.also %} (также {{ a.also|join(', ') }}){% endif %}</span> — {{ a.price_rub|money }}, {{ (a.area_m2 / 100)|round(1) }} сот. → {{ a.pps|money }}/сот.</li>{% endfor %}</ul>
   </details>
   {% elif ads and ads.error %}<p class="muted small">Объявления: {{ ads.error }}.</p>
+  {% elif ads and ads.off_scale %}<p class="muted small">Сопоставимых по площади объявлений не нашлось; найденные ({{ ads.off_scale|length }}) в оценку не идут — площадь другого порядка: {% for a in ads.off_scale %}<a href="{{ a.url }}" target="_blank" rel="noopener">{{ a.host }}</a> — {{ (a.area_m2 / 100)|round(1) }} сот. за {{ a.price_rub|money }}{% if not loop.last %}; {% endif %}{% endfor %}.</p>
   {% elif ads %}<p class="muted small">Объявлений с ценой и площадью по этой локации в поиске не нашлось.</p>{% endif %}
-  {% if ads and ads.off_scale %}<p class="muted small">Не учтены, площадь несопоставима с участком ({{ ads.off_scale|length }}): {% for a in ads.off_scale %}<a href="{{ a.url }}" target="_blank" rel="noopener">{{ a.host }}</a> — {{ (a.area_m2 / 100)|round(1) }} сот. за {{ a.price_rub|money }}{% if not loop.last %}; {% endif %}{% endfor %}.</p>{% endif %}
+  {% if ads and ads.n and ads.off_scale %}<p class="muted small">Не учтены, площадь другого порядка ({{ ads.off_scale|length }}): {% for a in ads.off_scale %}<a href="{{ a.url }}" target="_blank" rel="noopener">{{ a.host }}</a> — {{ (a.area_m2 / 100)|round(1) }} сот. за {{ a.price_rub|money }}{% if not loop.last %}; {% endif %}{% endfor %}.</p>{% endif %}
   {% if not public %}<p class="muted small"><a href="{{ ads_url }}?refresh=1" hx-get="{{ ads_url }}?refresh=1" hx-target="#valuation" hx-swap="outerHTML">обновить объявления</a></p>{% endif %}
   <p class="muted small">{{ valuation.disclaimer }}</p>
   {% endif %}

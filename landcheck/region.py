@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import re
 from datetime import UTC, datetime
@@ -118,6 +119,7 @@ def locality_from_address(address: str | None) -> str | None:
 
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
+OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 _UA = "landcheck/0.1 (land-mp.dnai.engineering; broker land check)"
 
 
@@ -165,15 +167,68 @@ def resolve_locality(address: str | None, parcel_geojson: dict[str, Any] | None)
     if loc and loc.count(",") >= 1 and not settlement:
         return loc
     by_geom = locality_from_geometry(parcel_geojson)
-    if by_geom and settlement:
-        # село по контуру лучше поселения; один район без села — хуже, оставляем адрес
-        last = by_geom.split(",")[-1]
-        if by_geom.count(",") >= 1 and not re.search(r"\bрайон\b|\bокруг\b", last, re.IGNORECASE):
+    if settlement:
+        # село по контуру лучше поселения; район без села — хуже: ищем ближайшее село по OSM,
+        # иначе оставляем адрес с поселением
+        if (
+            by_geom
+            and by_geom.count(",") >= 1
+            and not _ADMIN_LAST_RE.search(by_geom.split(",")[-1])
+        ):
             return by_geom
+        village = nearest_place(parcel_geojson)
+        if village:
+            return ", ".join([p.strip() for p in loc.split(",")[:-1]] + [village])
         return loc
     if by_geom:
         return by_geom
     return loc
+
+
+def overpass_url() -> str | None:
+    """Адрес Overpass API; `LANDCHECK_OVERPASS_URL=off` выключает (тесты, оффлайн)."""
+    url = os.environ.get("LANDCHECK_OVERPASS_URL", OVERPASS_URL)
+    return None if url.strip().lower() in ("", "off", "0", "false") else url.strip()
+
+
+def nearest_place(
+    parcel_geojson: dict[str, Any] | None, *, radius_m: int = 7000, timeout: float = 10.0
+) -> str | None:
+    """Ближайший населённый пункт (OSM place=city/town/village/hamlet) к центру участка через
+    Overpass. Нужен, когда адрес заканчивается поселением («сельское поселение Узнезинское»),
+    а Nominatim по точке за границей села отдаёт только район: объявления и новости пишут
+    «с. Узнезя»."""
+    url = overpass_url()
+    if not url or not parcel_geojson:
+        return None
+    try:
+        from landcheck.location import centroid
+
+        lat, lon = centroid(parcel_geojson)
+        q = (
+            f"[out:json][timeout:10];node(around:{radius_m},{lat},{lon})"
+            '[place~"^(city|town|village|hamlet)$"];out body;'
+        )
+        resp = httpx.post(url, data={"data": q}, headers={"User-Agent": _UA}, timeout=timeout)
+        if resp.status_code != 200:
+            return None
+        elements = (resp.json() or {}).get("elements") or []
+    except Exception:  # noqa: BLE001 — сеть, кривая геометрия
+        return None
+    best: tuple[float, str] | None = None
+    k = math.cos(math.radians(lat))
+    for e in elements:
+        tags = e.get("tags") or {}
+        name = tags.get("name:ru") or tags.get("name")
+        if not name or "lat" not in e or "lon" not in e:
+            continue
+        d = (e["lat"] - lat) ** 2 + ((e["lon"] - lon) * k) ** 2
+        if best is None or d < best[0]:
+            best = (d, name)
+    return best[1] if best else None
+
+
+_ADMIN_LAST_RE = re.compile(r"\bрайон\b|\bокруг\b|поселени|сельсовет", re.IGNORECASE)
 
 
 def locality_key(locality: str) -> str:

@@ -642,3 +642,51 @@ def test_place_stem_and_settlement_locality(monkeypatch):
     assert resolve_locality(
         "Республика Алтай, Чемальский район, с. Элекмонар, ул. Береговая", None
     ) == ("Республика Алтай, Чемальский район, с. Элекмонар")
+
+
+def test_nearest_place_and_settlement_fallback(monkeypatch):
+    import httpx
+
+    from landcheck import region
+    from landcheck.region import nearest_place, resolve_locality
+
+    square = {
+        "type": "Polygon",
+        "coordinates": [[[85.9, 51.4], [85.91, 51.4], [85.91, 51.41], [85.9, 51.41], [85.9, 51.4]]],
+    }
+    assert nearest_place(square) is None  # LANDCHECK_OVERPASS_URL=off в conftest
+
+    monkeypatch.setenv("LANDCHECK_OVERPASS_URL", "https://overpass.test/api")
+    calls = []
+
+    def fake_post(url, data, headers, timeout):
+        calls.append((url, data["data"]))
+        return httpx.Response(
+            200,
+            json={
+                "elements": [
+                    {"lat": 51.45, "lon": 85.95, "tags": {"name": "Чепош", "place": "village"}},
+                    {"lat": 51.406, "lon": 85.905, "tags": {"name": "Узнезя", "place": "village"}},
+                    {"lat": 51.4, "lon": 85.9, "tags": {"place": "hamlet"}},
+                ]
+            },
+        )
+
+    monkeypatch.setattr(region.httpx, "post", fake_post)
+    assert nearest_place(square) == "Узнезя"
+    assert calls[0][0] == "https://overpass.test/api" and "around:7000" in calls[0][1]
+
+    addr = (
+        "Республика Алтай, муниципальный район Чемальский, сельское поселение Узнезинское, з/у 12"
+    )
+    monkeypatch.setattr(
+        region, "locality_from_geometry", lambda g: "Республика Алтай, Чемальский район"
+    )
+    assert (
+        resolve_locality(addr, square) == "Республика Алтай, муниципальный район Чемальский, Узнезя"
+    )
+    # Overpass ничего не нашёл — остаётся адрес с поселением
+    monkeypatch.setattr(region.httpx, "post", lambda *a, **k: httpx.Response(500))
+    assert resolve_locality(addr, square) == (
+        "Республика Алтай, муниципальный район Чемальский, сельское поселение Узнезинское"
+    )

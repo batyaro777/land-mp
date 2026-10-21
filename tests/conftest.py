@@ -10,6 +10,7 @@ from tests.helpers import make_payload, zone
 def _no_elevation_network(monkeypatch):
     """Рельеф в тестах не ходит в сеть: модуль выключен, кроме явных проверок с fetch."""
     monkeypatch.setenv("LANDCHECK_ELEVATION_URL", "off")
+    monkeypatch.setenv("LANDCHECK_OVERPASS_URL", "off")
 
 
 TZ = [zone("Территориальные зоны", "50:09-7.1", "Ж-1", "Зона застройки ИЖС")]
