@@ -40,6 +40,12 @@ _LOOKUP = (
     "geo-risk",
     "zembaza",
 )
+# Страницы-каталоги агрегаторов («Купить земельный участок в с. Чепош — 37 объявлений»):
+# цена там первая попавшаяся из списка, а не конкретного участка
+_CATALOG_RE = re.compile(
+    r"^(купить|продажа|продам|земельные участки|участки)\b|\d+\s*объявлени|каталог|все объявления",
+    re.IGNORECASE,
+)
 # Дом с участком — цена дома, а не земли: в оценку земли не берём
 _HOUSE_RE = re.compile(
     r"(\bдом[а-я]*\b|коттедж|таунхаус|дуплекс|\bбаня\b|дача с домом)", re.IGNORECASE
@@ -122,12 +128,24 @@ def collect_ads(
             title, snippet = it.get("title") or "", it.get("snippet") or ""
             if stem and stem not in f"{title} {snippet}".lower():
                 continue
-            if _HOUSE_RE.search(title):
+            if _HOUSE_RE.search(title) or _CATALOG_RE.search(title):
                 continue
             parsed = parse_ad(title, snippet)
             if not parsed:
                 continue
             seen.add(url)
+            twin = next(
+                (
+                    a
+                    for a in ads
+                    if abs(a["price_rub"] - parsed["price_rub"]) < 1
+                    and abs(a["area_m2"] - parsed["area_m2"]) < 1
+                ),
+                None,
+            )
+            if twin is not None:  # то же объявление на другой площадке
+                twin.setdefault("also", []).append(host)
+                continue
             ads.append(
                 {"title": title[:120], "url": url, "host": host, "date": it.get("date"), **parsed}
             )

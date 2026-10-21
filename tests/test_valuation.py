@@ -75,6 +75,32 @@ def test_collect_ads_filters_and_stats():
 
     r = collect_ads("Белокуриха", "izhs", search_fn=search_fn)
     assert r["n"] == 3 and [a["host"] for a in r["ads"]] == ["domclick.ru", "avito.ru", "cian.ru"]
+
+    def search_dupes(q, max_results, news, recent=False):
+        return {
+            "results": [
+                {
+                    "title": "Купить земельный участок в с. Чепош — 37 объявлений",
+                    "url": "https://domclick.ru/cat",
+                    "snippet": "8 млн, 11,6 сот",
+                },
+                {
+                    "title": "Участок 24 сот Чепош",
+                    "url": "https://vk.com/wall-1",
+                    "snippet": "5 000 000 ₽",
+                },
+                {
+                    "title": "Участок 24 сот., Чепош",
+                    "url": "https://realty.yandex.ru/offer/1",
+                    "snippet": "5 000 000 ₽",
+                },
+            ],
+            "error": None,
+        }
+
+    r2 = collect_ads("Чепош", "izhs", search_fn=search_dupes)
+    assert r2["n"] == 1 and r2["ads"][0]["host"] == "vk.com"
+    assert r2["ads"][0]["also"] == ["realty.yandex.ru"]
     assert r["median"] == 200_000 and r["p25"] == 175_000 and r["p75"] == 250_000
     assert r["error"] is None and len(r["queries"]) == 2
     empty = collect_ads(

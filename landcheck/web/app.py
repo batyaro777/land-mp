@@ -634,15 +634,14 @@ def report_ads(request: Request, user: UserDep, check_id: int, cad_num: str, ref
         if data.get("market_ads") is None or refresh:
             locality = resolve_locality(parcel.get("address"), parcel.get("geometry"))
             if locality:
-                data["market_ads"] = collect_ads(
+                ads = collect_ads(
                     short_place(locality),
                     land_kind(parcel.get("category"), parcel.get("permitted_use")),
                 )
-                data["market_ads"]["locality"] = locality
+                ads["locality"] = locality
             else:
-                data["market_ads"] = {"ads": [], "n": 0, "error": "локация участка не определена"}
-            item.data = data
-            db.commit()
+                ads = {"ads": [], "n": 0, "error": "локация участка не определена"}
+            data = _merge_item_data(db, item, market_ads=ads)
         median = batch_median(check.stats, [i.data for i in check.items])
         corridor = _corridor_for(data)
         return render(
@@ -654,6 +653,16 @@ def report_ads(request: Request, user: UserDep, check_id: int, cad_num: str, ref
             ads_url=f"/checks/{check.id}/items/{cad_num}/ads",
             user=user,
         )
+
+
+def _merge_item_data(db, item: CheckItem, **keys: Any) -> dict[str, Any]:
+    """Записать только свои ключи поверх свежих данных строки: блоки «Локация», «Регион»,
+    «Документы», «Оценка» грузятся параллельно, и запись всего словаря затирала чужой результат
+    (Клавдий, прод 21.10: /location за 94 с стёр market_ads)."""
+    db.refresh(item)
+    item.data = {**(item.data or {}), **keys}
+    db.commit()
+    return item.data
 
 
 def _report_ctx(check: Check, item: CheckItem, public: bool) -> dict[str, Any]:
@@ -741,14 +750,11 @@ def report_location(request: Request, user: UserDep, check_id: int, cad_num: str
                 listing_price_rub=listing.get("price_rub"),
                 area_m2=parcel.get("area_m2"),
             )
-            data["location"] = loc
-            data["terrain"] = _terrain_for(parcel.get("geometry"), loc)
-            item.data = data
-            db.commit()
+            data = _merge_item_data(
+                db, item, location=loc, terrain=_terrain_for(parcel.get("geometry"), loc)
+            )
         elif data.get("terrain") is None and parcel.get("geometry"):
-            data["terrain"] = _terrain_for(parcel.get("geometry"), loc)
-            item.data = data
-            db.commit()
+            data = _merge_item_data(db, item, terrain=_terrain_for(parcel.get("geometry"), loc))
         return render(
             request,
             "_location.html",
@@ -806,9 +812,7 @@ def report_docs(request: Request, user: UserDep, check_id: int, cad_num: str, re
         docs = data.get("docs")
         if docs is None or refresh:
             docs = search_documents(cad_num)
-            data["docs"] = docs
-            item.data = data
-            db.commit()
+            data = _merge_item_data(db, item, docs=docs)
         return render(
             request,
             "_docs.html",
@@ -848,9 +852,7 @@ def report_region(request: Request, user: UserDep, check_id: int, cad_num: str, 
                     locality, _check_purpose(check), refresh=bool(refresh), cad_num=cad_num
                 )
                 region["locality"] = locality
-            data["region"] = region
-            item.data = data
-            db.commit()
+            data = _merge_item_data(db, item, region=region)
         return render(
             request,
             "_region.html",

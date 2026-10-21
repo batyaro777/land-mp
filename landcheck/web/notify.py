@@ -150,7 +150,9 @@ def send_telegram(
             f"https://api.telegram.org/bot{token}/sendMessage",
             json={"chat_id": chat_id, "text": text[:4000], "disable_web_page_preview": True},
         )
-        r.raise_for_status()
+        if r.status_code >= 400:
+            # Текст httpx содержит URL с токеном — наружу только код и ответ Telegram
+            raise RuntimeError(f"telegram sendMessage HTTP {r.status_code}: {r.text[:120]}")
     finally:
         if client is None:
             c.close()

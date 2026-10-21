@@ -134,6 +134,16 @@ def test_delivery_email_and_telegram_with_fakes(monkeypatch):
 
     c = httpx.Client(transport=httpx.MockTransport(handler))
     notify.send_telegram("42", "привет", token="T0K", client=c)
+    bad = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda req: httpx.Response(400, json={"ok": False, "description": "chat not found"})
+        )
+    )
+    import pytest
+
+    with pytest.raises(RuntimeError) as ei:
+        notify.send_telegram("1", "x", token="SECRET-T0K", client=bad)
+    assert "HTTP 400" in str(ei.value) and "SECRET-T0K" not in str(ei.value)
     assert posted["url"].endswith("/botT0K/sendMessage") and b'"chat_id":"42"' in posted["json"]
     # без настроек доставка честно падает, deliver() это глотает и возвращает ошибку
     monkeypatch.setattr(notify.settings, "smtp_url", None)
