@@ -765,7 +765,7 @@ def test_postprocess_dedupes_same_fact_and_drops_genplan_areas():
         {
             "title": "Негативные факторы",
             "items": [
-                "Мост через реку Эликманар в Элекмонаре разрушен 2 августа 2026 года, второй мост аварийный [3]",
+                "Разрушение моста 2 августа произошло из-за проливных дождей в Элекмонаре; второй мост аварийный [3]",
                 "Несанкционированная свалка 4,8 га в Элекмонаре, контракт 42,5 млн ₽ — устранено (2024) [3, 9]",
                 "Полигон ТБО в микрорайоне Северном около 5 га, контракт 42,5 млн ₽ — устранено (2024) [9]",
                 "Скотомогильник в 2 км от Элекмонара, санитарная зона 1000 м [6]",
@@ -783,12 +783,36 @@ def test_postprocess_dedupes_same_fact_and_drops_genplan_areas():
     out = postprocess_sections(secs, "Элекмонар", "Республика Алтай")
     roads = out[0]["items"]
     assert len(roads) == 2 and "генплану" not in " ".join(roads)
+    assert any("754 до 806 га" in i for i in out[2]["items"])  # площадь переехала в «Статус»
     neg = out[1]["items"]
     assert (
         len(neg) == 2
         and neg[0].startswith("Несанкционированная свалка")
         and "Скотомогильник" in neg[1]
     )
-    assert len(out[2]["items"]) == 1  # площади в «Статусе» остаются
-    last = out[3]["items"][0]
-    assert last.lower().count("в целом") == 2 and "(по региону в целом) (по" not in last
+    assert len(out[2]["items"]) == 2  # своя площадь в «Статусе» + перенесённая из «Дорог»
+    last = out[3]["items"][0]  # модельный дубль схлопнут: осталась первая формулировка
+    assert last.lower().count("в целом") == 1 and "(по региону в целом)" not in last
+
+
+def test_postprocess_collapses_model_double_marks_and_keeps_conclusion():
+    from landcheck.region import postprocess_sections
+
+    secs = [
+        {
+            "title": "Дороги и инфраструктура",
+            "items": [
+                "По региону в целом: в 2025 году одобрено 1 200 заявок на догазификацию (по региону в целом) [9]",
+                "Догазификация: 300 домов подключено (по региону в целом) (по региону в целом) [2]",
+            ],
+        },
+        {
+            "title": "Вывод для покупателя",
+            "items": ["Генплан расширяет зону ИЖС до 806 га и предусматривает школы [4]"],
+        },
+    ]
+    out = postprocess_sections(secs, "Белокуриха", "Алтайский край")
+    first, second = out[0]["items"]
+    assert first.startswith("По региону в целом:") and first.count("(по региону в целом)") == 0
+    assert second.count("(по региону в целом)") == 1 and second.endswith("[2]")
+    assert out[1]["items"] == ["Генплан расширяет зону ИЖС до 806 га и предусматривает школы [4]"]

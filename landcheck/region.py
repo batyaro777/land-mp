@@ -632,7 +632,12 @@ _MARKED_RE = re.compile(
 # Площади зон генплана («жилой застройки … с 754 до 806 га») — не инфраструктура и не рынок
 _GENPLAN_AREA_RE = re.compile(r"генплан\w*.*\d\s*га\b|\d\s*га\b.*генплан\w*", re.IGNORECASE)
 _MONEY_RE = re.compile(r"(\d[\d\s]*[,.]?\d*)\s*(млн|млрд|тыс)", re.IGNORECASE)
-_DATE_RE = re.compile(r"\b\d{1,2}\s+[а-яё]+\s+\d{4}\b", re.IGNORECASE)
+_MONTHS = "января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря"
+# «2 августа 2026 года» и «2 августа» — одна дата: год модель пишет не всегда (прод 21.10)
+_DATE_RE = re.compile(rf"\b(\d{{1,2}})\s+({_MONTHS})\b", re.IGNORECASE)
+_PAREN_MARK_RE = re.compile(
+    r"\s*\((по (району|региону|республике|краю|области) в целом)\)", re.IGNORECASE
+)
 _WORD_RE = re.compile(r"[а-яёa-z]{4,}", re.IGNORECASE)
 
 
@@ -645,6 +650,24 @@ def _tokens(it: str) -> set[str]:
     return {w[:5] for w in _WORD_RE.findall(bare)}
 
 
+def _collapse_marks(it: str) -> str:
+    """«По региону в целом: … (по региону в целом)» — модель ставит пометку дважды: скобочный
+    дубль убираем, одну формулировку оставляем."""
+    if len(list(_MARKED_RE.finditer(it))) < 2:
+        return it
+    stripped = _PAREN_MARK_RE.sub("", it).strip()
+    if _MARKED_RE.search(stripped):
+        return stripped
+    m = _PAREN_MARK_RE.search(it)
+    mark = f"({m.group(1)})" if m else ""
+    if re.search(r"\[\d", stripped):
+        return re.sub(r"\s*(\[[\d,\s]+\])\s*\.?\s*$", rf" {mark} \1", stripped, count=1)
+    return f"{stripped} {mark}".strip()
+
+
+_NO_AREA_MOVE = ("Статус территории", "Вывод для покупателя", "Негативные факторы")
+
+
 def _same_fact(a: str, b: str) -> bool:
     """Один факт двумя пунктами: та же сумма или дата при общем источнике, либо сильное
     совпадение слов (мост в «Дорогах» и в «Негативных»; полигон 42,5 млн дважды)."""
@@ -652,7 +675,9 @@ def _same_fact(a: str, b: str) -> bool:
     shared_cite = bool(ca & cb)
     money_a = {re.sub(r"\s", "", m[0]) + m[1].lower() for m in _MONEY_RE.findall(a)}
     money_b = {re.sub(r"\s", "", m[0]) + m[1].lower() for m in _MONEY_RE.findall(b)}
-    if shared_cite and (money_a & money_b or set(_DATE_RE.findall(a)) & set(_DATE_RE.findall(b))):
+    dates_a = {f"{d} {m.lower()}" for d, m in _DATE_RE.findall(a)}
+    dates_b = {f"{d} {m.lower()}" for d, m in _DATE_RE.findall(b)}
+    if shared_cite and (money_a & money_b or dates_a & dates_b):
         return True
     ta, tb = _tokens(a), _tokens(b)
     if not ta or not tb:
@@ -701,6 +726,7 @@ def postprocess_sections(
         else None
     )
     out: list[dict[str, Any]] = []
+    moved: list[str] = []
     for sec in sections:
         items: list[str] = []
         for it in sec["items"]:
@@ -729,12 +755,21 @@ def postprocess_sections(
                 it = re.sub(r"\s*(\[[\d,\s]+\])\s*\.?\s*$", rf" {mark} \1", it, count=1)
                 if mark not in it:
                     it = f"{it} {mark}"
-            if sec["title"] != "Статус территории" and _GENPLAN_AREA_RE.search(it):
-                continue  # площади зон генплана — не дороги и не рынок
+            it = _collapse_marks(it)
+            if sec["title"] not in _NO_AREA_MOVE and _GENPLAN_AREA_RE.search(it):
+                moved.append(it)  # площади зон генплана — в «Статус территории», не в дороги
+                continue
             if any(_same_fact(it, prev) for prev in items):
                 continue  # тот же факт вторым пунктом (полигон с тем же контрактом)
             items.append(it)
         out.append({"title": sec["title"], "items": items or ["данных не найдено"]})
+    status = next((o for o in out if o["title"] == "Статус территории"), None)
+    if status is not None and moved:
+        base = [] if status["items"] == ["данных не найдено"] else list(status["items"])
+        for it in moved:
+            if not any(_same_fact(it, x) for x in base):
+                base.append(it)
+        status["items"] = base
     # один факт — в одном разделе: аварийный мост из «Дорог» не повторять в «Негативных»
     roads = next((o["items"] for o in out if o["title"] == "Дороги и инфраструктура"), [])
     for o in out:
