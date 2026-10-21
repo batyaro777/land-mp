@@ -609,6 +609,53 @@ def _corridor_for(data: dict[str, Any]) -> dict[str, Any] | None:
     )
 
 
+def _valuation_for(data, corridor, median_batch):
+    from landcheck.web.content import valuation
+
+    return valuation(data, corridor=corridor, ads=data.get("market_ads"), median_batch=median_batch)
+
+
+@router.get("/checks/{check_id}/items/{cad_num}/ads", response_class=HTMLResponse)
+def report_ads(request: Request, user: UserDep, check_id: int, cad_num: str, refresh: int = 0):
+    """Блок «Оценка стоимости» с объявлениями в локации (HTMX): поиск, кэш в item.data."""
+    from landcheck.market_ads import collect_ads
+    from landcheck.region import resolve_locality, short_place
+    from landcheck.web.content import land_kind
+
+    with session() as db:
+        check = _own_check(db, user, check_id)
+        item = db.scalar(
+            select(CheckItem).where(CheckItem.check_id == check.id, CheckItem.cad_num == cad_num)
+        )
+        if item is None:
+            raise HTTPException(404)
+        data = dict(item.data)
+        parcel = data.get("parcel") or {}
+        if data.get("market_ads") is None or refresh:
+            locality = resolve_locality(parcel.get("address"), parcel.get("geometry"))
+            if locality:
+                data["market_ads"] = collect_ads(
+                    short_place(locality),
+                    land_kind(parcel.get("category"), parcel.get("permitted_use")),
+                )
+                data["market_ads"]["locality"] = locality
+            else:
+                data["market_ads"] = {"ads": [], "n": 0, "error": "локация участка не определена"}
+            item.data = data
+            db.commit()
+        median = batch_median(check.stats, [i.data for i in check.items])
+        corridor = _corridor_for(data)
+        return render(
+            request,
+            "_valuation.html",
+            valuation=_valuation_for(data, corridor, median),
+            d=data,
+            public=False,
+            ads_url=f"/checks/{check.id}/items/{cad_num}/ads",
+            user=user,
+        )
+
+
 def _report_ctx(check: Check, item: CheckItem, public: bool) -> dict[str, Any]:
     data = item.data
     purpose = _check_purpose(check)
@@ -632,7 +679,9 @@ def _report_ctx(check: Check, item: CheckItem, public: bool) -> dict[str, Any]:
         "checklist": CHECKLIST,
         "price": price_orientation(data, (check.stats or {}).get("median_price_per_sotka")),
         "price_pos": price_position(data, median),
-        "corridor": _corridor_for(data),
+        "corridor": (corridor := _corridor_for(data)),
+        "valuation": _valuation_for(data, corridor, median),
+        "ads_url": f"/checks/{check.id}/items/{item.cad_num}/ads",
         "logo_url": logo_url(check.user_id),
         **_loc_extras(loc, region),
         "public": public,

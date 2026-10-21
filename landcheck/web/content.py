@@ -382,3 +382,114 @@ def price_corridor(
                 out["position_text"] = f"дешевле медианы базы на {-diff:.0%}"
         return out
     return None
+
+
+# --- оценка стоимости (R6): якоря → диапазон → «в рынке ли» --------------------------------
+MIN_MARKET_N = 3
+
+
+def valuation(
+    item: dict[str, Any],
+    *,
+    corridor: dict[str, Any] | None,
+    ads: dict[str, Any] | None,
+    median_batch: float | None,
+) -> dict[str, Any] | None:
+    """Оценка ориентира за сотку по открытым данным: база Land-MP, объявления в локации,
+    кадастр участка и соседей, медиана подборки. Диапазон — середина рынка (25–75 %) по самому
+    надёжному источнику; вердикт — положение цены объявления. Не отчёт об оценке."""
+    p = item.get("parcel") or {}
+    area = p.get("area_m2")
+    if not area or area < MIN_AREA_M2:
+        return None
+    area_sotka = area / SOTKA_M2
+    pps = item.get("price_per_sotka")
+    anchors: list[dict[str, Any]] = []
+    if p.get("cadastral_cost_rub"):
+        anchors.append(
+            {
+                "label": "кадастровая стоимость участка",
+                "pps": p["cadastral_cost_rub"] / area_sotka,
+                "note": "государственная оценка, обычно ниже рынка",
+            }
+        )
+    loc_price = (item.get("location") or {}).get("price") or {}
+    if loc_price.get("per_sotka"):
+        anchors.append(
+            {
+                "label": "кадастровая ставка соседей",
+                "pps": loc_price["per_sotka"],
+                "note": loc_price.get("basis"),
+            }
+        )
+    if median_batch:
+        anchors.append(
+            {
+                "label": "медиана вашей подборки",
+                "pps": median_batch,
+                "note": "цены объявлений в подборке",
+            }
+        )
+    source = None
+    rng = None
+    if corridor and corridor.get("n", 0) >= MIN_MARKET_N:
+        anchors.append(
+            {
+                "label": f"база Land-MP, {corridor['where']}",
+                "pps": corridor["median"],
+                "note": f"{corridor['n']} уч. того же типа за {corridor['days']} дней",
+            }
+        )
+        source, rng = "база Land-MP", (corridor["p25"], corridor["p75"])
+    if ads and ads.get("n", 0) >= MIN_MARKET_N:
+        anchors.append(
+            {
+                "label": "объявления в локации",
+                "pps": ads["median"],
+                "note": f"{ads['n']} объявлений с ценой и площадью, цены предложений",
+            }
+        )
+        if rng is None:
+            source, rng = "объявления в локации", (ads["p25"], ads["p75"])
+    if not anchors:
+        return None
+    verdict = None
+    position = None
+    if pps and rng:
+        low, high = rng
+        mid = (low + high) / 2
+        position = round(pps / mid - 1, 3)
+        if low <= pps <= high:
+            verdict = "в рынке: цена в середине диапазона предложений"
+        elif pps > high:
+            verdict = f"выше рынка: дороже верхней границы на {pps / high - 1:.0%}"
+        else:
+            verdict = (
+                f"ниже рынка: дешевле нижней границы на {1 - pps / low:.0%} — проверить, почему"
+            )
+    elif pps and anchors:
+        ref = anchors[-1]["pps"]
+        position = round(pps / ref - 1, 3)
+        verdict = (
+            "рынок по данным не определён: сравните с ориентирами ниже "
+            f"(к «{anchors[-1]['label']}» ×{pps / ref:.1f})"
+        )
+    confidence = "низкая"
+    n_sources = sum(1 for x in (corridor, ads) if x and x.get("n", 0) >= MIN_MARKET_N)
+    if n_sources == 2 or (corridor and corridor.get("n", 0) >= 8) or (ads and ads.get("n", 0) >= 8):
+        confidence = "средняя"
+    if n_sources == 2 and corridor.get("n", 0) >= 8 and ads.get("n", 0) >= 8:
+        confidence = "высокая"
+    return {
+        "area_sotka": round(area_sotka, 2),
+        "anchors": anchors,
+        "range": rng,
+        "range_source": source,
+        "total_range": (rng[0] * area_sotka, rng[1] * area_sotka) if rng else None,
+        "verdict": verdict,
+        "position": position,
+        "confidence": confidence,
+        "ads": ads,
+        "disclaimer": "Ориентир по открытым данным (кадастр, база Land-MP, объявления). "
+        "Не отчёт об оценке по 135-ФЗ: для сделки, залога или суда нужен оценщик.",
+    }
