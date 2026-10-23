@@ -1744,7 +1744,10 @@ def search_create(
                 setattr(req, name, float(val.replace(",", ".")) * SOTKA_M2)
             except ValueError:
                 pass
-    reg = region.strip() or (region_from_text(query) or "")
+    from landcheck.regions import region_from_cadnum
+
+    # Кадастровый номер в запросе надёжнее слова с заглавной буквы: 90:… — Крым, а не «Терраграндэ»
+    reg = region.strip() or region_from_cadnum(query) or (region_from_text(query) or "")
     with session() as db:
         row = BuyerRequest(
             user_id=user.id,
@@ -2202,7 +2205,7 @@ def offer_decide(user: UserDep, offer_id: int, decision: Annotated[str, Form()])
             title = ((lst.data or {}).get("title") if lst else None) or (
                 lst.cad_num if lst else f"#{offer.listing_id}"
             )
-            demand.decide_offer(db, offer, user, decision, title)
+            demand.decide_offer(db, offer, user, decision, title, listing=lst)
             db.commit()
         rid = offer.request_id
     return RedirectResponse(f"/search/{rid}#offers", status_code=303)

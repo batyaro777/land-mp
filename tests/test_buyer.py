@@ -133,3 +133,26 @@ def test_buyer_flow(client):  # noqa: F811
     client.post("/login/password", data={"email": "buyer@example.com", "password": "12345678"})
     assert client.post(rurl + "/delete").status_code == 303
     assert client.get(rurl).status_code == 404
+
+
+def test_region_from_cadastral_number():
+    from landcheck.regions import region_from_cadnum
+
+    assert region_from_cadnum("участок 90:12:010101:25 под дом") == "Республика Крым"
+    assert region_from_cadnum("04:05:050201:306 и 22:64:010303:10") == "Республика Алтай"
+    assert region_from_cadnum("50:09:0060202:101") == "Московская область"
+    assert region_from_cadnum("дом до 3 млн") is None
+    assert region_from_cadnum("99:01:000001:1") is None
+
+
+def test_search_request_region_from_cadnum(client):  # noqa: F811
+    from sqlalchemy import select
+
+    from landcheck.web.db import BuyerRequest, session
+
+    _register(client, "b3@example.com", role="buyer")
+    r = client.post("/search", data={"query": "Терраграндэ: участок 90:12:010101:25 под дом"})
+    assert r.status_code == 303
+    with session() as db:
+        req = db.scalar(select(BuyerRequest).order_by(BuyerRequest.id.desc()))
+        assert req.region == "Республика Крым"  # не «Терраграндэ» из region_from_text

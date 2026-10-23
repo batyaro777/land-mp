@@ -97,6 +97,9 @@ def test_demand_offer_flow(client):  # noqa: F811
     with session() as db:
         n = db.scalar(select(Notification).where(Notification.kind == "offer_decision"))
         assert n is not None and "принял" in n.text
+        # у продавца есть email и телефон в объявлении — подсказки «заполните контакт» ему нет
+        nudges = db.scalars(select(Notification).where(Notification.kind == "system")).all()
+        assert not any("Покупатель принял" in x.text for x in nudges)
     # чужой покупатель не может решать за другого
     client.post("/logout")
     _register(client, "buyer2@example.com", role="buyer")

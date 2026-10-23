@@ -186,7 +186,9 @@ def create_offer(
     return offer, True
 
 
-def decide_offer(db, offer: Offer, buyer: User, decision: str, title: str) -> None:
+def decide_offer(
+    db, offer: Offer, buyer: User, decision: str, title: str, listing: Listing | None = None
+) -> None:
     offer.status = decision
     offer.decided_at = datetime.now(UTC)
     verdict = "принял" if decision == "accepted" else "отклонил"
@@ -202,6 +204,19 @@ def decide_offer(db, offer: Offer, buyer: User, decision: str, title: str) -> No
                 "system",
                 "Вы приняли предложение, но у вас не указаны ни контакт, ни email — продавцу "
                 "нечего показать. Заполните контакт в профиле.",
+                "/profile",
+            )
+        seller = db.get(User, offer.from_user_id)
+        phone = ((listing.data or {}).get("phone") if listing is not None else None) or ""
+        if seller is not None and not (seller.contact or seller.email or phone):
+            # симметрично покупателю: принял, а показать нечего (Клавдий, прод 23.10)
+            notify(
+                db,
+                seller.id,
+                "system",
+                "Покупатель принял ваше предложение, но у вас не указаны ни контакт, ни email, "
+                "ни телефон в объявлении — покупателю нечего показать. Заполните контакт "
+                "в профиле.",
                 "/profile",
             )
     notify(
