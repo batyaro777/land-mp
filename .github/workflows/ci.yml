@@ -11,6 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+      - run: sudo apt-get update -q && sudo apt-get install -y -q libengine-gost-openssl
       - run: uv venv --python 3.12
       - run: uv pip install -e ".[dev]"
       - run: .venv/bin/ruff check .

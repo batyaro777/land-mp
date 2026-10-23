@@ -1197,8 +1197,8 @@ async def listing_create(
             "parcel_facts": pf.to_dict(),
             "intake": {**taken.to_dict(), "sources": sources, "auto": auto},
         }
-        # документы из материалов — сразу на подтверждение права с автосверкой
-        if taken.documents:
+        # электронные документы из материалов — сразу на подтверждение права с автосверкой
+        if materials.has_electronic(taken.documents):
             saved = materials.save_documents(row.id, taken.documents)
             if saved:
                 kind = proof_kind if proof_kind in PROOF_KINDS else "owner"
@@ -1212,6 +1212,9 @@ async def listing_create(
                     area_m2=pf.best_area_m2,
                     seller_name=user.name or "",
                     proof_kind=kind,
+                    created_at=row.created_at or datetime.now(UTC),
+                    category=pf.category,
+                    permitted_use=pf.permitted_use,
                 )
                 row.data = {**row.data, "proof_check": check, "proof_files": saved}
         row.data = _compose_with_ai(dict(row.data))
@@ -1394,7 +1397,6 @@ def listing_page(request: Request, user: UserDep, listing_id: int):
 
 
 # --- подтверждение права (К2.3) и модерация ----------------------------------------------
-PROOF_EXTS = {"pdf": b"%PDF", "jpg": b"\xff\xd8\xff", "png": b"\x89PNG\r\n\x1a\n"}
 MAX_PROOF_BYTES = 10 * 1024 * 1024
 MAX_PROOFS = 3
 
@@ -1403,13 +1405,6 @@ def _proofs_dir(listing_id: int) -> Path:
     from landcheck.web.materials import proofs_dir
 
     return proofs_dir(listing_id)
-
-
-def _proof_kind_of(raw: bytes) -> str | None:
-    if raw.startswith(b"%PDF"):
-        return "pdf"
-    kind = _image_kind(raw)
-    return kind if kind in ("jpg", "png", "webp") else None
 
 
 def _proof_files(listing_id: int) -> list[str]:
@@ -1433,39 +1428,32 @@ async def listing_verify(
     proof_kind: Annotated[str, Form()] = "owner",
     proofs: Annotated[list[UploadFile] | None, File()] = None,
 ):
-    """Продавец отправляет подтверждение права: файлы в приватное хранилище, статус «на проверке».
-
-    Повторная отправка заменяет прежние файлы.
-    """
+    """Продавец отправляет подтверждение права: электронную выписку ЕГРН (PDF с Госуслуг или
+    XML из Росреестра, с .sig при наличии; архив тоже подходит). Фото и сканы не принимаются:
+    их нельзя проверить без ошибок (R13). Повторная отправка заменяет прежние файлы."""
     from datetime import UTC, datetime
+
+    from landcheck.web import materials
 
     if proof_kind not in PROOF_KINDS:
         proof_kind = "owner"
-    saved: list[str] = []
-    skipped: list[str] = []
+    uploads = await materials.materials_from_uploads(proofs)
+    docs, skipped = materials.proof_materials(uploads)
     with session() as db:
         row = _own_listing(db, user, listing_id)
         if row.status == "verified":
             return RedirectResponse(f"/listing/{listing_id}", status_code=303)
-        _delete_proofs(row.id)
-        d = _proofs_dir(row.id)
-        for f in (proofs or [])[:MAX_PROOFS]:
-            if not f.filename:
-                continue
-            raw = await f.read(MAX_PROOF_BYTES + 1)
-            kind = _proof_kind_of(raw)
-            if kind is None or len(raw) > MAX_PROOF_BYTES:
-                skipped.append(f.filename)
-                continue
-            d.mkdir(parents=True, exist_ok=True)
-            name = f"{len(saved) + 1:02d}.{kind}"
-            (d / name).write_bytes(raw)
-            saved.append(name)
-        if not saved:
-            msg = "Нужен хотя бы один файл PDF, JPG или PNG до 10 МБ."
+        if not docs:
+            msg = (
+                "Нужен хотя бы один файл электронной выписки ЕГРН: PDF с Госуслуг (бесплатно для "
+                "собственника, 1 минута) или XML с .sig из Росреестра, до 10 МБ. Фото и сканы "
+                "документов не принимаются."
+            )
             if skipped:
                 msg += " Не приняты: " + ", ".join(skipped)
             return render(request, "error.html", message=msg, user=user, status_code=400)
+        _delete_proofs(row.id)
+        materials.save_documents(row.id, docs)
         row.status = "pending"
         row.proof_kind = proof_kind
         row.submitted_at = datetime.now(UTC)
@@ -1485,13 +1473,16 @@ def _proof_check(row, user: User, proof_kind: str) -> dict[str, Any] | None:
 
     try:
         docs = materials.materials_from_proof_files(row.id)
-        area = (row.data.get("parcel_facts") or {}).get("best_area_m2")
+        pf = row.data.get("parcel_facts") or {}
         return materials.proof_check(
             docs,
             cad_num=row.cad_num,
-            area_m2=area,
+            area_m2=pf.get("best_area_m2"),
             seller_name=user.name or "",
             proof_kind=proof_kind,
+            created_at=row.created_at,
+            category=pf.get("category"),
+            permitted_use=pf.get("permitted_use"),
         )
     except Exception as e:  # noqa: BLE001 — сверка не должна ломать отправку на проверку
         log.warning("proof_check failed: %s: %s", type(e).__name__, e)

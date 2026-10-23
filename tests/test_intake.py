@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 import io
 import json
 import struct
@@ -44,6 +45,18 @@ def _docx(text: str) -> bytes:
         paras = "".join(f"<w:p><w:r><w:t>{line}</w:t></w:r></w:p>" for line in text.split("\n"))
         z.writestr("word/document.xml", f"<w:document><w:body>{paras}</w:body></w:document>")
     return buf.getvalue()
+
+
+def _zip(files: dict[str, bytes]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for name, raw in files.items():
+            z.writestr(name, raw)
+    return buf.getvalue()
+
+
+# DER-оболочка CMS SignedData: достаточно для определения типа, подпись подменяется в тестах
+SIG_DER = b"\x30\x82\x00\x20\x06\x09\x2a\x86\x48\x86\xf7\x0d\x01\x07\x02" + b"\x00" * 20
 
 
 def _pdf(text: str) -> bytes:
@@ -91,6 +104,11 @@ def test_kind_of_by_signature_not_extension():
     assert intake.kind_of(b"not an image at all", "fake.jpg") == "other"
     assert intake.kind_of(b"\x00\x01\x02", "bin.dat") == "other"
     assert intake.kind_of(b"PK\x03\x04junk", "a.zip") == "other"
+    assert intake.kind_of(_zip({"a.txt": b"hi"}), "x.bin") == "zip"
+    assert intake.kind_of(b'<?xml version="1.0"?><extract/>', "report.xml") == "xml"
+    assert intake.kind_of(b"\xef\xbb\xbf<extract><a>1</a></extract>", "r") == "xml"
+    assert intake.kind_of(SIG_DER, "report.xml.sig") == "sig"
+    assert intake.kind_of(base64.b64encode(SIG_DER), "report.sig") == "sig"
 
 
 def test_text_extraction_pdf_docx_txt():
@@ -136,17 +154,19 @@ def test_process_sorts_photos_documents_notes(monkeypatch):
     monkeypatch.setattr(intake, "pdf_text", lambda raw, max_pages=20: EXTRACT)
     res = intake.process([big, dup, small, scan, pdf, note, junk], api_key=None)
     assert [m.name for m in res.photos] == ["a.jpg"]
-    assert [m.name for m in res.documents] == ["vypiska.pdf", "scan.png"]
+    assert [m.name for m in res.documents] == ["vypiska.pdf"]
     assert [m.name for m in res.notes] == ["o.txt"] and "3 млн" in res.notes_text
     assert dict(res.dropped) == {
         "a-copy.jpg": "дубль",
         "thumb.jpg": "слишком маленькое изображение",
         "x.bin": "неизвестный формат",
+        "scan.png": intake.SCAN_REASON,
     }
+    assert [m.name for m in res.scans] == ["scan.png"] and res.signatures == []
     assert res.facts.cad_nums == ["50:09:0060202:101"] and res.facts.price_rub == 3_000_000
     assert res.classified_by == "heuristic"
     d = res.to_dict()
-    assert d["photos"] == 1 and d["documents"] == ["vypiska.pdf", "scan.png"]
+    assert d["photos"] == 1 and d["documents"] == ["vypiska.pdf"]
 
 
 def test_classify_images_via_gemini(monkeypatch):
@@ -300,10 +320,11 @@ def test_listing_from_materials_with_auto_verification(client, monkeypatch):  # 
     assert status == "pending" and kind == "owner"
     assert data["phone"] == "+79001234567" and "Свет по границе" in data["notes"]
     assert data["intake"]["auto"] == {"cad_num": True, "price": True, "phone": True, "notes": True}
-    assert data["proof_check"]["verdict"] == "ok" and data["proof_files"] == ["01.pdf", "02.png"]
+    assert data["proof_check"]["verdict"] == "ok" and data["proof_files"] == ["01.pdf"]
     lid = url.rsplit("/", 1)[1]
     assert (settings.db_path.parent / "proofs" / lid / "01.pdf").exists()
-    assert (settings.db_path.parent / "proofs" / lid / "02.png").exists()
+    assert not (settings.db_path.parent / "proofs" / lid / "02.png").exists()
+    assert "скан документа: не подтверждение" in page
     assert data["images"] == [f"/uploads/{lid}/01.jpg"]
     # модератор видит сверку построчно; после решения остаётся только итог
     _register_named(client, "admin@example.com", "Админ", role="buyer")
@@ -380,7 +401,7 @@ def test_verify_runs_check_mismatch_then_agent(client, monkeypatch):  # noqa: F8
     assert "представител" in data["proof_check"]["label"]
 
 
-def test_verify_with_scan_without_text(client, monkeypatch):  # noqa: F811
+def test_verify_rejects_scans_requires_electronic(client, monkeypatch):  # noqa: F811
     monkeypatch.setattr(settings, "gemini_api_key", None)
     _register_named(client, "s3@example.com", "Иван Иванов")
     r = client.post("/listing", data={"cad_num": "50:09:0060202:101"})
@@ -390,13 +411,71 @@ def test_verify_with_scan_without_text(client, monkeypatch):  # noqa: F811
         data={"proof_kind": "owner"},
         files=[("proofs", ("scan.png", io.BytesIO(_png(1240, 1754, 20_000)), "image/png"))],
     )
+    assert r.status_code == 400
+    assert "электронной выписки" in r.text and "scan.png (фото или скан не принимаются)" in r.text
+    assert _row(url)[0] == "draft"
+    # PDF без текстового слоя принимается, но сверка честно говорит «не прочитан»
+    r = client.post(
+        url + "/verify",
+        data={"proof_kind": "owner"},
+        files=[("proofs", ("x.pdf", io.BytesIO(b"%PDF-1.4 fake"), "application/pdf"))],
+    )
     assert r.status_code == 303
     _, _, data = _row(url)
     assert (
         data["proof_check"]["verdict"] == "unknown"
         and "не прочитан" in data["proof_check"]["label"]
     )
-    assert "сверьте вручную" in client.get(url).text
+
+
+def test_verify_zip_with_xml_and_sig(client, monkeypatch):  # noqa: F811
+    """Архив Росреестра: XML читается структурно, подпись проверяется, свежесть и НСПД сходятся."""
+    from datetime import UTC, datetime, timedelta
+
+    from landcheck import sig
+    from landcheck.web import materials
+    from tests.test_egrn_xml import build
+
+    monkeypatch.setattr(settings, "gemini_api_key", None)
+    calls = []
+
+    def fake_verify(content, sig_raw, *, roots=None):
+        calls.append((len(content), sig_raw[:4], roots))
+        return sig.SigResult(
+            "ok", signer="Росреестр (ФГИС ЕГРН)", issuer="УЦ", signed_at="2026-10-23T10:00:00Z"
+        )
+
+    monkeypatch.setattr(materials.sig, "verify_detached", fake_verify)
+    _register_named(client, "ivanov2@example.com", "Иванов Иван Иванович")
+    r = client.post("/listing", data={"cad_num": "50:09:0060202:101"})
+    url = r.headers["location"]
+    issued = (datetime.now(UTC) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")
+    archive = _zip({"docs/report.xml": build(issued=issued), "docs/report.xml.sig": SIG_DER})
+    r = client.post(
+        url + "/verify",
+        data={"proof_kind": "owner"},
+        files=[("proofs", ("rosreestr.zip", io.BytesIO(archive), "application/zip"))],
+    )
+    assert r.status_code == 303, r.text
+    status, kind, data = _row(url)
+    assert status == "pending" and kind == "owner"
+    pc = data["proof_check"]
+    assert pc["verdict"] == "ok" and "подпись Росреестра проверена" in pc["label"], pc
+    assert pc["source"] == "xml" and pc["document"] == "01.xml"
+    by = {i["key"]: i for i in pc["items"]}
+    assert by["sig"]["status"] == "ok" and "Росреестр" in by["sig"]["note"]
+    assert (
+        by["fresh"]["status"] == "ok"
+        and by["category"]["status"] == "ok"
+        and by["vri"]["status"] == "ok"
+    )
+    assert by["holder"]["status"] == "ok" and "И***в И. И." in by["holder"]["note"]
+    assert calls and calls[0][1] == SIG_DER[:4]
+    lid = url.rsplit("/", 1)[1]
+    assert (settings.db_path.parent / "proofs" / lid / "01.xml").exists()
+    assert (settings.db_path.parent / "proofs" / lid / "01.sig").exists()
+    page = client.get(url).text
+    assert "✓ Подпись" in page and "✓ Свежесть" in page and "01.xml" in page and "01.sig" in page
 
 
 def test_listing_from_cloud_folder(client, monkeypatch):  # noqa: F811

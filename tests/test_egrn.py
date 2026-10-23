@@ -52,7 +52,7 @@ def test_compare_ok_for_owner():
     assert "Иванов Иван" not in by["holder"].note  # ФИО наружу не уходит
     assert by["right"].status == "ok" and by["date"].status == "ok" and by["enc"].status == "ok"
     d = res.to_dict()
-    assert d["verdict"] == "ok" and len(d["items"]) == 6 and d["checked_at"] == "2026-10-20"
+    assert d["verdict"] == "ok" and len(d["items"]) == 8 and d["checked_at"] == "2026-10-20"
 
 
 def test_compare_mismatch_cad_and_holder():

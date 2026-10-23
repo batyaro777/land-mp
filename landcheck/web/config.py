@@ -60,6 +60,15 @@ class Settings:
     gemini_model: str = field(
         default_factory=lambda: os.environ.get("LANDCHECK_GEMINI_MODEL") or "gemini-3.8-flash"
     )
+    # PEM с корневыми сертификатами Минцифры (ГУЦ) для цепочки подписи выписок ЕГРН; без файла
+    # проверяется только сама подпись (статус chain_unverified).
+    gost_roots: Path | None = field(
+        default_factory=lambda: (
+            Path(os.environ["LANDCHECK_GOST_ROOTS"])
+            if os.environ.get("LANDCHECK_GOST_ROOTS")
+            else None
+        )
+    )
     # Доставка уведомлений: smtp://user:pass@host:587?from=land@example.com (STARTTLS),
     # smtps://…:465 — TLS сразу; Telegram — токен бота, chat_id пользователь вводит в профиле.
     smtp_url: str | None = field(

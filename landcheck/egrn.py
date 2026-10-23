@@ -82,6 +82,11 @@ class Extract:
     issued: str | None = None
     encumbrances: list[str] = field(default_factory=list)
     encumbrances_known: bool = False  # раздел обременений найден в тексте
+    category: str | None = None
+    permitted_use: str | None = None
+    right_number: str | None = None
+    issued_at: str | None = None  # ISO 8601, когда известно время формирования (XML)
+    source: str = "text"  # text (PDF/скан) | xml
 
     @property
     def filled(self) -> int:
@@ -238,7 +243,16 @@ def compare(
     seller_name: str = "",
     proof_kind: str = "owner",
     today: date | None = None,
+    signature: dict[str, Any] | None = None,
+    created_at: datetime | None = None,
+    category: str | None = None,
+    permitted_use: str | None = None,
 ) -> CheckResult:
+    """Сверка выписки с объявлением (НСПД — первоисточник), продавцом, подписью и свежестью.
+
+    signature — результат `landcheck.sig.verify_detached(...).to_dict()`; created_at — когда
+    создано объявление: выписка должна быть сформирована позже (заказана по нашему запросу).
+    """
     today = today or datetime.now(UTC).date()
     items: list[CheckItem] = []
     if not ex.is_extract and ex.filled < 2:
@@ -247,6 +261,8 @@ def compare(
             label="Документ не похож на выписку ЕГРН: сверка не выполнена, проверьте вручную",
             checked_at=today.isoformat(),
         )
+    # 0. подпись: подлинность файла
+    items.append(_signature_item(signature))
     # 1. кадастровый номер
     if not ex.cad_num:
         items.append(CheckItem("cad", "Кадастровый номер", "unknown", "в документе не найден"))
@@ -337,14 +353,21 @@ def compare(
         items.append(CheckItem("enc", "Обременения", "warn", ", ".join(ex.encumbrances)))
     else:
         items.append(CheckItem("enc", "Обременения", "ok", "не зарегистрированы"))
+    # 7. свежесть: выписка заказана после создания объявления
+    items.append(_freshness_item(ex, created_at))
+    # 8. категория и ВРИ против НСПД (есть только в XML и в полных выписках)
+    items.extend(_land_items(ex, category, permitted_use))
 
     by = {i.key: i.status for i in items}
     warns = [i.label.lower() for i in items if i.status == "warn"]
+    signed = by.get("sig") == "ok"
     if any(i.status == "mismatch" for i in items):
         bad = [i.label.lower() for i in items if i.status == "mismatch"]
         verdict, label = "mismatch", "Расхождение: " + ", ".join(bad)
     elif by.get("cad") == "ok" and by.get("holder") == "ok":
         verdict, label = "ok", "Выписка совпадает с объявлением и продавцом"
+        if signed:
+            label += ", подпись Росреестра проверена"
     elif by.get("cad") == "ok" and proof_kind == "agent":
         verdict, label = "ok", "Номер совпадает; право собственника — по договору представителя"
     else:
@@ -358,6 +381,97 @@ def compare(
     if warns:
         label += "; внимание: " + ", ".join(warns)
     return CheckResult(verdict=verdict, label=label, items=items, checked_at=today.isoformat())
+
+
+def _signature_item(signature: dict[str, Any] | None) -> CheckItem:
+    if not signature:
+        return CheckItem(
+            "sig", "Подпись", "unknown", "файл .sig не приложен: подлинность не проверена"
+        )
+    st = str(signature.get("status") or "")
+    signer = str(signature.get("signer") or "").strip()
+    who = f" — {signer}" if signer else ""
+    if st == "ok":
+        return CheckItem("sig", "Подпись", "ok", "верна, цепочка до корня проверена" + who)
+    if st == "chain_unverified":
+        return CheckItem("sig", "Подпись", "warn", "верна, цепочка до корня не проверена" + who)
+    if st == "bad":
+        return CheckItem(
+            "sig", "Подпись", "mismatch", "не сходится: файл изменён или подпись от другого файла"
+        )
+    detail = str(signature.get("detail") or "")
+    return CheckItem(
+        "sig", "Подпись", "unknown", "проверка недоступна" + (f": {detail}" if detail else "")
+    )
+
+
+def _freshness_item(ex: Extract, created_at: datetime | None) -> CheckItem:
+    if created_at is None:
+        return CheckItem("fresh", "Свежесть", "unknown", "дата объявления неизвестна")
+    if not ex.issued:
+        return CheckItem("fresh", "Свежесть", "unknown", "дата формирования не найдена")
+    created = created_at.astimezone(UTC).replace(tzinfo=None) if created_at.tzinfo else created_at
+    if ex.issued_at:
+        try:
+            issued = datetime.fromisoformat(ex.issued_at)
+        except ValueError:
+            issued = None
+    else:
+        issued = None
+    if issued is None:
+        try:
+            issued = datetime.strptime(ex.issued, "%d.%m.%Y").replace(hour=23, minute=59)
+        except ValueError:
+            return CheckItem("fresh", "Свежесть", "unknown", ex.issued)
+    if issued >= created:
+        return CheckItem(
+            "fresh", "Свежесть", "ok", f"сформирована {ex.issued}, после создания объявления"
+        )
+    return CheckItem(
+        "fresh",
+        "Свежесть",
+        "warn",
+        f"сформирована {ex.issued}, до создания объявления {created:%d.%m.%Y}: "
+        "закажите новую на Госуслугах (бесплатно, 1 минута)",
+    )
+
+
+def _land_items(ex: Extract, category: str | None, permitted_use: str | None) -> list[CheckItem]:
+    from landcheck.listing import normalize_category
+
+    out: list[CheckItem] = []
+    if ex.category and category:
+        a, b = normalize_category(ex.category), normalize_category(category)
+        if a and b:
+            st = "ok" if _fold(a) == _fold(b) else "mismatch"
+            out.append(
+                CheckItem(
+                    "category",
+                    "Категория",
+                    st,
+                    f"в документе «{ex.category}», по НСПД «{category}»",
+                )
+            )
+    if ex.permitted_use and permitted_use:
+        st = "ok" if _similar(ex.permitted_use, permitted_use) else "mismatch"
+        out.append(
+            CheckItem(
+                "vri", "ВРИ", st, f"в документе «{ex.permitted_use}», по НСПД «{permitted_use}»"
+            )
+        )
+    return out
+
+
+def _fold(s: str) -> str:
+    return re.sub(r"\s+", " ", s.lower().replace("ё", "е")).strip()
+
+
+def _similar(a: str, b: str) -> bool:
+    ta = {t for t in re.findall(r"[а-яё]{3,}", a.lower().replace("ё", "е"))}
+    tb = {t for t in re.findall(r"[а-яё]{3,}", b.lower().replace("ё", "е"))}
+    if not ta or not tb:
+        return a.strip().lower() == b.strip().lower()
+    return len(ta & tb) / len(ta | tb) >= 0.5 or ta <= tb or tb <= ta
 
 
 def best_extract(texts: list[str]) -> Extract | None:

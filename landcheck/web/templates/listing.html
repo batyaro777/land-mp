@@ -56,17 +56,17 @@
     <p>Отправлено на проверку {{ row.submitted_at|dt }}: {{ PROOF_KINDS[row.proof_kind] if row.proof_kind else '' }}. Файлы ({{ proofs|length }}): {% for f in proofs %}<a href="/listing/{{ row.id }}/proof/{{ f }}" target="_blank">{{ f }}</a>{% if not loop.last %}, {% endif %}{% endfor %}. Их видит только модератор, после решения они удаляются.</p>
   {% else %}
     {% if row.status == 'rejected' %}<p class="err">Отклонено{% if row.moderation_note %}: {{ row.moderation_note }}{% endif %}. Загрузите документы заново.</p>{% endif %}
-    <p class="small muted">Без подтверждения объявление не публикуется в базе: так в ней нет «фонарей». Подойдёт выписка ЕГРН (PDF из Госуслуг), скан свидетельства или договор с собственником. ФИО и персональные данные из документов не сохраняются, файлы удаляются после проверки.</p>
+    <p class="small muted">Без подтверждения объявление не публикуется в базе: так в ней нет «фонарей». Принимаем только электронную выписку ЕГРН: PDF с Госуслуг (собственнику бесплатно, 1 минута, раздел «Недвижимость» → «Онлайн-выписка») или XML с файлом подписи .sig из Росреестра; архив из личного кабинета тоже подходит. Фото и сканы не принимаются: их нельзя проверить без ошибок. Закажите выписку сейчас: принимаем сформированные после {{ row.created_at|dt }}. Подпись Росреестра, номер, площадь, правообладатель и дата сверяются автоматически. ФИО из документа в базе не сохраняются, файлы удаляются после проверки.</p>
     <form method="post" action="/listing/{{ row.id }}/verify" enctype="multipart/form-data">
       <label>Кто размещает
         <select name="proof_kind">{% for k, v in PROOF_KINDS.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select>
       </label>
-      <label>Документы <small class="muted">(PDF, JPG или PNG, до 3 файлов по 10 МБ)</small>
-        <input type="file" name="proofs" accept=".pdf,.jpg,.jpeg,.png" multiple required></label>
+      <label>Электронная выписка <small class="muted">(PDF или XML, рядом файл .sig, если есть; можно архивом; до 3 документов по 10 МБ)</small>
+        <input type="file" name="proofs" accept=".pdf,.xml,.sig,.p7s,.zip" multiple required></label>
       <button type="submit" class="outline sm">Отправить на проверку</button>
     </form>
   {% endif %}
-  {% if d.skipped_proofs %}<p class="small err">Не приняты файлы (не PDF/JPG/PNG или больше 10 МБ): {{ d.skipped_proofs|join(', ') }}</p>{% endif %}
+  {% if d.skipped_proofs %}<p class="small err">Не приняты файлы: {{ d.skipped_proofs|join(', ') }}</p>{% endif %}
   {% if d.proof_check and row.status != 'draft' %}{% include "_proof_check.html" %}{% endif %}
 </article>
 {% if d.intake %}

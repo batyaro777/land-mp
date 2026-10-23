@@ -26,6 +26,7 @@ import httpx
 from landcheck.inputs import CAD_RE, parse_number
 from landcheck.llm import parse_json_text
 from landcheck.region import DEFAULT_MODEL, FALLBACK_MODELS, GEMINI_URL
+from landcheck.sig import looks_like_cms
 
 log = logging.getLogger(__name__)
 logging.getLogger("pypdf").setLevel(logging.ERROR)  # битые PDF от продавцов — не предупреждения
@@ -37,8 +38,10 @@ MAX_FILE_BYTES = 10 * 1024 * 1024
 MIN_PHOTO_BYTES = 15 * 1024  # мельче — иконки, превью, обрезки
 MAX_PHOTOS = 10
 IMAGE_KINDS = ("jpg", "png", "webp")
-DOC_KINDS = ("pdf", "jpg", "png")  # что принимаем как подтверждение права
+DOC_KINDS = ("pdf", "xml")  # подтверждение права: только электронная выписка (R13)
 TEXT_KINDS = ("txt", "docx")
+MAX_ZIP_MEMBERS = 20
+SCAN_REASON = "скан документа: не подтверждение права, нужна электронная выписка (PDF/XML с .sig)"
 
 _SIGNATURES = (
     (b"\xff\xd8\xff", "jpg"),
@@ -53,11 +56,12 @@ class Material:
 
     name: str
     raw: bytes
-    kind: str  # jpg|png|webp|pdf|docx|txt|other
-    source: str = "upload"  # upload|cloud
+    kind: str  # jpg|png|webp|pdf|xml|sig|zip|docx|txt|other
+    source: str = "upload"  # upload|cloud|zip
     text: str = ""  # текст документа: PDF/DOCX/TXT или распознанный скан
     is_document: bool | None = None  # для картинок: скан документа (True) или фото (False)
     score: int = 0  # качество фото 1–5 по оценке модели; 0 — не оценивалось
+    sig: bytes | None = None  # открепленная подпись .sig, подобранная к документу
 
     @property
     def is_image(self) -> bool:
@@ -91,7 +95,9 @@ class Intake:
     """Итог разбора: фото в порядке показа, документы на проверку права, факты, что отброшено."""
 
     photos: list[Material] = field(default_factory=list)
-    documents: list[Material] = field(default_factory=list)
+    documents: list[Material] = field(default_factory=list)  # электронные: pdf/xml (+ .sig)
+    signatures: list[Material] = field(default_factory=list)  # .sig без пары
+    scans: list[Material] = field(default_factory=list)  # фото документов: только подсказка
     notes: list[Material] = field(default_factory=list)  # txt/docx продавца — в заметки
     facts: Facts = field(default_factory=Facts)
     dropped: list[tuple[str, str]] = field(default_factory=list)  # (имя, причина)
@@ -106,6 +112,8 @@ class Intake:
         return {
             "photos": len(self.photos),
             "documents": [m.name for m in self.documents],
+            "signed": [m.name for m in self.documents if m.sig],
+            "scans": [m.name for m in self.scans],
             "notes": [m.name for m in self.notes],
             "facts": self.facts.to_dict(),
             "dropped": [f"{n} — {why}" for n, why in self.dropped],
@@ -129,13 +137,69 @@ def kind_of(raw: bytes, name: str = "") -> str:
                     return "docx"
         except zipfile.BadZipFile:
             return "other"
-        return "other"
+        return "zip"
+    if looks_like_cms(raw):
+        return "sig"
     low = name.lower()
     ext = low.rsplit(".", 1)[-1] if "." in low else ""
-    # текст принимаем по расширению или без расширения; «фото» с текстом внутри — мусор
-    if raw and (ext in ("txt", "md", "text") or not ext) and _looks_like_text(raw):
-        return "txt"
+    if raw and _looks_like_text(raw):
+        head = raw.lstrip(b"\xef\xbb\xbf \t\r\n")[:200]
+        if head.startswith(b"<?xml") or (head.startswith(b"<") and b">" in head):
+            return "xml"
+        # текст принимаем по расширению или без расширения; «фото» с текстом внутри — мусор
+        if ext in ("txt", "md", "text") or not ext:
+            return "txt"
     return "other"
+
+
+def unpack_zip(m: Material, *, limit: int = MAX_ZIP_MEMBERS) -> tuple[list[Material], list[str]]:
+    """Архив Росреестра (xml + sig + pdf) или папка продавца → материалы; во вложенные не идём."""
+    out: list[Material] = []
+    errors: list[str] = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(m.raw)) as z:
+            infos = [i for i in z.infolist() if not i.is_dir()]
+            if len(infos) > limit:
+                errors.append(f"{m.name}: в архиве больше {limit} файлов, взяли первые {limit}")
+            for info in infos[:limit]:
+                if info.file_size > MAX_FILE_BYTES:
+                    errors.append(f"{info.filename} — больше 10 МБ, пропущен")
+                    continue
+                raw = z.read(info)
+                name = info.filename.rsplit("/", 1)[-1]
+                kind = kind_of(raw, name)
+                if kind == "zip":
+                    errors.append(f"{name} — вложенный архив пропущен")
+                    continue
+                out.append(Material(name=name, raw=raw, kind=kind, source="zip"))
+    except (zipfile.BadZipFile, RuntimeError, OSError) as e:
+        errors.append(f"{m.name}: архив не читается ({type(e).__name__})")
+    return out, errors
+
+
+def pair_signatures(docs: list[Material], sigs: list[Material]) -> list[Material]:
+    """Подпись к документу: по имени (report.xml ← report.xml.sig / report.sig), иначе
+    единственная подпись к единственному документу. Возвращает подписи без пары."""
+    free = list(sigs)
+    for d in docs:
+        stem = d.name.rsplit(".", 1)[0].lower()
+        for s_ in list(free):
+            sl = s_.name.lower()
+            base = (
+                sl[: -len(".sig")]
+                if sl.endswith(".sig")
+                else sl[: -len(".p7s")]
+                if sl.endswith(".p7s")
+                else sl
+            )
+            if base in (d.name.lower(), stem):
+                d.sig = s_.raw
+                free.remove(s_)
+                break
+    if free and len(free) == 1 and len(docs) == 1 and docs[0].sig is None:
+        docs[0].sig = free[0].raw
+        free = []
+    return free
 
 
 def _looks_like_text(raw: bytes) -> bool:
@@ -577,7 +641,10 @@ def process(
     res = Intake()
     seen: set[str] = set()
     images: list[Material] = []
-    for m in materials:
+    sigs: list[Material] = []
+    queue = list(materials)
+    while queue:
+        m = queue.pop(0)
         if not m.raw:
             res.dropped.append((m.name, "пустой файл"))
             continue
@@ -592,20 +659,31 @@ def process(
         if m.kind == "other":
             res.dropped.append((m.name, "неизвестный формат"))
             continue
+        if m.kind == "zip":
+            inner, errs = unpack_zip(m)
+            res.errors.extend(errs)
+            queue[:0] = inner
+            continue
         if m.is_image:
             images.append(m)
         elif m.kind == "pdf":
             m.text = m.text or text_of(m)
             res.documents.append(m)
+        elif m.kind == "xml":
+            res.documents.append(m)  # поля читает egrn_xml, текст не нужен
+        elif m.kind == "sig":
+            sigs.append(m)
         else:  # txt/docx — слова продавца
             m.text = m.text or text_of(m)
             res.notes.append(m)
+    res.signatures = pair_signatures(res.documents, sigs)
     if images:
         res.classified_by = classify_images(images, api_key=api_key, model=model, timeout=timeout)
     photos: list[Material] = []
     for m in images:
         if m.is_document:
-            res.documents.append(m)
+            res.scans.append(m)
+            res.dropped.append((m.name, SCAN_REASON))
         elif m.score == -1:
             res.dropped.append((m.name, "не фото участка"))
         elif m.size < MIN_PHOTO_BYTES:
@@ -616,6 +694,6 @@ def process(
     res.photos = photos[:MAX_PHOTOS]
     for m in photos[MAX_PHOTOS:]:
         res.dropped.append((m.name, f"больше {MAX_PHOTOS} фото"))
-    text = "\n".join(m.text for m in (*res.documents, *res.notes) if m.text)
+    text = "\n".join(m.text for m in (*res.documents, *res.scans, *res.notes) if m.text)
     res.facts = extract_facts(text)
     return res
