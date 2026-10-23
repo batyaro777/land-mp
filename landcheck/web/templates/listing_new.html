@@ -11,6 +11,9 @@
     </label>
     <label>Ссылка на папку в облаке <small class="muted">(публичная папка Яндекс.Диска: disk.yandex.ru/d/…)</small>
       <input name="cloud_url" type="url" placeholder="https://disk.yandex.ru/d/XXXXXXXX"></label>
+    <label>Кто размещает <small class="muted">(важно, если среди материалов есть выписка или договор: они сразу уйдут на подтверждение права)</small>
+      <select name="proof_kind">{% for k, v in PROOF_KINDS.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select>
+    </label>
     <label>Кадастровый номер <small class="muted">(можно не указывать, если он есть в документах)</small>
       <input name="cad_num" value="{{ cad_num }}" placeholder="50:09:0060202:101"></label>
     <label>Цена, ₽ <small class="muted">(если не указать — возьмём из материалов)</small><input name="price" placeholder="2 500 000 или 2,5 млн"></label>

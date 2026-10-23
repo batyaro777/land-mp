@@ -322,6 +322,23 @@ def test_listing_from_materials_with_auto_verification(client, monkeypatch):  # 
     assert client.get("/admin/listings?status=verified").status_code == 200
 
 
+def test_listing_from_materials_as_agent(client, monkeypatch):  # noqa: F811
+    """Брокер с выпиской собственника: вид «представитель» из формы, имя не сверяется."""
+    monkeypatch.setattr(settings, "gemini_api_key", None)
+    monkeypatch.setattr(intake, "pdf_text", lambda raw, max_pages=20: EXTRACT)
+    _register_named(client, "broker@example.com", "Агент Брокеров", role="broker")
+    r = client.post(
+        "/listing",
+        data={"cad_num": "", "proof_kind": "agent"},
+        files=[("files", ("vypiska.pdf", io.BytesIO(b"%PDF-1.4 fake"), "application/pdf"))],
+    )
+    assert r.status_code == 303, r.text
+    status, kind, data = _row(r.headers["location"])
+    assert status == "pending" and kind == "agent"
+    assert data["proof_check"]["verdict"] == "ok" and "представител" in data["proof_check"]["label"]
+    assert "представитель" in client.get(r.headers["location"]).text.lower()
+
+
 def test_listing_requires_cad_from_form_or_documents(client, monkeypatch):  # noqa: F811
     monkeypatch.setattr(settings, "gemini_api_key", None)
     _register_named(client, "s2@example.com", "Пётр Сидоров")

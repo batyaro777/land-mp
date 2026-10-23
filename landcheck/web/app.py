@@ -1122,6 +1122,7 @@ async def listing_create(
     object_type: Annotated[str, Form()] = "",
     phone: Annotated[str, Form()] = "",
     cloud_url: Annotated[str, Form()] = "",
+    proof_kind: Annotated[str, Form()] = "owner",
     photos: Annotated[list[UploadFile] | None, File()] = None,
     files: Annotated[list[UploadFile] | None, File()] = None,
 ):
@@ -1200,7 +1201,7 @@ async def listing_create(
         if taken.documents:
             saved = materials.save_documents(row.id, taken.documents)
             if saved:
-                kind = "owner" if materials.has_extract(taken.documents) else "agent"
+                kind = proof_kind if proof_kind in PROOF_KINDS else "owner"
                 row.status = "pending"
                 row.proof_kind = kind
                 row.submitted_at = datetime.now(UTC)
