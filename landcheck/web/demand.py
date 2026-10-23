@@ -284,3 +284,63 @@ def my_offers(db, user: User) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+def notify_sellers_about(db, req: BuyerRequest, *, card_fn) -> int:
+    """Владельцам опубликованных объявлений, под которые подходит новый запрос, — «появился
+    покупатель под ваш участок». Одно уведомление на владельца и запрос (дедуп по url)."""
+    from landcheck.web.notify import already_notified
+    from landcheck.web.serialize import fmt_money
+
+    rows = db.scalars(
+        select(Listing).where(Listing.status == "verified", Listing.published.is_(True))
+    ).all()
+    by_owner: dict[int, list[str]] = {}
+    for lst in rows:
+        if lst.user_id == req.user_id:
+            continue
+        owner = db.get(User, lst.user_id)
+        card = card_fn(lst, owner)
+        if fit(req, card, listing_text(lst)) is None:
+            continue
+        by_owner.setdefault(lst.user_id, []).append(card.get("title") or lst.cad_num)
+    c = request_card(req)
+    params = [c["activity"].lower()]
+    if c["budget_rub"]:
+        params.append(f"до {fmt_money(c['budget_rub'])}")
+    if c["min_sotka"] or c["max_sotka"]:
+        params.append(f"{c['min_sotka'] or ''}–{c['max_sotka'] or ''} сот.".replace("–ы", ""))
+    if c["region"]:
+        params.append(c["region"])
+    sent = 0
+    for owner_id, titles in by_owner.items():
+        url = f"/demand#r{req.id}"
+        if already_notified(db, owner_id, "demand", url):
+            continue
+        what = ", ".join(f"«{t}»" for t in titles[:3])
+        if len(titles) > 3:
+            what += f" и ещё {len(titles) - 3}"
+        notify(
+            db,
+            owner_id,
+            "demand",
+            f"Появился покупатель под ваш участок {what}: {'; '.join(params)}. "
+            "Предложить участок — в разделе «Спрос».",
+            url,
+        )
+        sent += 1
+    return sent
+
+
+def demand_counts(db, listings: list[Listing], *, card_fn) -> dict[int, int]:
+    """Сколько активных запросов подходит под каждое объявление (список объявлений продавца)."""
+    reqs = active_requests(db)
+    out: dict[int, int] = {}
+    for lst in listings:
+        owner = db.get(User, lst.user_id)
+        card = card_fn(lst, owner)
+        text = listing_text(lst)
+        out[lst.id] = sum(
+            1 for r in reqs if r.user_id != lst.user_id and fit(r, card, text) is not None
+        )
+    return out

@@ -22,6 +22,7 @@
   <div class="muted small"><code>{{ r.cad_num }}</code> · {{ r.created_at|dt }}{% if r.data.price_rub %} · {{ r.data.price_rub|money }}{% endif %}{% if r.data.images %} · фото: {{ r.data.images|length }}{% endif %}</div>
   <div class="small"><span class="badge {{ {'draft':'','pending':'v-check','verified':'v-ok','rejected':'v-stop'}[r.status] }}">{{ r.status_label }}</span>
     {% if r.is_public %}<span class="badge v-ok">опубликовано</span>{% endif %}
+    {% if demand_counts and demand_counts.get(r.id) %}<a href="/listing/{{ r.id }}#demand" class="badge v-ok" title="активные запросы покупателей, под которые подходит участок">спрос {{ demand_counts[r.id] }}</a>{% endif %}
     {% if r.data.warnings %}<span class="badge v-check">противоречия с кадастром</span>{% else %}<span class="badge">текст сверен с кадастром</span>{% endif %}</div>
 </div>
 {% endfor %}

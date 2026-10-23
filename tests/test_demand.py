@@ -141,3 +141,42 @@ def test_request_card_hides_contacts_in_text():
     card = request_card(req)
     assert "123-45-67" not in card["text"] and "ivan@" not in card["text"]
     assert card["text"].startswith("Ищу участок") and card["label"] == "Жилой дом (ИЖС)"
+
+
+def test_public_demand_page_seller_mailing_and_listing_counter(client):  # noqa: F811
+    from landcheck.web.db import Notification, session
+
+    url = _verified_listing(client, "s1@example.com", "50:09:0060202:101", "2500000", "газ")
+    lid = int(url.rsplit("/", 1)[1])
+    _register(client, "adm@example.com", role="broker")
+    _make_admin("adm@example.com")
+    client.post(f"/admin/listings/{lid}/decide", data={"decision": "approve"})
+    _login(client, "s1@example.com")
+    client.post(url + "/publish", data={"action": "on"})
+    client.post("/logout")
+    # публичная витрина без входа: пусто, с призывом войти
+    page = client.get("/spros").text
+    assert page.count("Активных запросов нет") == 1 and "Войдите или зарегистрируйтесь" in page
+    # покупатель оформляет запрос (ответы на вопросы) → продавцу приходит «появился покупатель»
+    _register(client, "buyer@example.com", role="buyer")
+    rurl = client.post(
+        "/search",
+        data={"query": "Построить дом для семьи до 3 млн, 8–12 соток", "region": "синтетический"},
+    ).headers["location"]
+    rid = int(rurl.rsplit("/", 1)[1])
+    client.post(rurl + "/answers", data={"living": "permanent", "gas": "required"})
+    client.post(rurl + "/answers", data={"living": "permanent"})  # повторное сохранение — без дубля
+    with session() as db:
+        rows = db.scalars(select(Notification).where(Notification.kind == "demand")).all()
+        assert len(rows) == 1 and rows[0].url == f"/demand#r{rid}"
+        assert "Появился покупатель под ваш участок" in rows[0].text and "до 3" in _norm(
+            rows[0].text
+        )
+    client.post("/logout")
+    page = _norm(client.get("/spros?purpose=izhs").text)
+    assert "Жилой дом" in page and "до 3 000 000" in page and "buyer" not in page
+    assert "Активных запросов нет" in client.get("/spros?region=Крым").text
+    # у продавца в списке объявлений бейдж спроса
+    _login(client, "s1@example.com")
+    page = client.get("/listings").text
+    assert "спрос 1" in page and f"/listing/{lid}#demand" in page

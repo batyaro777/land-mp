@@ -1212,7 +1212,10 @@ def listings_page(request: Request, user: UserDep):
             .order_by(ListingRow.created_at.desc())
             .limit(100)
         ).all()
-    return render(request, "listings.html", rows=rows, user=user)
+        from landcheck.web import demand
+
+        counts = demand.demand_counts(db, rows, card_fn=_market_card)
+    return render(request, "listings.html", rows=rows, demand_counts=counts, user=user)
 
 
 def _refresh_from_parcel(cad_num: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -1824,6 +1827,9 @@ async def search_answers(request: Request, user: UserDep, rid: int):
             if isinstance(v, str) and v in values:
                 answers[key] = v
         req.answers = answers or {"skipped": "1"}
+        from landcheck.web import demand
+
+        demand.notify_sellers_about(db, req, card_fn=_market_card)  # запрос оформлен — продавцам
         db.commit()
     return RedirectResponse(f"/search/{rid}", status_code=303)
 
@@ -2122,6 +2128,26 @@ def connection_decide(user: UserDep, conn_id: int, decision: Annotated[str, Form
 
 
 # --- спрос (R11): запросы покупателей как объект рынка -----------------------------------
+@router.get("/spros", response_class=HTMLResponse)
+def demand_public(request: Request, region: str = "", purpose: str = ""):
+    """Витрина спроса без входа: обезличенные запросы покупателей — лид-магнит для продавцов."""
+    from landcheck.web import demand
+
+    me = current_user(request)
+    with session() as db:
+        reqs = demand.active_requests(db, region=region.strip(), purpose=purpose.strip())
+        cards = [demand.request_card(r) for r in reqs]
+    return render(
+        request,
+        "demand_public.html",
+        cards=cards,
+        purposes=PURPOSES,
+        region=region,
+        purpose=purpose,
+        user=me,
+    )
+
+
 @router.get("/demand", response_class=HTMLResponse)
 def demand_page(
     request: Request, user: UserDep, region: str = "", purpose: str = "", offered: int = 0
