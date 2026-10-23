@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Поиск участка — {{ brand }}{% endblock %}
+{% block content %}
+<div class="grid two">
+<article>
+  <hgroup>
+    <h2>Какой участок ищете?</h2>
+    <p>Скажите своими словами или заполните поля. Потом зададим 3–5 уточняющих вопросов, как спросил бы эксперт, и покажем подходящие участки из базы с подтверждённым правом.</p>
+  </hgroup>
+  <form method="post" action="/search">
+    <label for="query">Запрос словами <small class="muted">(можно голосом)</small></label>
+    <div class="mic-wrap">
+      <input id="query" name="query" placeholder="Построить дом для семьи до 3 млн, 8–12 соток, Истра">
+      {% if voice_enabled %}<button type="button" class="mic outline sm" data-target="query" title="Надиктовать, до 60 секунд">🎙 Голосом</button>{% endif %}
+      <small class="mic-status muted"></small>
+    </div>
+    <label>Что хотите делать на участке
+      <select name="purpose">{% for value, label in purposes %}<option value="{{ value }}">{{ label }}</option>{% endfor %}</select>
+    </label>
+    <div class="grid">
+      <label>Бюджет, ₽<input name="budget" placeholder="3 млн"></label>
+      <label>Соток от<input name="min_area" placeholder="8"></label>
+      <label>Соток до<input name="max_area" placeholder="15"></label>
+    </div>
+    <label>Где <small class="muted">(регион, район, посёлок; если пусто — возьмём из запроса)</small><input name="region" placeholder="Истра"></label>
+    <button type="submit">Подобрать</button>
+  </form>
+</article>
+<article>
+  <h2>Мои запросы</h2>
+  {% if not reqs %}
+  <div class="onboarding">
+    <p><strong>Как это работает</strong></p>
+    <ol>
+      <li>Опишите слева, что хотите: «участок под дом до 3 млн, 8–12 соток, Истра» — словами или голосом.</li>
+      <li>Ответьте на несколько вопросов под вашу цель: дети и школа, газ, вода, подъезд.</li>
+      <li>Получите подборку из базы подтверждённых участков с вердиктом «подходит / проверить / стоп», сохраняйте и сравнивайте. Новые подходящие участки будут отмечаться при открытии запроса.</li>
+    </ol>
+  </div>
+  {% endif %}
+  {% for r in reqs %}
+  <div class="check-card">
+    <a href="/search/{{ r.id }}"><strong>{{ r.text or Purpose(r.purpose).activity }}</strong></a>
+    <div class="muted small">{{ Purpose(r.purpose).activity }}{% if r.budget_rub %} · до {{ r.budget_rub|money }}{% endif %}{% if r.region %} · {{ r.region }}{% endif %} · {{ r.created_at|dt }}</div>
+  </div>
+  {% endfor %}
+  <p class="small"><a href="/saved">Сохранённые участки и сравнение</a></p>
+</article>
+</div>
+{% endblock %}

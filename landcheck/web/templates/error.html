@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block content %}
+<article class="narrow">
+  <h3>Не получилось</h3>
+  <p class="err">{{ message }}</p>
+  <a href="javascript:history.back()" role="button" class="outline">Назад</a>
+</article>
+{% endblock %}

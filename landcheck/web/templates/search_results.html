@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Подборка — {{ brand }}{% endblock %}
+{% block content %}
+<hgroup>
+  <h2>Подборка под ваш запрос</h2>
+  <p>{{ req.text or purpose.activity }} · цель: {{ purpose.activity|lower }}{% if req.budget_rub %} · до {{ req.budget_rub|money }}{% endif %}{% if req.min_area_m2 or req.max_area_m2 %} · {{ req.min_area_m2|sotka if req.min_area_m2 else '' }}{% if req.max_area_m2 %} – {{ req.max_area_m2|sotka }}{% endif %}{% endif %}{% if req.region %} · {{ req.region }}{% endif %}
+  · <a href="/search/{{ req.id }}?edit=1" class="small">ответы на вопросы</a> · <a href="/search" class="small">новый запрос</a></p>
+</hgroup>
+{% if answers and not answers.get('skipped') %}
+<p class="small muted">Что важно: {% for q in questions %}{% if answers.get(q.key) %}{% for v, l in q.options if v == answers.get(q.key) %}{{ q.text|replace('?','') }} — {{ l|lower }}{% endfor %}; {% endif %}{% endfor %}</p>
+{% endif %}
+{% include "_offers.html" %}
+<p class="muted small">Найдено: {{ matches|length }} из базы участков с подтверждённым правом. Вердикт — быстрая проверка «цель × категория × ВРИ» по фактам ЕГРН; полный отчёт с территориальной зоной, ограничениями и локацией — по кнопке.</p>
+{% if not matches %}
+<article><p class="muted">Подходящих участков пока нет: база наполняется. Запрос сохранён, новые объявления будут помечены как новые при следующем открытии. Посмотрите <a href="/market">всю базу</a> или <a href="/single">проверьте участок из объявления на другой площадке</a> по кадастровому номеру.</p></article>
+{% endif %}
+<div class="cards">
+{% for m in matches %}
+  <article class="card">
+    {% if m.image %}<a href="/l/{{ m.id }}"><img src="{{ m.image }}" alt="" class="card-img"></a>{% endif %}
+    <h4><a href="/l/{{ m.id }}">{{ m.title }}</a> {% if m.is_new %}<span class="badge">новый</span>{% endif %}</h4>
+    <p class="small">{{ m.address or '' }}</p>
+    <p><strong>{{ m.price_rub|money if m.price_rub else 'цена по запросу' }}</strong>{% if m.area_sotka %} · {{ m.area_sotka }} сот.{% endif %}{% if m.price_per_sotka %} · {{ m.price_per_sotka|money }}/сот.{% endif %}</p>
+    <p class="small"><span class="badge v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[m.verdict.level] }}">{{ m.verdict.level }}</span> {{ m.verdict.text }}</p>
+    {% if m.claims %}<p class="small muted">По словам продавца: {% for c in m.claims %}{{ c.label }} {{ '✓' if c.mentioned else '— не упомянуто' }}{% if not loop.last %}; {% endif %}{% endfor %}</p>{% endif %}
+    <p class="small"><span class="badge v-ok">право подтверждено {{ m.verified_at|day }}</span></p>
+    <div class="toolbar">
+      <form method="post" action="/favorites/{{ m.id }}" class="inline"><input type="hidden" name="back" value="/search/{{ req.id }}"><button class="outline sm">{{ 'Убрать из сохранённых' if m.id in saved else 'Сохранить' }}</button></form>
+      <a href="/single?cad_num={{ m.cad_num }}&purpose={{ purpose.value }}" class="small">полный отчёт под цель</a>
+    </div>
+  </article>
+{% endfor %}
+</div>
+<p class="small"><a href="/saved?rid={{ req.id }}">Сравнить сохранённые</a> · <form method="post" action="/search/{{ req.id }}/delete" class="inline"><button class="outline secondary sm">Удалить запрос</button></form></p>
+{% endblock %}

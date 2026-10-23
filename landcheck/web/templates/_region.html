@@ -1,0 +1,26 @@
+{# Блок «Регион»: Gemini с поиском Google по локации #}
+<article class="region" id="region">
+  <hgroup>
+    <h4>Регион: планы, инфраструктура, рынок</h4>
+    <p class="muted small">{% if region.locality %}{{ region.locality }} · {% endif %}по открытым источникам
+      {% if region.fetched_at %}· собрано {{ region.fetched_at|dt }}{% endif %}{% if region.model %} · {{ region.model }}{% endif %}
+      {% if not public %}· <a href="{{ region_url }}?refresh=1" hx-get="{{ region_url }}?refresh=1" hx-target="#region" hx-swap="outerHTML" class="small">обновить</a>{% endif %}</p>
+  </hgroup>
+  {% if region.error %}
+    <p class="muted">Сводка по региону недоступна: {{ region.error }}.</p>
+  {% else %}
+    <div class="grid two">
+    {% for sec in region.sections %}
+      <div><strong>{{ sec.title }}</strong>
+        <ul class="loc-list">{% if sec.title == 'Рынок земли' and corridor is defined and corridor %}<li>По базе Land-MP ({{ corridor.kind_label }}, {{ corridor.where }}, {{ corridor.n }} уч.): медиана {{ corridor.median|money }} за сотку, середина {{ corridor.p25|money }} – {{ corridor.p75|money }}</li>{% endif %}{% for it in sec['items'] %}{% if not (it == 'данных не найдено' and sec.title == 'Рынок земли' and corridor is defined and corridor) %}<li>{{ it }}</li>{% endif %}{% endfor %}</ul>
+      </div>
+    {% endfor %}
+    </div>
+    {% if region.sources %}
+    <details><summary class="small">Источники ({{ region.sources|length }})</summary>
+      <ol class="small">{% for src in region.sources %}<li{% if src.n %} value="{{ src.n }}"{% endif %}><a href="{{ src.url }}" target="_blank" rel="noopener">{{ src.title|truncate(90) }}</a></li>{% endfor %}</ol>
+    </details>
+    {% endif %}
+    <p class="muted small">Сводка собрана языковой моделью по результатам поиска, факты сверяйте по ссылкам. Не юридическое заключение и не отчёт об оценке.</p>
+  {% endif %}
+</article>

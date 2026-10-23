@@ -1,0 +1,13 @@
+{
+ "schema_version": 1,
+ "cad_num": "50:09:0060202:999",
+ "fetched_at": "2026-10-10T09:12:56.962874+00:00",
+ "provider": "fixture",
+ "found": false,
+ "landplot": null,
+ "permission_types": null,
+ "zouit": null,
+ "territorial_zones": null,
+ "errors": [],
+ "_synthetic": true
+}

@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Запросы контакта — {{ brand }}{% endblock %}
+{% block content %}
+<hgroup>
+  <h2>Запросы контакта</h2>
+  <p>Связки по объявлениям: брокер покупателя или покупатель просит контакт у того, кто разместил объявление. Условия и раздел комиссии стороны обсуждают между собой, платформа фиксирует только факт связки.</p>
+</hgroup>
+<div class="grid two">
+<article>
+  <h4>Входящие ({{ incoming|length }})</h4>
+  {% if not incoming %}<p class="muted">Пока нет.</p>{% endif %}
+  {% for c in incoming %}
+  {% set f = users.get(c.from_user_id) %}{% set l = listings.get(c.listing_id) %}
+  <div class="check-card">
+    <strong>{{ (f.brand or f.name) if f else '—' }}</strong> <span class="muted small">({{ f.role_label|lower if f else '' }})</span> по объявлению <a href="/l/{{ c.listing_id }}"><code>{{ l.cad_num if l else c.listing_id }}</code></a>
+    <div class="small">{{ c.note or 'без сообщения' }}</div>
+    <div class="small muted">{{ c.created_at|dt }} · <span class="badge {{ {'new':'v-check','accepted':'v-ok','declined':'v-stop'}[c.status] }}">{{ {'new':'новый','accepted':'принят','declined':'отклонён'}[c.status] }}</span></div>
+    {% if c.status == 'new' %}
+    <form method="post" action="/connections/{{ c.id }}/decide" class="inline"><button name="decision" value="accepted" class="sm">Принять и открыть контакты</button> <button name="decision" value="declined" class="outline secondary sm">Отклонить</button></form>
+    {% elif c.status == 'accepted' and f %}
+    <div class="small">Контакт: {{ f.contact or '—' }}{% if f.email %} · {{ f.email }}{% endif %}</div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</article>
+<article>
+  <h4>Исходящие ({{ outgoing|length }})</h4>
+  {% if not outgoing %}<p class="muted">Пока нет. Кнопка «Запросить контакт» есть на странице объявления.</p>{% endif %}
+  {% for c in outgoing %}
+  {% set t = users.get(c.to_user_id) %}{% set l = listings.get(c.listing_id) %}
+  <div class="check-card">
+    По объявлению <a href="/l/{{ c.listing_id }}"><code>{{ l.cad_num if l else c.listing_id }}</code></a> → <strong>{{ (t.brand or t.name) if t else '—' }}</strong>
+    <div class="small muted">{{ c.created_at|dt }} · <span class="badge {{ {'new':'v-check','accepted':'v-ok','declined':'v-stop'}[c.status] }}">{{ {'new':'ждёт ответа','accepted':'принят','declined':'отклонён'}[c.status] }}</span></div>
+    {% if c.status == 'accepted' and t %}{% set has = t.contact or t.email or (l and l.data.phone) %}<div class="small">Контакт: {% if has %}{{ t.contact or '' }}{% if t.email %}{% if t.contact %} · {% endif %}{{ t.email }}{% endif %}{% if l and l.data.phone %} · {{ l.data.phone }}{% endif %}{% else %}<span class="muted">владелец не указал контакт в профиле — мы попросили его заполнить</span>{% endif %}</div>{% endif %}
+  </div>
+  {% endfor %}
+</article>
+</div>
+{% endblock %}

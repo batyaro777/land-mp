@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Спрос на участки — {{ brand }}{% endblock %}
+{% block content %}
+<hgroup>
+  <h2>Кто сейчас ищет участок</h2>
+  <p>Живые запросы покупателей за последние 90 дней: цель, бюджет, площадь, район и что покупателю важно. Без имён и контактов. Продавец или брокер предлагает свой участок, покупатель получает его с проверкой под свою цель и сам решает, открывать ли контакты.</p>
+</hgroup>
+<form method="get" action="/spros" class="grid">
+  <input type="text" name="region" value="{{ region }}" placeholder="район, село, регион">
+  <select name="purpose"><option value="">любая цель</option>{% for v, l in purposes %}<option value="{{ v }}" {% if v == purpose %}selected{% endif %}>{{ l }}</option>{% endfor %}</select>
+  <button class="outline">Показать</button>
+</form>
+{% if not user %}
+<article class="flag ok"><strong>Есть участок под один из запросов?</strong> <a href="/login?tab=register">Войдите или зарегистрируйтесь</a> как продавец или брокер, подтвердите право на участок и нажмите «Предложить» — покупатель увидит ваш участок с вердиктом под свою цель. Размещение и первое предложение бесплатны.</article>
+{% else %}
+<p class="small"><a href="/demand">Открыть раздел «Спрос» с кнопками «Предложить участок»</a></p>
+{% endif %}
+{% if not cards %}<article><p class="muted">Активных запросов нет{% if region or purpose %} по этому фильтру{% endif %}.</p></article>{% endif %}
+<div class="cards">
+{% for c in cards %}
+  <article class="card">
+    <h4>{{ c.label }} <small class="muted">· {{ c.activity|lower }}</small></h4>
+    <p>{% if c.budget_rub %}до {{ c.budget_rub|money }}{% else %}бюджет не указан{% endif %}{% if c.min_sotka or c.max_sotka %} · {{ c.min_sotka or '' }}{% if c.max_sotka %} – {{ c.max_sotka }}{% endif %} сот.{% endif %}{% if c.region %} · {{ c.region }}{% endif %}</p>
+    {% if c.wants %}<p class="small">Что важно: {{ c.wants|join('; ') }}</p>{% endif %}
+    <p class="small muted">запрос от {{ c.created_at|day }}</p>
+  </article>
+{% endfor %}
+</div>
+{% endblock %}

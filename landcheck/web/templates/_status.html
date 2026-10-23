@@ -1,0 +1,11 @@
+<div id="status" {% if check.status in ('queued','running') %}hx-get="/checks/{{ check.id }}/status" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+  {% if check.status == 'queued' %}
+    <p><span aria-busy="true">В очереди…</span></p>
+  {% elif check.status == 'running' %}
+    <progress value="{{ check.done }}" max="{{ check.total or 1 }}"></progress>
+    <p class="muted small">Запрашиваю НСПД: {{ check.done }} из {{ check.total }} участков. Карточка, ВРИ, ЗОУИТ и территориальная зона по каждому.</p>
+  {% elif check.status == 'error' %}
+    <p class="err">Ошибка: {{ check.error }}</p>
+    <form method="post" action="/checks/{{ check.id }}/rerun"><button class="outline">Повторить</button></form>
+  {% endif %}
+</div>

@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %}Объявление {{ row.cad_num }} — {{ brand }}{% endblock %}
+{% block content %}
+<hgroup>
+  <h2>Объявление: <code>{{ row.cad_num }}</code></h2>
+  <p>{{ d.address or '' }}</p>
+</hgroup>
+{% if err == 'warnings' %}<p class="err">Публикация не выполнена: в тексте есть противоречия с кадастром (ниже). Исправьте и нажмите «Опубликовать» ещё раз.</p>
+{% elif err == 'not_verified' %}<p class="err">Публикация не выполнена: сначала подтвердите право.</p>
+{% elif err == 'unpublished' %}<p class="err">Объявление снято с публикации: после правок в тексте появились противоречия с кадастром. Исправьте и опубликуйте снова.</p>{% endif %}
+{% if d.warnings %}
+<article class="flag check">
+  {% if block_kind == 'data' %}
+  <strong>Публикация и выгрузка закрыты: с самим участком не всё в порядке</strong>
+  <ul>{% for w in d.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+  <p class="small muted">Текстом это не исправить: нужны межевание или уточнение данных в Росреестре (выписка ЕГРН). После исправления нажмите «Обновить данные» в разовой проверке участка.</p>
+  {% else %}
+  <strong>Выгрузка заблокирована, пока текст противоречит кадастру</strong>
+  <ul>{% for w in d.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+  <p class="small muted">Исправьте текст и нажмите «Сохранить правки» — проверка повторится.</p>
+  {% endif %}
+</article>
+{% endif %}
+<article id="demand">
+  <h4>Спрос на этот участок <span class="badge {{ 'v-ok' if demand_total else '' }}">{{ demand_total }}</span></h4>
+  {% if not demand_total %}<p class="muted small">Активных запросов покупателей, под которые подходит участок (цель, бюджет, площадь, район), пока нет. <a href="/demand">Все запросы</a>.</p>
+  {% else %}
+  <p class="small">Подходит под {{ demand_total }} запрос(ов) покупателей.{% if not row.is_public %} Чтобы предложить участок, опубликуйте объявление с подтверждённым правом.{% endif %}</p>
+  <ul class="small">
+  {% for c, m in demand_matches %}
+    <li>{{ c.label }}{% if c.budget_rub %} · до {{ c.budget_rub|money }}{% endif %}{% if c.region %} · {{ c.region }}{% endif %}{% if c.wants %} · {{ c.wants|join('; ') }}{% endif %} — <span class="badge v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[m.verdict.level] }}">{{ m.verdict.level }}</span>
+      {% if c.id in demand_offered %}<span class="muted">уже предложен</span>
+      {% elif row.is_public %}<form method="post" action="/demand/{{ c.id }}/offer" class="inline"><input type="hidden" name="listing_id" value="{{ row.id }}"><input type="hidden" name="back" value="/listing/{{ row.id }}"><button class="outline sm">Предложить</button></form>{% endif %}
+    </li>
+  {% endfor %}
+  </ul>
+  {% endif %}
+</article>
+<article class="verify">
+  <h4>Подтверждение права
+    <span class="badge {{ {'draft':'','pending':'v-check','verified':'v-ok','rejected':'v-stop'}[row.status] }}">{{ row.status_label }}</span>
+  </h4>
+  {% if row.status == 'verified' %}
+    <p>Право подтверждено {{ row.verified_at|dt }} ({{ PROOF_KINDS[row.proof_kind] if row.proof_kind else 'документ' }}). Файлы подтверждения удалены после проверки.</p>
+    {% if row.published %}
+      <p><span class="badge v-ok">опубликовано</span> Публичная страница: <a href="/l/{{ row.id }}" target="_blank">{{ public_url }}</a>
+        <button class="outline sm" onclick="navigator.clipboard.writeText('{{ public_url }}');this.textContent='Скопировано'">Скопировать ссылку</button></p>
+      <form method="post" action="/listing/{{ row.id }}/publish" class="inline"><input type="hidden" name="action" value="off"><button class="outline secondary sm">Снять с публикации</button></form>
+    {% elif d.warnings %}
+      <p class="small err">Публикация откроется, когда в тексте не останется противоречий с кадастром.</p>
+    {% else %}
+      <form method="post" action="/listing/{{ row.id }}/publish" class="inline"><input type="hidden" name="action" value="on"><button class="sm">Опубликовать в базе</button></form>
+      <span class="small muted">Объявление появится на витрине <a href="/market" target="_blank">/market</a> и по публичной ссылке.</span>
+    {% endif %}
+  {% elif row.status == 'pending' %}
+    <p>Отправлено на проверку {{ row.submitted_at|dt }}: {{ PROOF_KINDS[row.proof_kind] if row.proof_kind else '' }}. Файлы ({{ proofs|length }}): {% for f in proofs %}<a href="/listing/{{ row.id }}/proof/{{ f }}" target="_blank">{{ f }}</a>{% if not loop.last %}, {% endif %}{% endfor %}. Их видит только модератор, после решения они удаляются.</p>
+  {% else %}
+    {% if row.status == 'rejected' %}<p class="err">Отклонено{% if row.moderation_note %}: {{ row.moderation_note }}{% endif %}. Загрузите документы заново.</p>{% endif %}
+    <p class="small muted">Без подтверждения объявление не публикуется в базе: так в ней нет «фонарей». Принимаем только электронную выписку ЕГРН: PDF с Госуслуг (собственнику бесплатно, 1 минута, раздел «Недвижимость» → «Онлайн-выписка») или XML с файлом подписи .sig из Росреестра; архив из личного кабинета тоже подходит. Фото и сканы не принимаются: их нельзя проверить без ошибок. Закажите выписку сейчас: принимаем сформированные после {{ row.created_at|dt }}. Подпись Росреестра, номер, площадь, правообладатель и дата сверяются автоматически. ФИО из документа в базе не сохраняются, файлы удаляются после проверки.</p>
+    <form method="post" action="/listing/{{ row.id }}/verify" enctype="multipart/form-data">
+      <label>Кто размещает
+        <select name="proof_kind">{% for k, v in PROOF_KINDS.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select>
+      </label>
+      <label>Электронная выписка <small class="muted">(PDF или XML, рядом файл .sig, если есть; можно архивом; до 3 документов по 10 МБ)</small>
+        <input type="file" name="proofs" accept=".pdf,.xml,.sig,.p7s,.zip" multiple required></label>
+      <button type="submit" class="outline sm">Отправить на проверку</button>
+    </form>
+  {% endif %}
+  {% if d.skipped_proofs %}<p class="small err">Не приняты файлы: {{ d.skipped_proofs|join(', ') }}</p>{% endif %}
+  {% if d.proof_check and row.status != 'draft' %}{% include "_proof_check.html" %}{% endif %}
+</article>
+{% if d.intake %}
+{% set it = d.intake %}
+<article class="intake">
+  <h4>Материалы разобраны</h4>
+  <p class="small">{{ it.sources|join(' + ') if it.sources else 'без файлов' }} → фото: {{ it.photos }}{% if it.documents %}, документов на проверку права: {{ it.documents|length }}{% endif %}{% if it.notes %}, текст из {{ it.notes|join(', ') }} добавлен в заметки{% endif %}.
+    {% if it.auto %}Из материалов взяли: {% if it.auto.cad_num %}кадастровый номер{% endif %}{% if it.auto.price %}{% if it.auto.cad_num %}, {% endif %}цену{% endif %}{% if it.auto.phone %}{% if it.auto.cad_num or it.auto.price %}, {% endif %}телефон{% endif %}.{% endif %}
+    {% if it.classified_by and it.classified_by != 'none' %}<span class="muted">Фото от сканов отделены: {{ 'ИИ' if 'gemini' in it.classified_by else 'по пропорциям листа' }}.</span>{% endif %}</p>
+  {% if it.dropped %}<p class="small muted">Отложено: {{ it.dropped|join('; ') }}.</p>{% endif %}
+  {% if it.errors %}<p class="small err">{{ it.errors|join('; ') }}</p>{% endif %}
+</article>
+{% endif %}
+<div class="grid two">
+<article>
+  <form method="post" action="/listing/{{ row.id }}">
+    {% if d.composed_error %}<p class="small err">ИИ-сборка не удалась ({{ d.composed_error }}): текст оставлен прежним.</p>{% endif %}
+    {% if d.composed_by %}<p class="small muted">Текст собран ИИ ({{ d.composed_by }}) по фактам ЕГРН и вашим заметкам; проверьте и поправьте. Противоречия с кадастром подсвечиваются выше.</p>{% endif %}
+    <label>Заголовок (до 50 знаков)<input name="title" value="{{ d.title }}" maxlength="50"></label>
+    <label>Текст объявления<textarea name="description" rows="16">{{ d.description }}</textarea></label>
+    <label for="notes">Заметки продавца <small class="muted">(что есть на участке и рядом; можно голосом)</small></label>
+    <div class="mic-wrap">
+      <textarea id="notes" name="notes" rows="4" form="compose">{{ d.notes or '' }}</textarea>
+      {% if voice_enabled %}<button type="button" class="mic outline sm" data-target="notes">🎙 Голосом</button>{% endif %}
+      <small class="mic-status muted"></small>
+    </div>
+    {% if voice_enabled %}<p><button type="submit" form="compose" class="outline sm" title="Заголовок и текст заново по фактам ЕГРН и заметкам">Пересобрать текст ИИ</button></p>{% endif %}
+    <div class="grid">
+      <label>Цена, ₽<input name="price" value="{{ '%.0f'|format(d.price_rub) if d.price_rub else '' }}"></label>
+      <label>Телефон<input name="phone" value="{{ d.phone or '' }}"></label>
+    </div>
+    <button type="submit" class="outline">Сохранить правки</button>
+  </form>
+  <form method="post" action="/listing/{{ row.id }}/compose" id="compose"></form>
+</article>
+<article>
+  <h4>Факты из НСПД в тексте</h4>
+  <ul class="small">{% for f in d.facts %}<li>{{ f }}</li>{% endfor %}</ul>
+  {% if d.zouit_notes %}<h4>ЗОУИТ</h4><ul class="small">{% for z in d.zouit_notes %}<li>{{ z }}</li>{% endfor %}</ul>{% endif %}
+  <p class="small"><strong>Тип для Avito:</strong> {{ d.object_type or 'не определён (нет категории и ВРИ в ЕГРН)' }} · <strong>Площадь:</strong> {{ d.land_area_sotka ~ ' сот.' if d.land_area_sotka else 'не определена' }}</p>
+  {% if d.images %}
+  <h4>Фото ({{ d.images|length }})</h4>
+  <div class="photos">{% for img in d.images %}<img src="{{ img }}" alt="">{% endfor %}</div>
+  {% endif %}
+  <h4>Выгрузка</h4>
+  {% if d.skipped_photos %}<p class="small err">Не приняты файлы (не изображение или больше 10 МБ): {{ d.skipped_photos|join(', ') }}</p>{% endif %}
+  <p>{% if d.warnings %}<button class="sm" disabled title="Сначала уберите противоречия">Скачать Avito XML</button>{% else %}<a href="/listing/{{ row.id }}/avito.xml" role="button" class="sm">Скачать Avito XML</a>{% endif %}
+     <button class="outline sm" onclick="navigator.clipboard.writeText(document.querySelector('textarea[name=description]').value);this.textContent='Текст скопирован'">Скопировать текст</button></p>
+  <p class="muted small">Файл для автозагрузки Avito: нужен подключённый тариф, перед первой загрузкой прогоните файл через проверку XML в кабинете автозагрузки. Фото попадут в XML только при публичном адресе сервиса.</p>
+  <p class="small"><a href="/single">Полный отчёт по этому участку</a></p>
+</article>
+</div>
+{% endblock %}
