@@ -21,6 +21,21 @@
   {% endif %}
 </article>
 {% endif %}
+<article id="demand">
+  <h4>Спрос на этот участок <span class="badge {{ 'v-ok' if demand_total else '' }}">{{ demand_total }}</span></h4>
+  {% if not demand_total %}<p class="muted small">Активных запросов покупателей, под которые подходит участок (цель, бюджет, площадь, район), пока нет. <a href="/demand">Все запросы</a>.</p>
+  {% else %}
+  <p class="small">Подходит под {{ demand_total }} запрос(ов) покупателей.{% if not row.is_public %} Чтобы предложить участок, опубликуйте объявление с подтверждённым правом.{% endif %}</p>
+  <ul class="small">
+  {% for c, m in demand_matches %}
+    <li>{{ c.label }}{% if c.budget_rub %} · до {{ c.budget_rub|money }}{% endif %}{% if c.region %} · {{ c.region }}{% endif %}{% if c.wants %} · {{ c.wants|join('; ') }}{% endif %} — <span class="badge v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[m.verdict.level] }}">{{ m.verdict.level }}</span>
+      {% if c.id in demand_offered %}<span class="muted">уже предложен</span>
+      {% elif row.is_public %}<form method="post" action="/demand/{{ c.id }}/offer" class="inline"><input type="hidden" name="listing_id" value="{{ row.id }}"><input type="hidden" name="back" value="/listing/{{ row.id }}"><button class="outline sm">Предложить</button></form>{% endif %}
+    </li>
+  {% endfor %}
+  </ul>
+  {% endif %}
+</article>
 <article class="verify">
   <h4>Подтверждение права
     <span class="badge {{ {'draft':'','pending':'v-check','verified':'v-ok','rejected':'v-stop'}[row.status] }}">{{ row.status_label }}</span>

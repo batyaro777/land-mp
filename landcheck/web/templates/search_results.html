@@ -9,6 +9,7 @@
 {% if answers and not answers.get('skipped') %}
 <p class="small muted">Что важно: {% for q in questions %}{% if answers.get(q.key) %}{% for v, l in q.options if v == answers.get(q.key) %}{{ q.text|replace('?','') }} — {{ l|lower }}{% endfor %}; {% endif %}{% endfor %}</p>
 {% endif %}
+{% include "_offers.html" %}
 <p class="muted small">Найдено: {{ matches|length }} из базы участков с подтверждённым правом. Вердикт — быстрая проверка «цель × категория × ВРИ» по фактам ЕГРН; полный отчёт с территориальной зоной, ограничениями и локацией — по кнопке.</p>
 {% if not matches %}
 <article><p class="muted">Подходящих участков пока нет: база наполняется. Запрос сохранён, новые объявления будут помечены как новые при следующем открытии. Посмотрите <a href="/market">всю базу</a> или <a href="/single">проверьте участок из объявления на другой площадке</a> по кадастровому номеру.</p></article>

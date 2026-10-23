@@ -1328,11 +1328,23 @@ def listing_page(request: Request, user: UserDep, listing_id: int):
             changed = True
         if changed:
             db.commit()
+        from landcheck.web import demand
+        from landcheck.web.db import Offer
+
+        d_matches = demand.matching_requests(
+            db, _market_card(row, user), demand.listing_text(row), exclude_user_id=row.user_id
+        )
+        offered = {
+            o.request_id for o in db.scalars(select(Offer).where(Offer.listing_id == row.id)).all()
+        }
         return render(
             request,
             "listing.html",
             row=row,
             d=row.data,
+            demand_matches=[(demand.request_card(r), m) for r, m in d_matches[:10]],
+            demand_total=len(d_matches),
+            demand_offered=offered,
             proofs=_proof_files(row.id),
             public_url=f"{settings.base_url}/l/{row.id}",
             err=request.query_params.get("err"),
@@ -1778,6 +1790,8 @@ def search_page(request: Request, user: UserDep, rid: int, edit: int = 0):
                 user=user,
             )
         ctx = _request_ctx(db, user, req)
+        from landcheck.web.demand import offers_for_request
+
         return render(
             request,
             "search_results.html",
@@ -1785,6 +1799,7 @@ def search_page(request: Request, user: UserDep, rid: int, edit: int = 0):
             purpose=purpose,
             questions=qs,
             answers=dict(req.answers or {}),
+            offers=offers_for_request(db, req),
             user=user,
             **ctx,
         )
@@ -2101,6 +2116,96 @@ def connection_decide(user: UserDep, conn_id: int, decision: Annotated[str, Form
                 )
             db.commit()
     return RedirectResponse("/connections", status_code=303)
+
+
+# --- спрос (R11): запросы покупателей как объект рынка -----------------------------------
+@router.get("/demand", response_class=HTMLResponse)
+def demand_page(
+    request: Request, user: UserDep, region: str = "", purpose: str = "", offered: int = 0
+):
+    from landcheck.web import demand
+    from landcheck.web.db import Offer
+
+    with session() as db:
+        reqs = demand.active_requests(
+            db, exclude_user_id=user.id, region=region.strip(), purpose=purpose.strip()
+        )
+        mine = demand.my_public_listings(db, user)
+        my_cards = {lst.id: _market_card(lst, user) for lst in mine}
+        texts = {lst.id: demand.listing_text(lst) for lst in mine}
+        cards = []
+        for r in reqs:
+            c = demand.request_card(r)
+            c["fits"] = [
+                lst.id for lst in mine if demand.fit(r, my_cards[lst.id], texts[lst.id]) is not None
+            ]
+            cards.append(c)
+        offered_pairs = {
+            (o.request_id, o.listing_id)
+            for o in db.scalars(select(Offer).where(Offer.from_user_id == user.id)).all()
+        }
+        return render(
+            request,
+            "demand.html",
+            cards=cards,
+            mine=[(lst.id, my_cards[lst.id]["title"]) for lst in mine],
+            offered_pairs=offered_pairs,
+            my_offers=demand.my_offers(db, user),
+            purposes=PURPOSES,
+            region=region,
+            purpose=purpose,
+            offered=offered,
+            contacts_allowed=demand.contacts_allowed(user),
+            user=user,
+        )
+
+
+@router.post("/demand/{rid}/offer")
+def demand_offer(
+    user: UserDep,
+    rid: int,
+    listing_id: Annotated[int, Form()],
+    note: Annotated[str, Form()] = "",
+    back: Annotated[str, Form()] = "/demand",
+):
+    from landcheck.web import demand
+    from landcheck.web.db import BuyerRequest
+    from landcheck.web.db import Listing as ListingRow
+
+    with session() as db:
+        req = db.get(BuyerRequest, rid)
+        if req is None or req.user_id == user.id:
+            raise HTTPException(404)
+        lst = db.get(ListingRow, listing_id)
+        if lst is None or lst.user_id != user.id or not lst.is_public:
+            raise HTTPException(404, "Предлагать можно только своё опубликованное объявление")
+        demand.create_offer(db, req, lst, user, note, _market_card(lst, user))
+        db.commit()
+    target = back if back.startswith("/") and not back.startswith("//") else "/demand"
+    sep = "&" if "?" in target else "?"
+    return RedirectResponse(f"{target}{sep}offered=1", status_code=303)
+
+
+@router.post("/offers/{offer_id}/decide")
+def offer_decide(user: UserDep, offer_id: int, decision: Annotated[str, Form()]):
+    from landcheck.web import demand
+    from landcheck.web.db import BuyerRequest, Offer
+    from landcheck.web.db import Listing as ListingRow
+
+    with session() as db:
+        offer = db.get(Offer, offer_id)
+        req = db.get(BuyerRequest, offer.request_id) if offer else None
+        if offer is None or req is None or req.user_id != user.id:
+            raise HTTPException(404)
+        if decision in ("accepted", "declined") and offer.status == "new":
+            lst = db.get(ListingRow, offer.listing_id)
+            title = ((lst.data or {}).get("title") if lst else None) or (
+                lst.cad_num if lst else f"#{offer.listing_id}"
+            )
+            demand.decide_offer(db, offer, user, decision, title)
+            db.commit()
+        rid = offer.request_id
+    return RedirectResponse(f"/search/{rid}#offers", status_code=303)
 
 
 @router.get("/connections", response_class=HTMLResponse)

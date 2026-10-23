@@ -42,6 +42,10 @@ class Settings:
         default_factory=lambda: os.environ.get("LANDCHECK_BRAND", "Проверка участков")
     )
     base_url: str = field(default_factory=lambda: os.environ.get("LANDCHECK_BASE_URL", ""))
+    # Спрос (R11): контакты покупателей продавцам и брокерам — платно (1) или всем (0, пилот)
+    demand_paid: bool = field(
+        default_factory=lambda: os.environ.get("LANDCHECK_DEMAND_PAID", "") == "1"
+    )
     # Слежение за участками (R9): период перепроверки в часах, 0 — выключено
     watch_hours: float = field(
         default_factory=lambda: float(os.environ.get("LANDCHECK_WATCH_HOURS", "24"))

@@ -225,6 +225,29 @@ class Connection(Base):
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class Offer(Base):
+    """Спрос (R11): отклик продавца или брокера на запрос покупателя — «предложить участок под
+    запрос». Покупатель видит вердикт под свою цель и решает, открывать ли контакты."""
+
+    __tablename__ = "offers"
+    __table_args__ = (
+        UniqueConstraint("request_id", "listing_id", name="uq_offer_request_listing"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    request_id: Mapped[int] = mapped_column(ForeignKey("buyer_requests.id"), index=True)
+    listing_id: Mapped[int] = mapped_column(ForeignKey("listings.id"), index=True)
+    from_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    note: Mapped[str] = mapped_column(Text, default="")
+    fit: Mapped[bool] = mapped_column(default=True)  # проходит фильтры запроса (цена/площадь/район)
+    verdict: Mapped[dict[str, Any]] = mapped_column(
+        JSON, default=dict
+    )  # вердикт под цель покупателя
+    status: Mapped[str] = mapped_column(String(16), default="new")  # new|accepted|declined
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class Notification(Base):
     """Уведомление пользователю: новый подходящий участок, запрос контакта, решение модератора."""
 

@@ -27,8 +27,10 @@
       <li><a href="/watch">Слежение</a></li>
       <li><a href="/search">Поиск</a></li>
       <li><a href="/listings">Объявления</a></li>
+      <li><a href="/demand">Спрос</a></li>
       {% elif user.role == 'seller' %}
       <li><a href="/listings">Мои объявления</a></li>
+      <li><a href="/demand">Спрос</a></li>
       <li><a href="/single">Проверить участок</a></li>
       {% elif user.role == 'buyer' %}
       <li><a href="/search">Поиск</a></li>
@@ -41,6 +43,7 @@
       <li><a href="/watch">Слежение</a></li>
       <li><a href="/search">Поиск</a></li>
       <li><a href="/listings">Объявления</a></li>
+      <li><a href="/demand">Спрос</a></li>
       {% endif %}
       <li><a href="/notifications" title="Уведомления">🔔{% if unread %} <span class="badge v-check">{{ unread }}</span>{% endif %}</a></li>
       <li><details class="dropdown">
