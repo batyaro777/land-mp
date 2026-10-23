@@ -67,7 +67,19 @@
     </form>
   {% endif %}
   {% if d.skipped_proofs %}<p class="small err">Не приняты файлы (не PDF/JPG/PNG или больше 10 МБ): {{ d.skipped_proofs|join(', ') }}</p>{% endif %}
+  {% if d.proof_check and row.status != 'draft' %}{% include "_proof_check.html" %}{% endif %}
 </article>
+{% if d.intake %}
+{% set it = d.intake %}
+<article class="intake">
+  <h4>Материалы разобраны</h4>
+  <p class="small">{{ it.sources|join(' + ') if it.sources else 'без файлов' }} → фото: {{ it.photos }}{% if it.documents %}, документов на проверку права: {{ it.documents|length }}{% endif %}{% if it.notes %}, текст из {{ it.notes|join(', ') }} добавлен в заметки{% endif %}.
+    {% if it.auto %}Из материалов взяли: {% if it.auto.cad_num %}кадастровый номер{% endif %}{% if it.auto.price %}{% if it.auto.cad_num %}, {% endif %}цену{% endif %}{% if it.auto.phone %}{% if it.auto.cad_num or it.auto.price %}, {% endif %}телефон{% endif %}.{% endif %}
+    {% if it.classified_by and it.classified_by != 'none' %}<span class="muted">Фото от сканов отделены: {{ 'ИИ' if 'gemini' in it.classified_by else 'по пропорциям листа' }}.</span>{% endif %}</p>
+  {% if it.dropped %}<p class="small muted">Отложено: {{ it.dropped|join('; ') }}.</p>{% endif %}
+  {% if it.errors %}<p class="small err">{{ it.errors|join('; ') }}</p>{% endif %}
+</article>
+{% endif %}
 <div class="grid two">
 <article>
   <form method="post" action="/listing/{{ row.id }}">

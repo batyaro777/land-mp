@@ -3,7 +3,7 @@
 {% block content %}
 <hgroup>
   <h2>Модерация объявлений</h2>
-  <p>Подтверждение права: сверьте кадастровый номер и ФИО в документе с тем, кто размещает. После решения файлы удаляются.</p>
+  <p>Подтверждение права: сверьте кадастровый номер и ФИО в документе с тем, кто размещает. Автосверка выписки подсвечивает совпадения и расхождения, решение за вами. После решения файлы удаляются, из сверки остаётся только итог.</p>
 </hgroup>
 <div class="toolbar">
   {% for st, label in LISTING_STATUSES.items() %}
@@ -21,6 +21,7 @@
   <p class="small">{{ r.data.address or '' }}{% if r.data.price_rub %} · {{ r.data.price_rub|money }}{% endif %}{% if r.data.land_area_sotka %} · {{ r.data.land_area_sotka }} сот.{% endif %}
     {% if r.data.warnings %}<br><span class="err">Противоречия с кадастром: {{ r.data.warnings|join('; ') }}</span>{% endif %}</p>
   {% if proofs.get(r.id) %}<p class="small">Документы: {% for f in proofs[r.id] %}<a href="/listing/{{ r.id }}/proof/{{ f }}" target="_blank">{{ f }}</a>{% if not loop.last %}, {% endif %}{% endfor %}</p>{% endif %}
+  {% if r.data.proof_check %}{% set d = r.data %}{% include "_proof_check.html" %}{% endif %}
   {% if r.moderation_note %}<p class="small muted">Заметка: {{ r.moderation_note }}</p>{% endif %}
   {% if r.status == 'pending' %}
   <form method="post" action="/admin/listings/{{ r.id }}/decide" class="decide">

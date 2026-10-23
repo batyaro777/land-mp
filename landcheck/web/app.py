@@ -1116,21 +1116,38 @@ def listing_form(request: Request, user: UserDep, cad_num: str = ""):
 async def listing_create(
     request: Request,
     user: UserDep,
-    cad_num: Annotated[str, Form()],
+    cad_num: Annotated[str, Form()] = "",
     notes: Annotated[str, Form()] = "",
     price: Annotated[str, Form()] = "",
     object_type: Annotated[str, Form()] = "",
     phone: Annotated[str, Form()] = "",
+    cloud_url: Annotated[str, Form()] = "",
     photos: Annotated[list[UploadFile] | None, File()] = None,
+    files: Annotated[list[UploadFile] | None, File()] = None,
 ):
+    """Объявление из материалов «как есть» (ТЗ v2, К2): номер, цена и телефон — из формы или из
+    документов; фото отделяются от сканов; сканы уходят на подтверждение права с автосверкой."""
+    from datetime import UTC, datetime
+
     from landcheck.inputs import parse_number
     from landcheck.listing import ParcelFacts, build_draft
+    from landcheck.web import materials
     from landcheck.web.db import Listing as ListingRow
 
+    uploads = await materials.materials_from_uploads([*(photos or []), *(files or [])])
+    taken, sources = materials.gather(uploads, cloud_url)
+    auto: dict[str, bool] = {}
     m = CAD_RE.search(cad_num)
-    if not m:
-        return render(request, "error.html", message="Не похоже на кадастровый номер.", user=user)
-    cn = m.group(0)
+    if m:
+        cn = re.sub(r"\s+", "", m.group(0))
+    elif taken.facts.cad_nums:
+        cn = taken.facts.cad_nums[0]
+        auto["cad_num"] = True
+    else:
+        msg = "Кадастровый номер не указан и не найден в материалах."
+        if taken.errors:
+            msg += " " + "; ".join(taken.errors)
+        return render(request, "error.html", message=msg, user=user, status_code=400)
     parcel, errors = _fetch_parcel_now(cn)
     if not parcel.found:
         msg = "Участок в НСПД не найден." + (" " + "; ".join(errors) if errors else "")
@@ -1138,28 +1155,29 @@ async def listing_create(
     price_v = parse_number(price) if price.strip() else None
     if price_v is not None and price_v < 1000:
         price_v *= 1_000_000
-    draft = build_draft(parcel, notes=notes, price_rub=price_v, object_type=object_type or None)
+    if price_v is None and taken.facts.price_rub:
+        price_v = taken.facts.price_rub
+        auto["price"] = True
+    phone_v = phone.strip()
+    if not phone_v and taken.facts.phone:
+        phone_v = taken.facts.phone
+        auto["phone"] = True
+    notes_all = notes.strip()
+    if taken.notes_text:
+        notes_all = (notes_all + "\n\n" + taken.notes_text).strip()
+        auto["notes"] = True
+    draft = build_draft(parcel, notes=notes_all, price_rub=price_v, object_type=object_type or None)
+    pf = ParcelFacts.from_parcel(parcel)
     with session() as db:
         row = ListingRow(user_id=user.id, cad_num=cn, data={})
         db.add(row)
         db.flush()
-        # фото: сохраняем в data/uploads/<id>/ и отдаём по /uploads/...
-        image_paths: list[str] = []
-        skipped: list[str] = []
-        if photos:
-            updir = settings.db_path.parent / "uploads" / str(row.id)
-            updir.mkdir(parents=True, exist_ok=True)
-            for i, ph in enumerate(photos[:MAX_PHOTOS], start=1):
-                if not ph.filename:
-                    continue
-                raw = await ph.read(MAX_PHOTO_BYTES + 1)
-                kind = _image_kind(raw)
-                if kind is None or len(raw) > MAX_PHOTO_BYTES:
-                    skipped.append(ph.filename)
-                    continue
-                target = updir / f"{i:02d}.{kind}"
-                target.write_bytes(raw)
-                image_paths.append(f"/uploads/{row.id}/{target.name}")
+        image_paths = materials.save_photos(row.id, taken.photos)
+        skipped = [
+            n
+            for n, why in taken.dropped
+            if why in ("неизвестный формат", "больше 10 МБ", "пустой файл")
+        ]
         row.data = {
             "title": draft.title,
             "description": draft.description,
@@ -1170,13 +1188,31 @@ async def listing_create(
             "facts": draft.facts,
             "warnings": draft.warnings,
             "zouit_notes": draft.zouit_notes,
-            "notes": notes,
-            "phone": phone.strip(),
+            "notes": notes_all,
+            "phone": phone_v,
             "images": image_paths,
             "skipped_photos": skipped,
             "fetch_errors": errors,
-            "parcel_facts": ParcelFacts.from_parcel(parcel).to_dict(),
+            "parcel_facts": pf.to_dict(),
+            "intake": {**taken.to_dict(), "sources": sources, "auto": auto},
         }
+        # документы из материалов — сразу на подтверждение права с автосверкой
+        if taken.documents:
+            saved = materials.save_documents(row.id, taken.documents)
+            if saved:
+                kind = "owner" if materials.has_extract(taken.documents) else "agent"
+                row.status = "pending"
+                row.proof_kind = kind
+                row.submitted_at = datetime.now(UTC)
+                row.published = False
+                check = materials.proof_check(
+                    taken.documents,
+                    cad_num=cn,
+                    area_m2=pf.best_area_m2,
+                    seller_name=user.name or "",
+                    proof_kind=kind,
+                )
+                row.data = {**row.data, "proof_check": check, "proof_files": saved}
         row.data = _compose_with_ai(dict(row.data))
         db.commit()
         listing_id = row.id
@@ -1363,7 +1399,9 @@ MAX_PROOFS = 3
 
 
 def _proofs_dir(listing_id: int) -> Path:
-    return settings.db_path.parent / "proofs" / str(listing_id)
+    from landcheck.web.materials import proofs_dir
+
+    return proofs_dir(listing_id)
 
 
 def _proof_kind_of(raw: bytes) -> str | None:
@@ -1434,9 +1472,29 @@ async def listing_verify(
         row.published = False
         data = dict(row.data)
         data["skipped_proofs"] = skipped
+        data["proof_check"] = _proof_check(row, user, proof_kind)
         row.data = data
         db.commit()
     return RedirectResponse(f"/listing/{listing_id}", status_code=303)
+
+
+def _proof_check(row, user: User, proof_kind: str) -> dict[str, Any] | None:
+    """Автосверка выписки ЕГРН по сохранённым файлам подтверждения (R12)."""
+    from landcheck.web import materials
+
+    try:
+        docs = materials.materials_from_proof_files(row.id)
+        area = (row.data.get("parcel_facts") or {}).get("best_area_m2")
+        return materials.proof_check(
+            docs,
+            cad_num=row.cad_num,
+            area_m2=area,
+            seller_name=user.name or "",
+            proof_kind=proof_kind,
+        )
+    except Exception as e:  # noqa: BLE001 — сверка не должна ломать отправку на проверку
+        log.warning("proof_check failed: %s: %s", type(e).__name__, e)
+        return None
 
 
 @router.get("/listing/{listing_id}/proof/{name}")
@@ -2471,6 +2529,10 @@ def admin_decide(
         else:
             raise HTTPException(400)
         row.moderation_note = note.strip()[:1000] or None
+        if (row.data or {}).get("proof_check"):
+            from landcheck.egrn import summary_only
+
+            row.data = {**row.data, "proof_check": summary_only(row.data.get("proof_check"))}
         from landcheck.web.notify import notify
 
         title = (row.data or {}).get("title") or row.cad_num

@@ -3,11 +3,17 @@
 <article class="narrow">
   <hgroup>
     <h2>Объявление из кадастра</h2>
-    <p>Факты берём из НСПД, ваши заметки добавляем, противоречия с кадастром подсвечиваем. На выходе текст и XML для автозагрузки Avito.</p>
+    <p>Загрузите всё, что есть, как есть: фото, сканы, выписку ЕГРН, договор, описание. Мы сами отделим фото от документов, достанем номер, цену и площадь, соберём текст по фактам НСПД, а документы отправим на подтверждение права с автосверкой. На выходе текст и XML для автозагрузки Avito.</p>
   </hgroup>
   <form method="post" action="/listing" enctype="multipart/form-data">
-    <label>Кадастровый номер<input name="cad_num" value="{{ cad_num }}" placeholder="50:09:0060202:101" required></label>
-    <label>Цена, ₽<input name="price" placeholder="2 500 000 или 2,5 млн"></label>
+    <label>Материалы участка <small class="muted">(фото, PDF выписки, сканы, договор, описание txt/docx — любые файлы, до 25 штук по 10 МБ)</small>
+      <input type="file" name="files" multiple>
+    </label>
+    <label>Ссылка на папку в облаке <small class="muted">(публичная папка Яндекс.Диска: disk.yandex.ru/d/…)</small>
+      <input name="cloud_url" type="url" placeholder="https://disk.yandex.ru/d/XXXXXXXX"></label>
+    <label>Кадастровый номер <small class="muted">(можно не указывать, если он есть в документах)</small>
+      <input name="cad_num" value="{{ cad_num }}" placeholder="50:09:0060202:101"></label>
+    <label>Цена, ₽ <small class="muted">(если не указать — возьмём из материалов)</small><input name="price" placeholder="2 500 000 или 2,5 млн"></label>
     <label>Тип участка для Avito
       <select name="object_type">
         <option value="">определить по НСПД</option>
@@ -20,10 +26,7 @@
       {% if voice_enabled %}<button type="button" class="mic outline sm" data-target="notes" title="Надиктовать описание, до 60 секунд">🎙 Голосом</button>{% endif %}
       <small class="mic-status muted"></small>
     </div>
-    <label>Фото участка <small class="muted">(jpg/png, до 10 штук, порядок как в файлах)</small>
-      <input type="file" name="photos" accept=".jpg,.jpeg,.png,.webp" multiple>
-    </label>
-    <label>Телефон для объявления<input name="phone" placeholder="+7 900 000-00-00"></label>
+    <label>Телефон для объявления <small class="muted">(если не указать — возьмём из материалов)</small><input name="phone" placeholder="+7 900 000-00-00"></label>
     <button type="submit">Собрать объявление</button>
   </form>
 </article>

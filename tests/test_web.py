@@ -254,7 +254,8 @@ def test_login_rate_limit_and_photo_signature(client: TestClient):
     auth._ATTEMPTS.clear()
     login(client)
     fake_jpg = ("fake.jpg", b"not an image at all", "image/jpeg")
-    real_png = ("ok.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 32, "image/png")
+    # реальный размер фото: картинки мельче 15 КБ приём считает превью и откладывает (R12)
+    real_png = ("ok.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 20_000, "image/png")
     r = client.post(
         "/listing",
         data={"cad_num": "50:09:0060202:101", "notes": "лес рядом"},
