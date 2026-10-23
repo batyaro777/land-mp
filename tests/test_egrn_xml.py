@@ -96,9 +96,18 @@ def test_parse_xml_rejects_garbage_and_dtd():
     assert ex is not None and not ex.is_extract and ex.cad_num is None
 
 
+def test_freshness_assumes_moscow_time():
+    ex = egrn_xml.parse_xml_extract(build(issued="2026-10-23T10:00:00"))  # 10:00 МСК = 07:00 UTC
+    early = egrn.compare(ex, cad_num="x", created_at=datetime(2026, 10, 23, 6, 30, tzinfo=UTC))
+    late = egrn.compare(ex, cad_num="x", created_at=datetime(2026, 10, 23, 8, 0, tzinfo=UTC))
+    assert {i.key: i.status for i in early.items}["fresh"] == "ok"
+    by = {i.key: i for i in late.items}
+    assert by["fresh"].status == "warn" and "по Москве" in by["fresh"].note
+
+
 def test_compare_with_signature_freshness_category():
     ex = egrn_xml.parse_xml_extract(build())
-    created = datetime(2026, 10, 23, 9, 0, tzinfo=UTC)
+    created = datetime(2026, 10, 23, 6, 0, tzinfo=UTC)  # 09:00 МСК, выписка в 10:00 МСК
     res = egrn.compare(
         ex,
         cad_num="50:09:0060202:101",

@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from landcheck.inputs import CAD_RE
 
 STALE_DAYS = 30
+EXTRACT_TZ_OFFSET = timedelta(hours=3)  # время формирования выписки — московское
 
 _DATE_RE = re.compile(r"\b(\d{2})\.(\d{2})\.(\d{4})\b")
 _EXTRACT_RE = re.compile(
@@ -406,23 +407,31 @@ def _signature_item(signature: dict[str, Any] | None) -> CheckItem:
 
 
 def _freshness_item(ex: Extract, created_at: datetime | None) -> CheckItem:
+    """Выписка должна быть сформирована после создания объявления (заказана по нашему запросу).
+
+    Время в выписке Росреестр пишет без часового пояса; считаем его московским (UTC+3) —
+    это строже, чем принять за UTC, и закрывает окно в 3 часа (замечание Клавдия, прод 23.10).
+    """
     if created_at is None:
         return CheckItem("fresh", "Свежесть", "unknown", "дата объявления неизвестна")
     if not ex.issued:
         return CheckItem("fresh", "Свежесть", "unknown", "дата формирования не найдена")
     created = created_at.astimezone(UTC).replace(tzinfo=None) if created_at.tzinfo else created_at
+    issued: datetime | None = None
     if ex.issued_at:
         try:
             issued = datetime.fromisoformat(ex.issued_at)
         except ValueError:
             issued = None
-    else:
-        issued = None
     if issued is None:
         try:
             issued = datetime.strptime(ex.issued, "%d.%m.%Y").replace(hour=23, minute=59)
         except ValueError:
             return CheckItem("fresh", "Свежесть", "unknown", ex.issued)
+    if issued.tzinfo:
+        issued = issued.astimezone(UTC).replace(tzinfo=None)
+    else:
+        issued = issued - EXTRACT_TZ_OFFSET  # московское → UTC
     if issued >= created:
         return CheckItem(
             "fresh", "Свежесть", "ok", f"сформирована {ex.issued}, после создания объявления"
@@ -431,7 +440,7 @@ def _freshness_item(ex: Extract, created_at: datetime | None) -> CheckItem:
         "fresh",
         "Свежесть",
         "warn",
-        f"сформирована {ex.issued}, до создания объявления {created:%d.%m.%Y}: "
+        f"сформирована {ex.issued} (по Москве), до создания объявления {created:%d.%m.%Y %H:%M} UTC: "
         "закажите новую на Госуслугах (бесплатно, 1 минута)",
     )
 

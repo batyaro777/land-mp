@@ -449,7 +449,8 @@ def test_verify_zip_with_xml_and_sig(client, monkeypatch):  # noqa: F811
     _register_named(client, "ivanov2@example.com", "Иванов Иван Иванович")
     r = client.post("/listing", data={"cad_num": "50:09:0060202:101"})
     url = r.headers["location"]
-    issued = (datetime.now(UTC) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")
+    # время в выписке считается московским: +4 ч по UTC даёт «через час» по Москве
+    issued = (datetime.now(UTC) + timedelta(hours=4)).strftime("%Y-%m-%dT%H:%M:%S")
     archive = _zip({"docs/report.xml": build(issued=issued), "docs/report.xml.sig": SIG_DER})
     r = client.post(
         url + "/verify",

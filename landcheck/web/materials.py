@@ -150,8 +150,9 @@ def extract_of(m: intake.Material) -> egrn.Extract | None:
     if m.kind == "xml":
         return egrn_xml.parse_xml_extract(m.raw)
     if m.kind == "pdf":
-        text = m.text or intake.pdf_text(m.raw)
-        return egrn.parse_extract(text) if text.strip() else None
+        # текст уже прочитан при приёме (intake.process / materials_from_proof_files):
+        # повторное чтение битого PDF давало по три одинаковые строки в логе (Клавдий, 23.10)
+        return egrn.parse_extract(m.text) if m.text.strip() else None
     return None
 
 
