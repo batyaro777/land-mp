@@ -102,7 +102,7 @@ def test_freshness_assumes_moscow_time():
     late = egrn.compare(ex, cad_num="x", created_at=datetime(2026, 10, 23, 8, 0, tzinfo=UTC))
     assert {i.key: i.status for i in early.items}["fresh"] == "ok"
     by = {i.key: i for i in late.items}
-    assert by["fresh"].status == "warn" and "по Москве" in by["fresh"].note
+    assert by["fresh"].status == "warn" and "23.10.2026 10:00 МСК" in by["fresh"].note
 
 
 def test_compare_with_signature_freshness_category():

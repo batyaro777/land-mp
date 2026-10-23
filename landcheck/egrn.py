@@ -432,16 +432,19 @@ def _freshness_item(ex: Extract, created_at: datetime | None) -> CheckItem:
         issued = issued.astimezone(UTC).replace(tzinfo=None)
     else:
         issued = issued - EXTRACT_TZ_OFFSET  # московское → UTC
+    when = ex.issued + (
+        f" {ex.issued_at[11:16]} МСК" if ex.issued_at and len(ex.issued_at) >= 16 else ""
+    )
     if issued >= created:
         return CheckItem(
-            "fresh", "Свежесть", "ok", f"сформирована {ex.issued}, после создания объявления"
+            "fresh", "Свежесть", "ok", f"сформирована {when}, после создания объявления"
         )
     return CheckItem(
         "fresh",
         "Свежесть",
         "warn",
-        f"сформирована {ex.issued} (по Москве), до создания объявления "
-        f"{created:%d.%m.%Y %H:%M} UTC: закажите новую на Госуслугах (бесплатно, 1 минута)",
+        f"сформирована {when}, до создания объявления {created:%d.%m.%Y %H:%M} UTC: "
+        "закажите новую на Госуслугах (бесплатно, 1 минута)",
     )
 
 

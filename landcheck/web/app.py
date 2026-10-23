@@ -1461,18 +1461,19 @@ async def listing_verify(
         row.published = False
         data = dict(row.data)
         data["skipped_proofs"] = skipped
-        data["proof_check"] = _proof_check(row, user, proof_kind)
+        data["proof_check"] = _proof_check(row, user, proof_kind, docs=docs)
         row.data = data
         db.commit()
     return RedirectResponse(f"/listing/{listing_id}", status_code=303)
 
 
-def _proof_check(row, user: User, proof_kind: str) -> dict[str, Any] | None:
-    """Автосверка выписки ЕГРН по сохранённым файлам подтверждения (R12)."""
+def _proof_check(row, user: User, proof_kind: str, docs=None) -> dict[str, Any] | None:
+    """Автосверка выписки ЕГРН (R12/R13): по уже прочитанным документам или по файлам с диска."""
     from landcheck.web import materials
 
     try:
-        docs = materials.materials_from_proof_files(row.id)
+        if docs is None:
+            docs = materials.materials_from_proof_files(row.id)
         pf = row.data.get("parcel_facts") or {}
         return materials.proof_check(
             docs,

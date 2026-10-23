@@ -462,7 +462,7 @@ def test_verify_zip_with_xml_and_sig(client, monkeypatch):  # noqa: F811
     assert status == "pending" and kind == "owner"
     pc = data["proof_check"]
     assert pc["verdict"] == "ok" and "подпись Росреестра проверена" in pc["label"], pc
-    assert pc["source"] == "xml" and pc["document"] == "01.xml"
+    assert pc["source"] == "xml" and pc["document"] == "report.xml"
     by = {i["key"]: i for i in pc["items"]}
     assert by["sig"]["status"] == "ok" and "Росреестр" in by["sig"]["note"]
     assert (
