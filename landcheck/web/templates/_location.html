@@ -94,6 +94,30 @@
     {% endif %}
     <p class="muted small">{{ c.source }}, радиус {{ c.radius_m }} м. Сети без кадастрового учёта в ЕГРН не видны; охранные зоны сетей — в списке «Что рядом».</p>
     {% endif %}
+
+    {% set ac = loc.access if loc.access is defined else none %}
+    {% if ac %}
+    <strong>Подъезд и сервитут</strong> <span class="badge mini v-{{ sev[ac.level] }}">{{ {'risk':'риск','plus':'плюс','neutral':'факт'}[ac.level] }}</span>
+    <p class="small">{{ ac.text|ucfirst }}.</p>
+    {% if ac.roads %}<ul class="loc-list">{% for r in ac.roads %}<li>{{ r.label|ucfirst }}{% if r.name %} «{{ r.name }}»{% endif %}: в {{ r.distance_m }} м <span class="muted small">{{ r.source }}</span></li>{% endfor %}</ul>{% endif %}
+    {% set rg = rights if rights is defined else none %}
+    {% set gz = gpzu if gpzu is defined else none %}
+    {% if rg and rg.source != 'nspd' %}
+      {% set serv = rg.restrictions|selectattr('kind', 'equalto', 'servitude')|list %}
+      {% if serv %}<p class="small"><span class="badge mini v-check">факт</span> Сервитут зарегистрирован: {% for e in serv %}{{ e.label }}{% if e.number %} № {{ e.number }}{% endif %}{% if e.holder %} — {{ e.holder }}{% endif %}{% if not loop.last %}; {% endif %}{% endfor %} <span class="muted small">({{ rg.source_label }})</span>.</p>
+      {% elif rg.restrictions_known %}<p class="small"><span class="badge mini v-ok">плюс</span> Сервитутов не зарегистрировано <span class="muted small">({{ rg.source_label }}{% if rg.as_of %}, на {{ rg.as_of }}{% endif %})</span>.</p>{% endif %}
+    {% elif gz and gz.public_servitudes is defined and gz.public_servitudes is not none %}
+      <p class="small"><span class="badge mini v-{{ 'check' if gz.public_servitudes else 'ok' }}">{{ 'факт' if gz.public_servitudes else 'плюс' }}</span> {% if gz.public_servitudes %}В ГПЗУ есть публичный сервитут (раздел 7) — смотреть, через какую часть участка{% else %}Публичных сервитутов по ГПЗУ нет (раздел 7){% endif %}.</p>
+    {% else %}<p class="muted small">Сервитуты видны только в выписке ЕГРН или ГПЗУ — приложите их в блоках выше, и строка появится здесь.</p>{% endif %}
+    <p class="muted small">{{ ac.source }}.</p>
+    {% endif %}
+
+    {% set fr = loc.forest if loc.forest is defined else none %}
+    {% if fr %}
+    <strong>Лесной фонд</strong> <span class="badge mini v-{{ {'check':'check','neutral':'check','risk':'stop','plus':'ok'}[fr.level] }}">{{ 'проверить' if fr.level == 'check' else 'факт' }}</span>
+    <p class="small">{{ fr.text|ucfirst }}.</p>
+    <p class="muted small">{{ fr.source }}. {{ fr.law }}.</p>
+    {% endif %}
   </div>
 
   <div>

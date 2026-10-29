@@ -600,6 +600,12 @@ def summarize_location(
         "price": price_reference(neighbors, listing_price_rub, area_m2),
         "osm": summarize_osm(parcel_geojson, (osm or {}).get("elements") or []) if osm else None,
         "osm_error": (osm or {}).get("error") if osm else "OSM не запрашивался",
+        "access": access_summary(
+            summarize_constructions(parcel_geojson, nspd.get("constructions")),
+            osm,
+            neighbors["total"],
+        ),
+        "forest": forest_summary(nspd.get("neighbors") or []),
         "errors": list(nspd.get("errors") or []),
         # Тексты исключений — в лог и в кэш, клиенту — одна фраза (зум 28.10, п. 1.10).
         "errors_public": (
@@ -611,6 +617,148 @@ def summarize_location(
             "не публикуются, сверяйте с генпланом и ПЗЗ муниципалитета."
         ),
     }
+
+
+# --- подъезд и лесфонд (ТЗ v3, п. 5) -------------------------------------------------------
+ACCESS_HIGHWAYS = (
+    "secondary",
+    "tertiary",
+    "unclassified",
+    "residential",
+    "service",
+    "track",
+    "living_street",
+    "road",
+    "motorway",
+    "trunk",
+    "primary",
+)
+ACCESS_ROAD_M = 25  # дорога ближе — считаем, что съезд к границе есть
+FOREST_ADJ_M = 5  # сосед-лесфонд ближе — «граничит»
+FOREST_NEAR_M = 100
+SRC_ACCESS = "НСПД «Сооружения» и OpenStreetMap: дороги ближе 25 м к границе участка"
+SRC_FOREST = "НСПД, соседние участки категории «земли лесного фонда» (по контурам ЕГРН)"
+SRC_SP_4 = (
+    "СП 4.13130.2013 п. 4.14: от домов ИЖС и садовых до лесных насаждений не менее 30 м; "
+    "280-ФЗ от 29.07.2017 («лесная амнистия») — наложение границ лесфонда устраняется по заявлению"
+)
+_HW_LABEL = {
+    "motorway": "автомагистраль",
+    "trunk": "трасса",
+    "primary": "дорога регионального значения",
+    "secondary": "дорога",
+    "tertiary": "дорога",
+    "unclassified": "дорога местного значения",
+    "residential": "улица",
+    "service": "проезд",
+    "track": "полевая/лесная дорога",
+    "living_street": "жилая улица",
+    "road": "дорога",
+}
+
+
+def access_summary(
+    constructions: dict[str, Any] | None, osm: dict[str, Any] | None, neighbors_total: int
+) -> dict[str, Any]:
+    """Подъезд к участку: дорога общего пользования у границы (НСПД «Сооружения» или OSM)
+    → плюс; дорог у границы нет, а соседи есть → риск «проезд через соседние участки:
+    проверить сервитут» (Андрей, Калининград: сервис писал «возможно, есть сервитут» там,
+    где его нет, а съезды есть у каждого участка)."""
+    roads: list[dict[str, Any]] = []
+    for r in (constructions or {}).get("roads") or []:
+        d = r.get("distance_m")
+        if d is not None and d <= ACCESS_ROAD_M:
+            roads.append(
+                {
+                    "label": "дорога по ЕГРН",
+                    "name": r.get("name"),
+                    "distance_m": d,
+                    "source": "НСПД «Сооружения»",
+                }
+            )
+    osm_ok = bool(osm) and not (osm or {}).get("error")
+    for el in (osm or {}).get("elements") or []:
+        tags = el.get("tags") or {}
+        hw = tags.get("highway")
+        d = el.get("distance_m")
+        if hw in ACCESS_HIGHWAYS and d is not None and d <= ACCESS_ROAD_M:
+            roads.append(
+                {
+                    "label": _HW_LABEL.get(hw, "дорога"),
+                    "name": tags.get("name") or tags.get("ref"),
+                    "distance_m": d,
+                    "source": "OpenStreetMap",
+                }
+            )
+    roads.sort(key=lambda r: r["distance_m"])
+    if roads:
+        names = ", ".join(
+            dict.fromkeys(
+                f"{r['label']}" + (f" «{r['name']}»" if r.get("name") else "") for r in roads
+            )
+        )
+        level, text = "plus", f"съезд с дороги общего пользования у границы есть: {names}"
+    elif not osm_ok and not (constructions or {}).get("items"):
+        level, text = "neutral", "подъезд по картам не определён: данные о дорогах не получены"
+    elif neighbors_total:
+        level, text = (
+            "risk",
+            "дорога общего пользования к границе участка по картам не подходит: проезд, "
+            "вероятно, через соседние участки — до сделки проверить сервитут или право "
+            "проезда (выписка ЕГРН, раздел 7 ГПЗУ), иначе к участку «никто не подъедет»",
+        )
+    else:
+        level, text = "neutral", "дорог у границы по картам нет; проверить подъезд на месте"
+    return {"level": level, "text": text, "roads": roads[:5], "source": SRC_ACCESS}
+
+
+def forest_summary(neighbors: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Смежность с землями лесного фонда (Андрей: участок граничит с лесфондом — 30 м от леса
+    не строить; раньше было наложение, лесфонд границу скорректировал). None — лесфонда
+    в ближнем круге нет."""
+    forest: list[tuple[float | None, str | None]] = []
+    for f in neighbors:
+        opts = (f.get("properties") or {}).get("options") or {}
+        cat = str(_get(opts, "land_record_category_type", default="") or "").lower()
+        if "лесного фонда" in cat:
+            forest.append((f.get("distance_m"), opts.get("cad_num")))
+    if not forest:
+        return None
+    known = [x for x in forest if x[0] is not None]
+    adjacent = [x for x in known if x[0] <= FOREST_ADJ_M]
+    if adjacent:
+        cads = ", ".join(c for _, c in adjacent[:3] if c)
+        return {
+            "level": "check",
+            "adjacent": True,
+            "count": len(adjacent),
+            "cad_nums": [c for _, c in adjacent if c],
+            "text": (
+                "граничит с землями лесного фонда"
+                + (f" ({cads})" if cads else "")
+                + ": дом ИЖС или садовый — не ближе 30 м к лесу (противопожарный разрыв); "
+                "запросить в лесничестве сведения о наложении границ лесфонда на участок — "
+                "по ЕГРН наложения не видно, но история корректировок границ в выписке "
+                "не отражается"
+            ),
+            "source": SRC_FOREST,
+            "law": SRC_SP_4,
+        }
+    nearest = min(known, key=lambda x: x[0]) if known else None
+    if nearest and nearest[0] <= FOREST_NEAR_M:
+        return {
+            "level": "neutral",
+            "adjacent": False,
+            "distance_m": nearest[0],
+            "cad_nums": [nearest[1]] if nearest[1] else [],
+            "text": (
+                f"земли лесного фонда в {nearest[0]:.0f} м: на участок по ЕГРН не накладываются; "
+                "при стройке у леса — отступ 30 м"
+            ),
+            "source": SRC_FOREST,
+            "law": SRC_SP_4,
+        }
+    return None
 
 
 # --- разделы «Вода» и «Негативные факторы» поверх сводки (ТЗ v2, М2.2–2.3) ----------------
@@ -920,7 +1068,7 @@ def slim_raw(raw: dict[str, Any], parcel_geojson: dict[str, Any] | None = None) 
             _with_distance(f, _KEEP_CONSTR_KEYS, parcel_geojson) for f in nspd["constructions"]
         ]
     nspd["neighbors"] = [
-        slim_feature(f, _KEEP_PLOT_KEYS, geometry=False) for f in nspd.get("neighbors") or []
+        _with_distance(f, _KEEP_PLOT_KEYS, parcel_geojson) for f in nspd.get("neighbors") or []
     ]
     nspd["auction"] = [
         slim_feature(f, _KEEP_PLOT_KEYS, geometry=False) for f in nspd.get("auction") or []
@@ -930,7 +1078,7 @@ def slim_raw(raw: dict[str, Any], parcel_geojson: dict[str, Any] | None = None) 
         slim_elements = []
         for el in osm["elements"]:
             tags = el.get("tags") or {}
-            if osm_class(tags) is None:
+            if osm_class(tags) is None and tags.get("highway") not in ACCESS_HIGHWAYS:
                 continue
             keep = {k: el.get(k) for k in ("type", "lat", "lon", "center") if el.get(k) is not None}
             g = _osm_geojson(el)

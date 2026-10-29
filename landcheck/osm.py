@@ -29,6 +29,7 @@ _QUERY = """
   nwr["amenity"="grave_yard"](around:{r},{lat},{lon});
   nwr["aeroway"="aerodrome"](around:{r},{lat},{lon});
   way["highway"~"^(motorway|trunk|primary)$"](around:{r},{lat},{lon});
+  way["highway"~"^(secondary|tertiary|unclassified|residential|service|track|living_street|road)$"](around:{ra},{lat},{lon});
   way["railway"="rail"](around:{r},{lat},{lon});
   way["power"="line"](around:{r},{lat},{lon});
   way["natural"="water"](around:{r},{lat},{lon});
@@ -59,15 +60,23 @@ def _query_mirror(url: str, query: str, timeout: float) -> dict[str, Any]:
     return {"elements": data.get("elements") or [], "url": url}
 
 
+ACCESS_RADIUS_M = 120  # малые дороги (подъезд) ищем только у самого участка
+
+
 def fetch_osm(
-    lat: float, lon: float, radius_m: int, *, timeout: float | None = None
+    lat: float,
+    lon: float,
+    radius_m: int,
+    *,
+    timeout: float | None = None,
+    access_radius_m: int = ACCESS_RADIUS_M,
 ) -> dict[str, Any]:
     """{"elements": [...]} или {"elements": [], "error": "..."} — без исключений наружу.
 
     Зеркала опрашиваются параллельно, берётся первый успешный ответ: последовательный перебор
     четырёх зеркал с таймаутами растягивал «Локацию» до 2–3 минут.
     """
-    query = _QUERY.format(r=int(radius_m), lat=lat, lon=lon)
+    query = _QUERY.format(r=int(radius_m), ra=int(access_radius_m), lat=lat, lon=lon)
     timeout = timeout or default_timeout()
     failures: list[str] = []
     pool = ThreadPoolExecutor(max_workers=len(OVERPASS_URLS), thread_name_prefix="overpass")

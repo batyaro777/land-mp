@@ -1017,6 +1017,8 @@ def report_location(request: Request, user: UserDep, check_id: int, cad_num: str
             "_location.html",
             loc=loc,
             terrain=data.get("terrain"),
+            rights=data.get("rights"),
+            gpzu=data.get("gpzu"),
             public=False,
             location_url=f"/checks/{check.id}/items/{cad_num}/location",
             region=data.get("region"),

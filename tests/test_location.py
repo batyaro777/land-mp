@@ -434,3 +434,73 @@ def test_fetch_osm_takes_first_successful_mirror(monkeypatch):
     res = osm.fetch_osm(55.0, 37.0, 3000, timeout=5)
     assert res["elements"] == [] and "OpenStreetMap" in res["error"]
     assert "overpass-api.de" in res["error_detail"] and "overpass-api.de" not in res["error"]
+
+
+def test_access_summary_road_at_border_vs_through_neighbors():
+    from landcheck.location import access_summary
+
+    nspd_road = {"roads": [{"name": "а/д Козельск—Вырск", "distance_m": 12}], "items": [1]}
+    a = access_summary(nspd_road, {"elements": []}, 5)
+    assert (
+        a["level"] == "plus" and "Козельск—Вырск" in a["text"] and a["roads"][0]["distance_m"] == 12
+    )
+    osm_street = {
+        "elements": [{"tags": {"highway": "residential", "name": "Приморская"}, "distance_m": 8}]
+    }
+    a = access_summary({"roads": [], "items": []}, osm_street, 5)
+    assert a["level"] == "plus" and "улица «Приморская»" in a["text"]
+    far = {"elements": [{"tags": {"highway": "residential"}, "distance_m": 140}]}
+    a = access_summary({"roads": [], "items": [1]}, far, 7)
+    assert a["level"] == "risk" and "сервитут" in a["text"] and a["roads"] == []
+    a = access_summary(None, {"elements": [], "error": "timeout"}, 7)
+    assert a["level"] == "neutral" and "не определён" in a["text"]
+    a = access_summary({"roads": [], "items": []}, {"elements": []}, 0)
+    assert a["level"] == "neutral" and "на месте" in a["text"]
+
+
+def test_forest_summary_adjacent_near_and_absent():
+    from landcheck.location import forest_summary
+
+    def nb(cat, dist, cad):
+        return {
+            "properties": {"options": {"land_record_category_type": cat, "cad_num": cad}},
+            "distance_m": dist,
+        }
+
+    adj = forest_summary(
+        [nb("Земли лесного фонда", 0.0, "39:17:0:1"), nb("Земли населенных пунктов", 0.0, "x")]
+    )
+    assert adj["adjacent"] and adj["level"] == "check" and "30 м" in adj["text"]
+    assert "39:17:0:1" in adj["text"] and "СП 4.13130" in adj["law"]
+    near = forest_summary([nb("Земли лесного фонда", 60.0, "39:17:0:1")])
+    assert near["adjacent"] is False and near["distance_m"] == 60.0 and near["level"] == "neutral"
+    assert forest_summary([nb("Земли лесного фонда", 300.0, "y")]) is None
+    assert forest_summary([nb("Земли населенных пунктов", 0.0, "x")]) is None
+
+
+def test_location_summary_includes_access_and_forest(fixtures_dir):
+    from landcheck.location import summarize_location
+
+    raw = {
+        "nspd": {
+            "neighbors": [
+                {
+                    "properties": {
+                        "options": {
+                            "land_record_category_type": "Земли лесного фонда",
+                            "cad_num": "50:09:0:7",
+                        }
+                    },
+                    "distance_m": 1.0,
+                }
+            ],
+            "constructions": [],
+            "zouit": [],
+            "pmt": [],
+        },
+        "osm": {"elements": []},
+    }
+    loc = summarize_location(
+        raw, parcel_geojson=None, cad_num="50:09:0:1", category=None, cost_index=None
+    )
+    assert loc["forest"]["adjacent"] and loc["access"]["level"] == "risk"

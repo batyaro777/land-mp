@@ -147,3 +147,12 @@ def test_gpzu_of_picks_gpzu_document_and_keeps_filename():
     out = materials.gpzu_of(docs)
     assert out["document"] == "gpzu.pdf" and out["zone_code"] == "Ж-4"
     assert materials.gpzu_of(docs[:1]) is None
+
+
+def test_public_servitudes_section_7():
+    assert gpzu.parse(GPZU_TEXT).public_servitudes is False
+    with_serv = GPZU_TEXT.replace(
+        "7. Информация о границах публичных сервитутов\nотсутствуют",
+        "7. Информация о границах публичных сервитутов\nПубличный сервитут для прохода и проезда (реестровый номер 39:00-6.900)\n1 354512.11 1182011.45",
+    )
+    assert gpzu.parse(with_serv).public_servitudes is True

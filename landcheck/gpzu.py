@@ -129,6 +129,7 @@ class Gpzu:
     coverage_pct: str | None = None
     zouit: list[dict[str, str | None]] = field(default_factory=list)
     red_lines: bool | None = None
+    public_servitudes: bool | None = None
     code_notes: list[str] = field(default_factory=list)
     sections: list[str] = field(default_factory=list)
     text_len: int = 0
@@ -312,6 +313,12 @@ def parse(text: str) -> Gpzu:
         g.height = _param(b, r"высот\w*[^\n]{0,80}?(\d{1,3}(?:[.,]\d)?\s*м(?:етр\w*)?)(?![а-яё])")
         g.coverage_pct = _param(b, r"процент\w*\s+застройки[^\d\n]{0,80}?(\d{1,3}\s*%?)")
     g.zouit = _zouit([secs.get("5", ""), secs.get("6", "")])
+    if "7" in secs:
+        b = secs["7"].lower()
+        if re.search(r"отсутств|не установлен|не предусмотр|нет\b", b):
+            g.public_servitudes = False
+        elif re.search(r"\d+[.,]\d{2}\s+\d+[.,]\d{2}|сервитут", b.split("\n", 1)[-1]):
+            g.public_servitudes = True
     if "11" in secs:
         b = secs["11"].lower()
         if re.search(r"отсутств|не установлен|не предусмотр|нет", b):
