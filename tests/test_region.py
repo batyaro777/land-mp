@@ -72,7 +72,7 @@ def test_region_block_in_report(client, monkeypatch):  # noqa: F811
     # без ключа: плейсхолдера нет, прямой запрос честно говорит, что модуль выключен
     monkeypatch.setattr(settings, "gemini_api_key", None)
     report = client.get(url + "/items/50:09:0060202:101").text
-    assert "/region" not in report
+    assert '/region"' not in report
     block = client.get(url + "/items/50:09:0060202:101/region").text
     assert "модуль выключен" in block
     # с ключом и подменённым исследованием: блок рендерится и сохраняется

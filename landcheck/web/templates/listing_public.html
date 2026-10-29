@@ -12,6 +12,7 @@
 <p><span class="badge v-ok">право подтверждено {{ row.verified_at|day }}</span>
   <span class="badge">{{ PROOF_KINDS[row.proof_kind].split(':')[0] if row.proof_kind else 'документ проверен' }}</span>
   <span class="badge">текст сверен с кадастром</span></p>
+{% if d.gpzu %}<p class="small"><span class="badge v-ok">ГПЗУ приложен</span>{% if d.gpzu.issued %} от {{ d.gpzu.issued }}{% endif %}{% if d.gpzu.zone_code %}: зона {{ d.gpzu.zone_code }}{% endif %}{% if d.gpzu.vri_main %}; основные ВРИ: {{ d.gpzu.vri_main|join('; ')|truncate(160) }}{% endif %}.</p>{% endif %}
 <div class="grid two">
 <article>
   <h3>{{ d.price_rub|money if d.price_rub else 'Цена по запросу' }}{% if card.price_per_sotka %} <small class="muted">· {{ card.price_per_sotka|money }} за сотку</small>{% endif %}</h3>

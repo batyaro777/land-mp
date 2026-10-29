@@ -92,6 +92,45 @@
 </article>
 {% endif %}
 
+{% if p.found %}
+<article class="gpzu" id="gpzu">
+  {% set g = gpzu %}
+  <h4>ГПЗУ — градостроительный план участка{% if g %} <span class="badge v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[g.level or 'ок'] }}">ГПЗУ приложен</span>{% else %} <span class="badge">не приложен</span>{% endif %}</h4>
+  {% if g %}
+  <p class="small">{% if g.number %}№ {{ g.number }}{% endif %}{% if g.issued %} от {{ g.issued }}{% endif %}{% if g.issuer %}, выдан: {{ g.issuer }}{% endif %}{% if g.document %} <span class="muted">(файл {{ g.document }})</span>{% endif %}. Разобрано автоматически по текстовому слою — сверяйте с документом.</p>
+  <table class="facts">
+    <tr><th>Территориальная зона</th><td>{% if g.zone_code %}<b>{{ g.zone_code }}</b>{% if g.zone_name %} — {{ g.zone_name }}{% endif %}{% else %}не прочитана{% endif %}{% if g.pzz_act %}<div class="muted small">{{ g.pzz_act|truncate(220) }}</div>{% endif %}</td></tr>
+    <tr><th>Основные ВРИ зоны</th><td>{% if g.vri_main %}{{ g.vri_main|join('; ') }}{% else %}не прочитаны{% endif %}</td></tr>
+    {% if g.vri_conditional %}<tr><th>Условно разрешённые</th><td class="small">{{ g.vri_conditional|join('; ') }}</td></tr>{% endif %}
+    {% if g.vri_aux %}<tr><th>Вспомогательные</th><td class="small">{{ g.vri_aux|join('; ') }}</td></tr>{% endif %}
+    <tr><th>Предельные параметры</th><td>{% if g.setbacks %}отступы от границ: {{ g.setbacks }}{% endif %}{% if g.floors %}; этажность: {{ g.floors }}{% endif %}{% if g.height %}; высота: {{ g.height }}{% endif %}{% if g.coverage_pct %}; процент застройки: {{ g.coverage_pct }}{% endif %}{% if not (g.setbacks or g.floors or g.height or g.coverage_pct) %}не прочитаны (раздел 2.3){% endif %}</td></tr>
+    <tr><th>ЗОУИТ по ГПЗУ</th><td>{% if g.zouit %}{% for z in g.zouit %}{{ z.name }}{% if z.reg_number %} <span class="muted small">{{ z.reg_number }}</span>{% endif %}{% if not loop.last %}; {% endif %}{% endfor %}{% else %}в разделах 5–6 не найдены{% endif %}</td></tr>
+    {% if g.red_lines is not none %}<tr><th>Красные линии</th><td>{{ 'есть — смотреть чертёж' if g.red_lines else 'отсутствуют' }}</td></tr>{% endif %}
+    {% for n in g.code_notes %}<tr><th>Примечание о ВРИ</th><td class="small">{{ n }}</td></tr>{% endfor %}
+  </table>
+  <table class="facts goal-table">
+    {% for r in g.compare %}<tr><th>{{ r.field }}</th><td><span class="badge mini v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[r.level] }}">{{ r.level }}</span> {{ r.text }}</td></tr>{% endfor %}
+  </table>
+  {% else %}
+  <p class="small">ГПЗУ — единственный документ, где администрация прямо пишет территориальную зону, основные и условно разрешённые ВРИ, отступы, этажность и все ЗОУИТ с реестровыми номерами. По нему строят и получают уведомление о строительстве.</p>
+  {% endif %}
+  {% if not public %}
+  <details {% if not g %}open{% endif %}>
+    <summary class="small">{{ 'Заменить ГПЗУ' if g else 'Приложить ГПЗУ' }} (PDF с текстовым слоем или вставленный текст)</summary>
+    <form method="post" action="{{ gpzu_url }}" enctype="multipart/form-data">
+      <input type="file" name="files" multiple accept=".pdf,.txt">
+      <textarea name="text" rows="4" placeholder="Или вставьте текст ГПЗУ целиком (Ctrl+A, Ctrl+C из PDF)"></textarea>
+      <button class="sm">Разобрать ГПЗУ и сверить с НСПД</button>
+    </form>
+    {% if err == 'gpzu' %}<p class="err small">Это не ГПЗУ: не нашёл заголовка «Градостроительный план земельного участка» и раздела 2.2 о видах разрешённого использования.</p>{% endif %}
+    {% if err == 'gpzu_scan' %}<p class="err small">PDF без текстового слоя (скан). Нужен электронный ГПЗУ с Госуслуг или текст, распознанный из скана.</p>{% endif %}
+    {% if err == 'gpzu_cad' %}<p class="err small">ГПЗУ выдан на другой кадастровый номер — к этому участку не приложен.</p>{% endif %}
+    <p class="muted small">Как получить: {{ gpzu_howto }}. Файл не сохраняется, только разобранные поля.</p>
+  </details>
+  {% endif %}
+</article>
+{% endif %}
+
 {% if not p.found %}
 <article>
 {% if p.errors %}
@@ -160,6 +199,37 @@
     {% if ex.get('legal_act_document_name') %}<p class="muted small">Основание: {{ ex.get('legal_act_document_name') }} № {{ ex.get('legal_act_document_number') }} от {{ ex.get('legal_act_document_date') }}, {{ ex.get('legal_act_document_issuer') }}</p>{% endif %}
   </details>
   {% endfor %}
+</article>
+{% endif %}
+
+{% if p.found and pzz %}
+<article class="pzz">
+  <h4>Где смотреть ПЗЗ и что стоит подключение сетей</h4>
+  <div class="grid two">
+  <div>
+    <strong>Правила землепользования и застройки</strong>
+    {% if pzz.municipal %}
+    <p class="small">{{ pzz.municipal.name }}{% if pzz.municipal.act %} — {{ pzz.municipal.act }}{% endif %}.</p>
+    <ul class="small">{% for l in pzz.municipal.links %}<li><a href="{{ l.url }}" target="_blank" rel="noopener">{{ l.title }}</a>{% if not l.verified %} <span class="muted">(адрес не проверен роботом{% if l.note %}: {{ l.note }}{% endif %})</span>{% endif %}</li>{% endfor %}</ul>
+    {% else %}<p class="small muted">Для этого муниципалитета прямой ссылки в реестре Land-MP нет — ищем на сайте администрации и во ФГИС ТП.</p>{% endif %}
+    {% if pzz.regional %}<ul class="small">{% for l in pzz.regional %}<li>{{ pzz.region }}: <a href="{{ l.url }}" target="_blank" rel="noopener">{{ l.title }}</a>{% if not l.verified %} <span class="muted">(не проверено{% if l.note %}: {{ l.note }}{% endif %})</span>{% endif %}</li>{% endfor %}</ul>{% endif %}
+    <ul class="small">{% for l in pzz.federal %}<li><a href="{{ l.url }}" target="_blank" rel="noopener">{{ l.title }}</a>{% if l.note %} <span class="muted">({{ l.note }})</span>{% endif %}</li>{% endfor %}{% if pzz.search_url %}<li><a href="{{ pzz.search_url }}" target="_blank" rel="noopener">Поиск карты ПЗЗ по адресу участка</a></li>{% endif %}</ul>
+    <p class="muted small">Реестр ссылок проверен {{ pzz.checked }}. Действующую редакцию ПЗЗ сверять на странице муниципалитета.</p>
+  </div>
+  <div>
+    <strong>Электричество, до 15 кВт</strong>
+    {% if power.region and power.region.rate_rub_kw %}
+    <p class="small"><b>{{ '{:,.0f}'.format(power.region.rate_rub_kw).replace(',', ' ') }} ₽/кВт</b> — за 15 кВт ≈ {{ '{:,.0f}'.format(power.region.cost_15kw_rub).replace(',', ' ') }} ₽ ({{ power.region.act }}; сети: {{ power.region.grid }}).{% if power.region.note %} {{ power.region.note|ucfirst }}.{% endif %}</p>
+    {% elif power.region %}
+    <p class="small">Ставка региона на 2026 год: {{ power.region.act }}. Сети: {{ power.region.grid }}.{% if power.region.note %} {{ power.region.note|ucfirst }}.{% endif %}</p>
+    {% else %}<p class="small muted">Ставки этого региона в реестре нет — запросить расчёт у сетевой организации.</p>{% endif %}
+    <p class="muted small">{{ power.note }} Льготные категории граждан: {{ power.preferential_rub_kw }} ₽/кВт. Источники: {% for s_ in power.sources %}<a href="{{ s_.url }}" target="_blank" rel="noopener">{{ s_.title|truncate(60) }}</a>{% if not loop.last %}; {% endif %}{% endfor %}. Проверено {{ power.checked }}.</p>
+    <strong>Газ — {{ gas.title|lower }}</strong>
+    <p class="small">{{ gas.text }}</p>
+    <ul class="small">{% for l in gas.links %}<li><a href="{{ l.url }}" target="_blank" rel="noopener">{{ l.title }}</a></li>{% endfor %}</ul>
+    <p class="muted small">{{ gas.operator }}. Основание: {{ gas.acts }}{% if not gas.acts_verified %} (реквизиты актов по памяти, сверить){% endif %}.</p>
+  </div>
+  </div>
 </article>
 {% endif %}
 

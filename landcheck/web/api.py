@@ -112,6 +112,14 @@ def item_json(check: Check, it: CheckItem) -> dict[str, Any]:
             if d.get("rights")
             else None
         ),
+        "gpzu": (
+            {
+                k: (d.get("gpzu") or {}).get(k)
+                for k in ("number", "issued", "zone_code", "codes_main", "level", "zouit")
+            }
+            if d.get("gpzu")
+            else None
+        ),
         "report_url": f"{_base()}/checks/{check.id}/items/{it.cad_num}",
         "public_url": f"{_base()}/r/{it.token}" if it.token else None,
     }

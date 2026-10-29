@@ -68,6 +68,7 @@
   {% endif %}
   {% if d.skipped_proofs %}<p class="small err">Не приняты файлы: {{ d.skipped_proofs|join(', ') }}</p>{% endif %}
   {% if d.proof_check and row.status != 'draft' %}{% include "_proof_check.html" %}{% endif %}
+  {% if d.gpzu %}<p class="small"><span class="badge v-ok">ГПЗУ приложен</span> {% if d.gpzu.number %}№ {{ d.gpzu.number }}{% endif %}{% if d.gpzu.issued %} от {{ d.gpzu.issued }}{% endif %}{% if d.gpzu.zone_code %}: зона {{ d.gpzu.zone_code }}{% if d.gpzu.zone_name %} — {{ d.gpzu.zone_name|truncate(80) }}{% endif %}{% endif %}{% if d.gpzu.vri_main %}; основные ВРИ: {{ d.gpzu.vri_main|join('; ')|truncate(200) }}{% endif %}{% if d.gpzu.zouit %}; ЗОУИТ: {{ d.gpzu.zouit|length }}{% endif %}.</p>{% endif %}
 </article>
 {% if d.intake %}
 {% set it = d.intake %}

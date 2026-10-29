@@ -644,3 +644,37 @@ def test_report_shows_classifier_code_row(client: TestClient):
     assert "Нельзя:" in agri and "ЗК РФ ст. 77" in agri
     izhs = client.get(url + "/items/50:09:0060202:101").text
     assert "<b>2.1</b>" in izhs and "код подобран по смыслу" not in izhs
+
+
+def test_gpzu_form_parses_compares_and_marks_item(client: TestClient):
+    from landcheck.web.db import CheckItem, session
+    from tests.test_gpzu import GPZU_TEXT
+
+    login(client)
+    r = client.post("/checks", data={"numbers": "50:09:0060202:101"})
+    url = r.headers["location"]
+    item = url + "/items/50:09:0060202:101"
+    page = client.get(item).text
+    assert 'id="gpzu"' in page and "не приложен" in page and "Как получить" in page
+    assert "Где смотреть ПЗЗ" in page and "fgistp" in page and "connectgas.ru" in page
+    assert "23 860 ₽/кВт" in page or "23 859" in page  # МО: ставка 2026
+    # не ГПЗУ → ошибка; ГПЗУ на другой участок → ошибка
+    r = client.post(item + "/gpzu", data={"text": "Выписка из ЕГРН об объекте недвижимости"})
+    assert r.headers["location"].endswith("?err=gpzu#gpzu")
+    assert "Это не ГПЗУ" in client.get(r.headers["location"]).text
+    r = client.post(item + "/gpzu", data={"text": GPZU_TEXT})
+    assert r.headers["location"].endswith("?err=gpzu_cad#gpzu")
+    # ГПЗУ на этот участок: зона Ж-4 против Ж-1 в НСПД → проверить, ЗОУИТ новые
+    text = GPZU_TEXT.replace("39:17:010012:45", "50:09:0060202:101")
+    r = client.post(item + "/gpzu", data={"text": text})
+    assert r.status_code == 303 and r.headers["location"].endswith("#gpzu")
+    page = client.get(item).text
+    assert "ГПЗУ приложен" in page and "РФ-39-2-04-0-00-2026-0117" in page
+    assert "<b>Ж-4</b>" in page and "в ГПЗУ зона Ж-4, в НСПД Ж-1" in page
+    assert "входит в основные виды зоны" in page and "39.00.2.44" in page
+    with session() as db:
+        it = db.scalar(select(CheckItem).where(CheckItem.cad_num == "50:09:0060202:101"))
+        assert it.verdict == "проверить" and it.data["gpzu"]["zone_code"] == "Ж-4"
+        assert [f for f in it.data["flags"] if f["rule_id"] == "R20"][0]["level"] == "проверить"
+    table = client.get(url).text
+    assert 'title="ГПЗУ приложен: зона Ж-4"' in table

@@ -114,3 +114,6 @@ table.facts.neighbors .num { white-space: nowrap; text-align: right; }
 table.results td.cad { white-space: nowrap; }
 article.rights { border-left: 4px solid #8a5a00; }
 article.rights textarea { font-size: 0.85em; }
+article.gpzu { border-left: 4px solid #2E75B6; }
+article.gpzu textarea { font-size: 0.85em; }
+article.pzz ul { margin: 0.2em 0 0.6em 1.1em; }

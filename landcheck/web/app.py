@@ -23,7 +23,7 @@ from fastapi.templating import Jinja2Templates
 from markupsafe import Markup, escape
 from sqlalchemy import func, select
 
-from landcheck import __version__, rights
+from landcheck import __version__, gpzu, intake, pzz, rights
 from landcheck.actions import action_plan
 from landcheck.export import DISCLAIMER, to_csv, to_markdown, to_xlsx
 from landcheck.inputs import CAD_RE, load_listings, parse_csv, parse_xlsx
@@ -797,6 +797,12 @@ def _report_ctx(check: Check, item: CheckItem, public: bool) -> dict[str, Any]:
             (data.get("parcel") or {}).get("permitted_use"),
             (data.get("parcel") or {}).get("permitted_use_tab"),
         ),
+        "gpzu": data.get("gpzu"),
+        "gpzu_url": f"/checks/{check.id}/items/{item.cad_num}/gpzu",
+        "gpzu_howto": gpzu.ORDER_HOWTO,
+        "pzz": pzz.links_for(data.get("parcel") or {}),
+        "power": pzz.electricity_for(data.get("parcel") or {}),
+        "gas": pzz.gas_info(),
         "plan": action_plan(data),
         "price": price_orientation(data, (check.stats or {}).get("median_price_per_sotka")),
         "price_pos": price_position(data, median),
@@ -900,6 +906,67 @@ async def report_rights(
         _recount(check)
         db.commit()
     return RedirectResponse(back + "#rights", status_code=303)
+
+
+@router.post("/checks/{check_id}/items/{cad_num}/gpzu")
+async def report_gpzu(
+    request: Request,
+    user: UserDep,
+    check_id: int,
+    cad_num: str,
+    text: Annotated[str, Form()] = "",
+    files: Annotated[list[UploadFile] | None, File()] = None,
+):
+    """ГПЗУ к участку: PDF с текстовым слоем или вставленный текст → разбор, сверка с НСПД, R20.
+    Файл не сохраняем, только разобранные поля (ТЗ v3, п. 3)."""
+    from landcheck.scoring import score as score_of
+    from landcheck.web import materials
+
+    uploads = await materials.materials_from_uploads(files)
+    candidates: list[gpzu.Gpzu] = []
+    scan_only = False
+    for m in uploads:
+        if m.kind == "pdf":
+            m.text = intake.pdf_text(m.raw)
+            if not m.text.strip():
+                scan_only = True
+                continue
+            candidates.append(gpzu.parse(m.text))
+        elif m.kind in ("txt", "docx", "other") and m.raw[:4] != b"%PDF":
+            try:
+                candidates.append(gpzu.parse(m.raw.decode("utf-8", "ignore")))
+            except Exception:  # noqa: BLE001 — чужой файл не должен валить запрос
+                continue
+    if text.strip():
+        candidates.append(gpzu.parse(text))
+    parsed = [g for g in candidates if g.is_gpzu]
+    back = f"/checks/{check_id}/items/{cad_num}"
+    if not parsed:
+        err = "gpzu_scan" if scan_only and not text.strip() else "gpzu"
+        return RedirectResponse(back + f"?err={err}#gpzu", status_code=303)
+    g = max(parsed, key=lambda x: x.filled)
+    if g.cad_num and g.cad_num != cad_num:
+        return RedirectResponse(back + "?err=gpzu_cad#gpzu", status_code=303)
+    with session() as db:
+        check = _own_check(db, user, check_id)
+        item = db.scalar(
+            select(CheckItem).where(CheckItem.check_id == check.id, CheckItem.cad_num == cad_num)
+        )
+        if item is None:
+            raise HTTPException(404)
+        db.refresh(item)
+        data = gpzu.apply_to_item(dict(item.data), g)
+        try:
+            data["score"] = score_of(result_from_dict(data), request_from_dict(check.request))
+        except Exception as exc:  # noqa: BLE001 — оценка не должна ломать сохранение
+            log.warning("gpzu: score: %s", exc)
+        item.data = data
+        item.verdict = data["verdict"]
+        item.score = float(data.get("score") or item.score)
+        db.flush()
+        _recount(check)
+        db.commit()
+    return RedirectResponse(back + "#gpzu", status_code=303)
 
 
 @router.get("/r/{token}", response_class=HTMLResponse)
@@ -1388,7 +1455,12 @@ async def listing_create(
                     category=pf.category,
                     permitted_use=pf.permitted_use,
                 )
-                row.data = {**row.data, "proof_check": check, "proof_files": saved}
+                row.data = {
+                    **row.data,
+                    "proof_check": check,
+                    "proof_files": saved,
+                    "gpzu": materials.gpzu_of(taken.documents),
+                }
         row.data = _compose_with_ai(dict(row.data))
         db.commit()
         listing_id = row.id
@@ -1634,6 +1706,7 @@ async def listing_verify(
         data = dict(row.data)
         data["skipped_proofs"] = skipped
         data["proof_check"] = _proof_check(row, user, proof_kind, docs=docs)
+        data["gpzu"] = materials.gpzu_of(docs) or data.get("gpzu")
         row.data = data
         db.commit()
     return RedirectResponse(f"/listing/{listing_id}", status_code=303)

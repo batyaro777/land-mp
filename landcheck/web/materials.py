@@ -14,7 +14,7 @@ from typing import Any
 
 from fastapi import UploadFile
 
-from landcheck import egrn, egrn_xml, intake, sig
+from landcheck import egrn, egrn_xml, gpzu, intake, sig
 from landcheck.web.config import settings
 
 log = logging.getLogger(__name__)
@@ -207,3 +207,19 @@ def proof_check(
     res["source"] = ex.source
     res["document"] = doc.name
     return res
+
+
+def gpzu_of(docs: list[intake.Material]) -> dict[str, Any] | None:
+    """ГПЗУ среди документов объявления: лучший по числу прочитанных полей, с именем файла."""
+    best: tuple[int, gpzu.Gpzu, str] | None = None
+    for m in docs:
+        if m.kind != "pdf" or not m.text.strip():
+            continue
+        g = gpzu.parse(m.text)
+        if g.is_gpzu and (best is None or g.filled > best[0]):
+            best = (g.filled, g, m.name)
+    if best is None:
+        return None
+    out = best[1].to_dict()
+    out["document"] = best[2]
+    return out
