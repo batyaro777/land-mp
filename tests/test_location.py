@@ -529,3 +529,49 @@ def test_access_track_only_is_not_public_road_and_resort_zone_is_wide():
     )
     g = summarize_zouit(None, [resort])[0]
     assert g["wide"] is True
+
+
+def test_free_land_lists_public_neighbors_with_howto():
+    from landcheck.location import free_land
+
+    def nb(
+        cad, own, cat, vri="Для ведения личного подсобного хозяйства", dist=50.0, status="Учтенный"
+    ):
+        return {
+            "properties": {
+                "options": {
+                    "cad_num": cad,
+                    "ownership_type": own,
+                    "land_record_category_type": cat,
+                    "permitted_use_established_by_document": vri,
+                    "specified_area": 1500,
+                    "status": status,
+                }
+            },
+            "distance_m": dist,
+        }
+
+    agri, sett = "Земли сельскохозяйственного назначения", "Земли населенных пунктов"
+    neighbors = [
+        nb("50:09:0:1", "Собственность публично-правовых образований", sett),
+        nb("50:09:0:2", "Частная собственность", sett),
+        nb("50:09:0:3", "Муниципальная", agri, vri="сенокошение", dist=10.0),
+        nb(
+            "50:09:0:4",
+            "Муниципальная",
+            sett,
+            vri="земельные участки (территории) общего пользования",
+        ),
+        nb("50:09:0:5", "Государственная собственность", sett, status="Архивный"),
+        nb("50:09:0:9", "Муниципальная", sett, dist=400.0),
+    ]
+    fl = free_land("50:09:0:9", neighbors, [nb("50:09:0:1", "Муниципальная", sett)])
+    assert fl["total"] == 2 and [i["cad_num"] for i in fl["items"]] == ["50:09:0:3", "50:09:0:1"]
+    assert fl["on_auction"] == 1 and fl["items"][1]["on_auction"] is True
+    titles = [h["title"] for h in fl["howto"]]
+    assert titles == [
+        "Сельхозземля у муниципалитета: как оформить",
+        "Участок в населённом пункте у муниципалитета: как оформить",
+    ]
+    assert "39.18" in fl["howto"][1]["source"] and "101-ФЗ" in fl["howto"][0]["source"]
+    assert free_land("x", [], [])["total"] == 0 and free_land("x", [], [])["howto"] == []

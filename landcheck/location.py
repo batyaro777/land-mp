@@ -609,6 +609,7 @@ def summarize_location(
         "price": price_reference(neighbors, listing_price_rub, area_m2),
         "osm": summarize_osm(parcel_geojson, (osm or {}).get("elements") or []) if osm else None,
         "osm_error": (osm or {}).get("error") if osm else "OSM не запрашивался",
+        "free_land": free_land(cad_num, nspd.get("neighbors") or [], nspd.get("auction") or []),
         "access": access_summary(
             summarize_constructions(parcel_geojson, nspd.get("constructions")),
             osm,
@@ -781,6 +782,121 @@ def forest_summary(neighbors: list[dict[str, Any]]) -> dict[str, Any] | None:
             "law": SRC_SP_4,
         }
     return None
+
+
+# --- «Свободная земля рядом» (ТЗ v3, п. 8, этап 1; внутренний режим) ------------------------
+_PUBLIC_OWN = ("публичн", "государств", "муниципальн", "не разграничен", "федеральн")
+FREE_LAND_MAX = 30
+SRC_FREE = (
+    "НСПД, соседние участки с публичной формой собственности (аренда в НСПД не видна — "
+    "«свободен или давно в аренде» решает выписка ЕГРН)"
+)
+HOWTO_AGRI = {
+    "title": "Сельхозземля у муниципалитета: как оформить",
+    "steps": [
+        "Выписка ЕГРН на участок: нет ли уже аренды (НСПД её не показывает) — п. «Права»",
+        "КФХ или сельхозорганизация: аренда без торгов по 101-ФЗ ст. 10 п. 8 — заявление, "
+        "администрация публикует извещение на 30 дней; других заявок нет → договор без торгов, "
+        "есть → аукцион",
+        "Гражданин под ЛПХ/КФХ: ЗК РФ ст. 39.18 — тот же порядок с извещением",
+        "Через 3 года надлежащего использования арендатор выкупает без торгов (101-ФЗ ст. 10 п. 4)",
+        "Если участка как объекта нет — схема расположения и предварительное согласование "
+        "(ЗК РФ ст. 39.15), межевание за счёт заявителя",
+    ],
+    "source": "101-ФЗ от 24.07.2002 ст. 10; ЗК РФ ст. 39.15, 39.18",
+}
+HOWTO_SETTLEMENT = {
+    "title": "Участок в населённом пункте у муниципалитета: как оформить",
+    "steps": [
+        "Выписка ЕГРН: аренда, сервитут, арест — п. «Права»",
+        "Гражданин под ИЖС, ЛПХ, садоводство: ЗК РФ ст. 39.18 — заявление о предварительном "
+        "согласовании, извещение 30 дней; нет других заявок → без торгов, есть → аукцион "
+        "(ст. 39.11–39.12)",
+        "Юрлицо или иная цель — аукцион по ст. 39.11 (администрация или сам заявитель "
+        "инициирует торги)",
+        "Проверить, не выделен ли участок по проекту межевания льготникам (многодетные, "
+        "ветераны) — см. «Что здесь планируют строить»",
+    ],
+    "source": "ЗК РФ ст. 39.11–39.12, 39.15, 39.18",
+}
+HOWTO_OTHER = {
+    "title": "Публичный участок иной категории: как оформить",
+    "steps": [
+        "Выписка ЕГРН на участок и запрос в администрацию о свободности и назначении",
+        "Общий порядок — аукцион (ЗК РФ ст. 39.11) или без торгов по основаниям ст. 39.3 и 39.6",
+        "Земли лесного фонда и водного фонда в частную собственность не передаются",
+    ],
+    "source": "ЗК РФ ст. 39.3, 39.6, 39.11",
+}
+
+
+def _is_public(own: str) -> bool:
+    lo = own.lower()
+    return any(k in lo for k in _PUBLIC_OWN)
+
+
+def free_land(
+    target_cad_num: str, neighbors: list[dict[str, Any]], auction: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Публичные (муниципальные, неразграниченные, государственные) участки рядом, которые по
+    НСПД можно просить у администрации: минус участок самой проверки, минус выставленные на
+    аукцион, минус земли общего пользования и архивные. Аренду НСПД не показывает — поэтому
+    каждая строка «свободен или в аренде: проверить выпиской» (Андрей, Влад: «сервис, который
+    находит никем не занятые участки»)."""
+    on_auction = {
+        ((f.get("properties") or {}).get("options") or {}).get("cad_num") for f in auction
+    }
+    items: list[dict[str, Any]] = []
+    for f in neighbors:
+        opts = (f.get("properties") or {}).get("options") or {}
+        cad = opts.get("cad_num")
+        if not cad or cad == target_cad_num:
+            continue
+        own = str(_get(opts, "ownership_type", default="") or "")
+        if not _is_public(own):
+            continue
+        vri = str(_get(opts, "permitted_use_established_by_document", default="") or "")
+        status = str(_get(opts, "status", default="") or "")
+        if "общего пользования" in vri.lower() or "архив" in status.lower():
+            continue
+        area = _get(opts, "specified_area", "declared_area", "area", "land_record_area")
+        items.append(
+            {
+                "cad_num": cad,
+                "category": _get(opts, "land_record_category_type"),
+                "vri": vri or None,
+                "area_m2": float(area) if isinstance(area, (int, float)) else None,
+                "ownership": own,
+                "status": status or None,
+                "distance_m": f.get("distance_m"),
+                "on_auction": cad in on_auction,
+            }
+        )
+    items.sort(key=lambda i: (i["distance_m"] is None, i["distance_m"] or 0))
+    cats: dict[str, int] = {}
+    for i in items:
+        c = str(i.get("category") or "категория не указана")
+        cats[c] = cats.get(c, 0) + 1
+    howto = []
+    if any("сельскохоз" in c.lower() for c in cats):
+        howto.append(HOWTO_AGRI)
+    if any("населенных пунктов" in c.lower() or "населённых пунктов" in c.lower() for c in cats):
+        howto.append(HOWTO_SETTLEMENT)
+    if any(
+        "сельскохоз" not in c.lower()
+        and "населенных" not in c.lower()
+        and "населённых" not in c.lower()
+        for c in cats
+    ):
+        howto.append(HOWTO_OTHER)
+    return {
+        "total": len(items),
+        "on_auction": sum(1 for i in items if i["on_auction"]),
+        "items": items[:FREE_LAND_MAX],
+        "categories": sorted(cats.items(), key=lambda kv: -kv[1]),
+        "howto": howto,
+        "source": SRC_FREE,
+    }
 
 
 # --- разделы «Вода» и «Негативные факторы» поверх сводки (ТЗ v2, М2.2–2.3) ----------------

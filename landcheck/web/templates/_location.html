@@ -135,6 +135,31 @@
   </div>
   </div>
 
+  {% set fl = loc.free_land if loc.free_land is defined else none %}
+  {% if fl and user is defined and user and user.is_admin %}
+  <details class="free-land">
+    <summary><strong>Свободная земля рядом</strong> <span class="badge mini">внутренний режим</span> — публичных участков в {{ loc.radius_m.neighbors }} м: {{ fl.total }}{% if fl.on_auction %}, из них на аукционе {{ fl.on_auction }}{% endif %}</summary>
+    {% if fl['items'] %}
+    <table class="facts">
+      <tr><th>Участок</th><th>Категория · ВРИ</th><th class="num">Площадь</th><th>Собственность · статус</th><th class="num">До участка</th></tr>
+      {% for i in fl['items'] %}
+      <tr><td><code>{{ i.cad_num }}</code>{% if i.on_auction %} <span class="badge mini v-check">аукцион</span>{% endif %}</td>
+        <td class="small">{{ i.category|short_category if i.category else '—' }}{% if i.vri %} · {{ i.vri|truncate(60) }}{% endif %}</td>
+        <td class="num">{% if i.area_m2 %}{{ (i.area_m2 / 100)|round(1) }} сот.{% else %}—{% endif %}</td>
+        <td class="small">{{ i.ownership|truncate(28) }}{% if i.status %} · {{ i.status }}{% endif %}</td>
+        <td class="num">{% if i.distance_m is not none %}{{ i.distance_m }} м{% else %}—{% endif %}</td></tr>
+      {% endfor %}
+    </table>
+    {% else %}<p class="muted small">Публичных участков рядом в НСПД нет (или форма собственности у соседей не указана).</p>{% endif %}
+    {% for h in fl.howto %}
+    <p class="small" style="margin-top:0.6rem"><strong>{{ h.title }}</strong></p>
+    <ol class="small">{% for st in h.steps %}<li>{{ st }}</li>{% endfor %}</ol>
+    <p class="muted small">Основание: {{ h.source }}.</p>
+    {% endfor %}
+    <p class="muted small">{{ fl.source }}. Этап 1 модуля «Свободная земля» (ТЗ v3, п. 8): без проектов межевания администрации и без фильтра по региону — только ближний круг участка.</p>
+  </details>
+  {% endif %}
+
   {% set n = loc.neighbors %}
   <strong>Ориентир стоимости по соседям</strong>
   {% if n.total %}
