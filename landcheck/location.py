@@ -172,6 +172,12 @@ def _feature_distance(
     return None
 
 
+def _wide_zone(type_zone: str, name: str) -> bool:
+    from landcheck.rules.catalog import is_wide_zone
+
+    return is_wide_zone(type_zone, name)
+
+
 def summarize_zouit(
     parcel_geojson: dict[str, Any] | None, features: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -179,9 +185,9 @@ def summarize_zouit(
     groups: dict[str, dict[str, Any]] = {}
     for f in features:
         opts = (f.get("properties") or {}).get("options") or {}
-        label, severity, note = _zouit_kind(
-            str(_get(opts, "type_zone", default="")), str(_get(opts, "name_by_doc", default=""))
-        )
+        type_zone = str(_get(opts, "type_zone", default=""))
+        name_by_doc = str(_get(opts, "name_by_doc", default=""))
+        label, severity, note = _zouit_kind(type_zone, name_by_doc)
         dist = _feature_distance(f, parcel_geojson)
         g = groups.setdefault(
             label,
@@ -192,10 +198,13 @@ def summarize_zouit(
                 "count": 0,
                 "min_distance_m": None,
                 "nearest_name": None,
+                "wide": False,
                 "source": SRC_NSPD_AROUND,
             },
         )
         g["count"] += 1
+        if _wide_zone(type_zone, name_by_doc):
+            g["wide"] = True  # округ санохраны курорта: действует на весь курорт, не на участок
         if dist is not None and (g["min_distance_m"] is None or dist < g["min_distance_m"]):
             g["min_distance_m"] = dist
             g["nearest_name"] = _get(opts, "name_by_doc", "type_zone")
@@ -671,6 +680,7 @@ def access_summary(
             roads.append(
                 {
                     "label": "дорога по ЕГРН",
+                    "kind": "nspd",
                     "name": r.get("name"),
                     "distance_m": d,
                     "source": "НСПД «Сооружения»",
@@ -685,13 +695,25 @@ def access_summary(
             roads.append(
                 {
                     "label": _HW_LABEL.get(hw, "дорога"),
+                    "kind": hw,
                     "name": tags.get("name") or tags.get("ref"),
                     "distance_m": d,
                     "source": "OpenStreetMap",
                 }
             )
     roads.sort(key=lambda r: r["distance_m"])
+    public = [r for r in roads if r.get("kind") != "track"]
+    if roads and not public:
+        # Клавдий (прод 29.10): грунтовка в 12 м засчиталась как дорога общего пользования —
+        # для поля с одной полевой дорогой это ложный «плюс»
+        level, text = (
+            "neutral",
+            "к границе подходит только полевая или лесная дорога (OpenStreetMap): это не дорога "
+            "общего пользования — проверить, чья она и проезжая ли в распутицу",
+        )
+        return {"level": level, "text": text, "roads": roads[:5], "source": SRC_ACCESS}
     if roads:
+        roads = public
         names = ", ".join(
             dict.fromkeys(
                 f"{r['label']}" + (f" «{r['name']}»" if r.get("name") else "") for r in roads

@@ -54,7 +54,7 @@
       {% for g in z %}
       <li><span class="badge mini v-{{ sev[g.severity] }}">{{ {'risk':'риск','plus':'плюс','neutral':'факт'}[g.severity] }}</span>
         {{ g.label }}{% if g.count > 1 %} ×{{ g.count }}{% endif %}:
-        {% if g.min_distance_m is not none %}{% if g.min_distance_m == 0 %}действует на участок{% else %}рядом, не пересекает — ближайшая в {{ g.min_distance_m }} м{% endif %}{% else %}расстояние не определено{% endif %}
+        {% if g.min_distance_m is not none %}{% if g.wide %}действует на весь курорт/муниципалитет, участок не ограничивает{% elif g.min_distance_m == 0 %}действует на участок{% else %}рядом, не пересекает — ближайшая в {{ g.min_distance_m }} м{% endif %}{% else %}расстояние не определено{% endif %}
         {% if g.note %}<span class="muted small">— {{ g.note }}</span>{% endif %}
         {% if g.nearest_name %}<div class="muted small">{{ g.nearest_name|truncate(110) }}</div>{% endif %}</li>
       {% endfor %}

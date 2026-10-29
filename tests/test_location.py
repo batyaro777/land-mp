@@ -504,3 +504,28 @@ def test_location_summary_includes_access_and_forest(fixtures_dir):
         raw, parcel_geojson=None, cad_num="50:09:0:1", category=None, cost_index=None
     )
     assert loc["forest"]["adjacent"] and loc["access"]["level"] == "risk"
+
+
+def test_access_track_only_is_not_public_road_and_resort_zone_is_wide():
+    from landcheck.location import access_summary, summarize_zouit
+    from tests.helpers import zone
+
+    track = {"elements": [{"tags": {"highway": "track"}, "distance_m": 12}]}
+    a = access_summary({"roads": [], "items": []}, track, 5)
+    assert a["level"] == "neutral" and "полевая или лесная" in a["text"] and a["roads"]
+    mixed = {
+        "elements": [
+            {"tags": {"highway": "track"}, "distance_m": 12},
+            {"tags": {"highway": "residential", "name": "Светлая улица"}, "distance_m": 11},
+        ]
+    }
+    a = access_summary({"roads": [], "items": []}, mixed, 5)
+    assert a["level"] == "plus" and "полевая" not in a["text"] and len(a["roads"]) == 1
+    resort = zone(
+        "ЗОУИТ",
+        "23:00-6.1",
+        "Округ санитарной (горно-санитарной) охраны курорта",
+        "Округ санитарной охраны лечебного климата курорта Сочи",
+    )
+    g = summarize_zouit(None, [resort])[0]
+    assert g["wide"] is True
