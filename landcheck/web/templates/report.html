@@ -223,7 +223,7 @@
     {% elif power.region %}
     <p class="small">Ставка региона на 2026 год: {{ power.region.act }}. Сети: {{ power.region.grid }}.{% if power.region.note %} {{ power.region.note|ucfirst }}.{% endif %}</p>
     {% else %}<p class="small muted">Ставки этого региона в реестре нет — запросить расчёт у сетевой организации.</p>{% endif %}
-    <p class="muted small">{{ power.note }} Льготные категории граждан: {{ power.preferential_rub_kw }} ₽/кВт. Источники: {% for s_ in power.sources %}<a href="{{ s_.url }}" target="_blank" rel="noopener">{{ s_.title|truncate(60) }}</a>{% if not loop.last %}; {% endif %}{% endfor %}. Проверено {{ power.checked }}.</p>
+    <p class="muted small">{{ power.note }} Льготные категории граждан: {{ '{:,.2f}'.format(power.preferential_rub_kw).replace(',', ' ').replace('.', ',') }} ₽/кВт. Источники: {% for s_ in power.sources %}<a href="{{ s_.url }}" target="_blank" rel="noopener">{{ s_.title|truncate(60) }}</a>{% if not loop.last %}; {% endif %}{% endfor %}. Проверено {{ power.checked }}.</p>
     <strong>Газ — {{ gas.title|lower }}</strong>
     <p class="small">{{ gas.text }}</p>
     <ul class="small">{% for l in gas.links %}<li><a href="{{ l.url }}" target="_blank" rel="noopener">{{ l.title }}</a></li>{% endfor %}</ul>

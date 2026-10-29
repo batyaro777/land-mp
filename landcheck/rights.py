@@ -472,7 +472,11 @@ def apply_to_item(
     data["rights_sources"] = [s.to_dict() for s in stored]
     summary = summarize(stored, data.get("parcel") or {}, purpose)
     data["rights"] = summary
-    flags = [f for f in data.get("flags") or [] if f.get("rule_id") != "R18"]
+    # R12 («публичная собственность: свободен или в аренде — НСПД не показывает») — вопрос,
+    # на который выписка или справка ЛК уже ответили: иначе клиент видит «свободен» и
+    # «нужна выписка» рядом (Клавдий, приёмка 5e0c558). Остаётся R18 с фактом.
+    drop = {"R18"} | ({"R12"} if summary.get("source") != "nspd" else set())
+    flags = [f for f in data.get("flags") or [] if f.get("rule_id") not in drop]
     flag = rights_flag(summary)
     if flag:
         flags.append(flag)

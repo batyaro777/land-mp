@@ -107,7 +107,16 @@ def item_json(check: Check, it: CheckItem) -> dict[str, Any]:
         "rights": (
             {
                 k: (d.get("rights") or {}).get(k)
-                for k in ("status", "level", "headline", "source", "as_of", "restrictions")
+                for k in (
+                    "status",
+                    "level",
+                    "headline",
+                    "source",
+                    "as_of",
+                    "rights",
+                    "restrictions",
+                    "ownership_type",
+                )
             }
             if d.get("rights")
             else None

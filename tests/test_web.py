@@ -678,3 +678,18 @@ def test_gpzu_form_parses_compares_and_marks_item(client: TestClient):
         assert [f for f in it.data["flags"] if f["rule_id"] == "R20"][0]["level"] == "проверить"
     table = client.get(url).text
     assert 'title="ГПЗУ приложен: зона Ж-4"' in table
+
+
+def test_rights_from_lk_close_r12_and_api_lists_entries(client: TestClient):
+    from tests.test_rights import LK_TEXT
+
+    login(client)
+    r = client.post("/checks", data={"numbers": "50:09:0060202:106"})  # публичная собственность
+    url = r.headers["location"]
+    item = url + "/items/50:09:0060202:106"
+    before = client.get(item).text
+    assert "НСПД этого не показывает" in before  # R12 по карточке НСПД
+    client.post(item + "/rights", data={"text": LK_TEXT})
+    after = client.get(item).text
+    assert "НСПД этого не показывает" not in after  # R12 закрыт справкой ЛК
+    assert "не зарегистрированы (на дату сведений)" in after and ">свободен<" in after

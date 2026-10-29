@@ -117,7 +117,8 @@ def test_apply_to_item_recomputes_verdict():
     }
     out = rights.apply_to_item(data, rights.parse_lk_text(LK_ARREST), Purpose.IZHS)
     assert out["verdict"] == "стоп" and out["rights"]["status"] == "arrest"
-    assert [f["rule_id"] for f in out["flags"]] == ["R12", "R18"]
+    # R12 (вопрос «свободен или в аренде?» по НСПД) закрыт справкой ЛК — остаётся только R18
+    assert [f["rule_id"] for f in out["flags"]] == ["R18"]
     assert len(out["rights_sources"]) == 1
     # повторная загрузка того же источника заменяет, а не дублирует
     out2 = rights.apply_to_item(out, rights.parse_lk_text(LK_TEXT), Purpose.IZHS)
