@@ -282,10 +282,11 @@ def handle_update(db, update: dict[str, Any], send=None, enqueue=None) -> str:
         from landcheck.inputs import CAD_RE as _CAD
 
         if _CAD.search(text) and not text.startswith("/"):
+            name = bot_username() or BOT_USERNAME
             send(
                 chat_id,
                 "Проверку по кадастровому номеру делаю в личных сообщениях: откройте "
-                f"@{BOT_USERNAME} и пришлите номер туда — вердикт и ссылка на отчёт придут там.",
+                f"@{name} и пришлите номер туда — вердикт и ссылка на отчёт придут там.",
             )
             return "group-hint"
         return "group-ignored"
