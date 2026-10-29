@@ -30,6 +30,7 @@ from landcheck.inputs import CAD_RE, load_listings, parse_csv, parse_xlsx
 from landcheck.intent import parse_request
 from landcheck.models import SOTKA_M2, BatchResult, Purpose
 from landcheck.models import Request as CheckRequest
+from landcheck.rules import classifier
 from landcheck.web import jobs
 from landcheck.web.auth import (
     COOKIE,
@@ -792,6 +793,10 @@ def _report_ctx(check: Check, item: CheckItem, public: bool) -> dict[str, Any]:
         "checklist_title": ck["title"],
         "pzz_url": _pzz_search_url(data.get("parcel") or {}),
         "earth_url": _earth_url_for(data.get("parcel") or {}),
+        "vri": classifier.describe(
+            (data.get("parcel") or {}).get("permitted_use"),
+            (data.get("parcel") or {}).get("permitted_use_tab"),
+        ),
         "plan": action_plan(data),
         "price": price_orientation(data, (check.stats or {}).get("median_price_per_sotka")),
         "price_pos": price_position(data, median),

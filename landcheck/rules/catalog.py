@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from landcheck.models import SOTKA_M2, Flag, Level, Purpose
+from landcheck.rules import classifier
 from landcheck.rules.engine import RuleContext, rule
 from landcheck.rules.purpose import (
     CATEGORY_CLASS_LABEL,
@@ -164,6 +165,21 @@ def r05_vri(ctx: RuleContext):
             f"ВРИ «{vri}» несовместим с целью «{label}»: без смены ВРИ использовать нельзя",
             SRC_ZK7,
             {"vri": p.permitted_use_all},
+        )
+    codes = classifier.codes_for(p.permitted_use_all)
+    if codes and vri_match(purpose, " ".join(f"код {c}" for c in codes)) == "match":
+        # Старая формулировка без кода («под жилую застройку индивидуальную»): по смыслу
+        # это код классификатора, который цель допускает. Запись действительна (171-ФЗ).
+        m = classifier.match(vri)
+        code = m.code if m is not None else codes[0]
+        name = m.name if m is not None else classifier.by_code()[code].name
+        return Flag(
+            "R05",
+            Level.OK,
+            f"ВРИ «{vri}» записан старой формулировкой; по смыслу это код {code} «{name}» — "
+            f"цель «{label}» допустима, в ГПЗУ администрация проставит код",
+            classifier.SRC_171,
+            {"vri": p.permitted_use_all, "code": code, "legacy": True},
         )
     return Flag(
         "R05",
@@ -515,3 +531,44 @@ def r17_cost_missing(ctx: RuleContext):
     if not p.found or p.cadastral_cost_rub:
         return None
     return Flag("R17", Level.OK, "кадастровая стоимость в НСПД не указана", SRC_NSPD)
+
+
+@rule(
+    "R19",
+    "Код классификатора ВРИ",
+    "Формулировка ВРИ сопоставлена с кодом П/0412; старая или местная запись — справочно",
+)
+def r19_vri_code(ctx: RuleContext):
+    p = ctx.parcel
+    if not p.found:
+        return None
+    info = classifier.describe(p.permitted_use, p.permitted_use_tab)
+    if info is None:
+        return None
+    main = info["main"]
+    if main is None:
+        first = info["unmatched"][0]
+        return Flag(
+            "R19",
+            Level.OK,
+            f"ВРИ «{first}» не сопоставлен с классификатором П/0412: формулировка местная или "
+            "устаревшая — что именно разрешено, скажет ГПЗУ или выписка из ПЗЗ",
+            classifier.SRC_P0412,
+            {"codes": [], "unmatched": info["unmatched"]},
+        )
+    if not main["legacy"]:
+        return None  # наименование или код из классификатора: достаточно строки в карточке
+    text = (
+        f"ВРИ «{main['wording']}» записан без кода классификатора; по смыслу это код "
+        f"{main['code']} «{main['name']}». Запись действительна, соответствие коду "
+        "администрация устанавливает по заявлению правообладателя бесплатно; в ГПЗУ код проставят"
+    )
+    if main.get("note"):
+        text += f"; {main['note']}"
+    return Flag(
+        "R19",
+        Level.OK,
+        text,
+        classifier.SRC_171,
+        {"codes": info["codes"], "legacy": True},
+    )

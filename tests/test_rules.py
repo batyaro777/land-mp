@@ -208,3 +208,12 @@ def test_sanitary_zone_is_stop_for_housing_but_check_for_industry():
     assert run(p)["R10"].level is Level.STOP
     assert run(p, request=Request(purpose=Purpose.INDUSTRY))["R10"].level is Level.CHECK
     assert "СанПиН" in run(p)["R10"].source
+
+
+def test_legacy_vri_wording_gets_code_info_and_r05_ok():
+    flags = run(make_payload("x", vri="Для строительства жилого дома усадебного типа"))
+    assert flags["R05"].level is Level.OK and "2.1" in flags["R05"].message
+    assert flags["R19"].level is Level.OK and "без кода" in flags["R19"].message
+    assert "R19" not in run(make_payload("x"))  # точное наименование классификатора
+    flags = run(make_payload("x", vri="Для размещения объектов неизвестного типа"))
+    assert flags["R05"].level is Level.CHECK and "не сопоставлен" in flags["R19"].message

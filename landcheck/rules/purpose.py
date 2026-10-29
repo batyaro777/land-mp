@@ -354,7 +354,7 @@ VRI_NEGATIVE: dict[Purpose, tuple[str, ...]] = {
 
 
 def _has_code(text: str, code: str) -> bool:
-    return re.search(rf"(?<![\d.]){re.escape(code)}(?![\d])", text) is not None
+    return re.search(rf"(?<![\d.]){re.escape(code)}(?!\.?\d)", text) is not None
 
 
 def vri_match(purpose: Purpose, vri_text: str) -> str:

@@ -19,6 +19,7 @@ from sqlalchemy import select
 from landcheck.inputs import load_listings
 from landcheck.models import SOTKA_M2, Purpose
 from landcheck.models import Request as CheckRequest
+from landcheck.rules import classifier
 from landcheck.web import jobs
 from landcheck.web.config import settings
 from landcheck.web.db import Check, CheckItem, User, session
@@ -92,6 +93,9 @@ def item_json(check: Check, it: CheckItem) -> dict[str, Any]:
             "status": p.get("status"),
             "category": p.get("category"),
             "permitted_use": p.get("permitted_use"),
+            "vri_codes": classifier.codes_for(
+                " | ".join([p.get("permitted_use") or "", *(p.get("permitted_use_tab") or [])])
+            ),
             "area_m2": p.get("specified_area_m2") or p.get("area_m2") or p.get("declared_area_m2"),
             "has_borders": p.get("has_borders"),
             "cadastral_cost_rub": p.get("cadastral_cost_rub"),

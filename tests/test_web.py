@@ -632,3 +632,15 @@ def test_rights_form_recomputes_verdict_and_table_badge(client: TestClient):
         assert "Иванов" not in str(it.data)
     table = client.get(url).text
     assert ">арест<" in table and 'title="Право и обременения' in table
+
+
+def test_report_shows_classifier_code_row(client: TestClient):
+    login(client)
+    r = client.post("/checks", data={"numbers": "50:09:0060202:102\n50:09:0060202:101"})
+    url = r.headers["location"]
+    agri = client.get(url + "/items/50:09:0060202:102").text
+    assert "Код классификатора ВРИ" in agri and "<b>1.0</b>" in agri
+    assert "Сельскохозяйственное использование" in agri and "код подобран по смыслу" in agri
+    assert "Нельзя:" in agri and "ЗК РФ ст. 77" in agri
+    izhs = client.get(url + "/items/50:09:0060202:101").text
+    assert "<b>2.1</b>" in izhs and "код подобран по смыслу" not in izhs
