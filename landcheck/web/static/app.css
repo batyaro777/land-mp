@@ -112,3 +112,5 @@ table.facts.actions td { vertical-align: top; width: 33%; }
 table.facts.neighbors th:first-child, table.facts.neighbors td:first-child { width: 38%; }
 table.facts.neighbors .num { white-space: nowrap; text-align: right; }
 table.results td.cad { white-space: nowrap; }
+article.rights { border-left: 4px solid #8a5a00; }
+article.rights textarea { font-size: 0.85em; }

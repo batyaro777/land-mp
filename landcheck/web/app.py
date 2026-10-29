@@ -23,7 +23,7 @@ from fastapi.templating import Jinja2Templates
 from markupsafe import Markup, escape
 from sqlalchemy import func, select
 
-from landcheck import __version__
+from landcheck import __version__, rights
 from landcheck.actions import action_plan
 from landcheck.export import DISCLAIMER, to_csv, to_markdown, to_xlsx
 from landcheck.inputs import CAD_RE, load_listings, parse_csv, parse_xlsx
@@ -785,6 +785,9 @@ def _report_ctx(check: Check, item: CheckItem, public: bool) -> dict[str, Any]:
         "docs": data.get("docs"),
         "docs_url": f"/checks/{check.id}/items/{item.cad_num}/docs",
         "region_enabled": settings.region_enabled,
+        "rights": data.get("rights") or rights.summarize([], data.get("parcel") or {}, purpose),
+        "rights_url": f"/checks/{check.id}/items/{item.cad_num}/rights",
+        "lk_url": rights.LK_URL,
         "checklist": (ck := checklist_for(data, purpose))["blocks"],
         "checklist_title": ck["title"],
         "pzz_url": _pzz_search_url(data.get("parcel") or {}),
@@ -820,8 +823,78 @@ def report_private(request: Request, user: UserDep, check_id: int, cad_num: str)
             "report.html",
             **_report_ctx(check, item, public=False),
             watched=is_watched(db, user.id, cad_num),
+            err=request.query_params.get("err"),
             user=user,
         )
+
+
+def _recount(check: Check) -> None:
+    """Счётчики вердиктов в stats после пересчёта одного участка (права, ГПЗУ)."""
+    counts: dict[str, int] = {}
+    for it in check.items:
+        counts[it.verdict] = counts.get(it.verdict, 0) + 1
+    stats = dict(check.stats or {})
+    stats["counts"] = counts
+    check.stats = stats
+
+
+@router.post("/checks/{check_id}/items/{cad_num}/rights")
+async def report_rights(
+    request: Request,
+    user: UserDep,
+    check_id: int,
+    cad_num: str,
+    text: Annotated[str, Form()] = "",
+    files: Annotated[list[UploadFile] | None, File()] = None,
+):
+    """Сведения о правах (ТЗ v3, п. 2): текст страницы ЛК Росреестра и/или электронная выписка
+    ЕГРН (PDF/XML, можно архивом с .sig) → блок «Права и ограничения», флаг R18, вердикт."""
+    from landcheck.scoring import score as score_of
+    from landcheck.web import materials
+
+    parsed: list[rights.Rights] = []
+    uploads = await materials.materials_from_uploads(files)
+    docs, _skipped = materials.proof_materials(uploads)
+    best = None
+    for m in docs:
+        ex = materials.extract_of(m)
+        if ex is None or not (ex.is_extract or ex.right_kind):
+            continue
+        key = (ex.source == "xml", ex.filled)
+        if best is None or key > best[0]:
+            best = (key, ex)
+    if best is not None:
+        parsed.append(rights.from_extract(best[1]))
+    if text.strip():
+        lk = rights.parse_lk_text(text)
+        if lk.parsed:
+            parsed.append(lk)
+    back = f"/checks/{check_id}/items/{cad_num}"
+    if not parsed:
+        return RedirectResponse(back + "?err=rights#rights", status_code=303)
+    with session() as db:
+        check = _own_check(db, user, check_id)
+        item = db.scalar(
+            select(CheckItem).where(CheckItem.check_id == check.id, CheckItem.cad_num == cad_num)
+        )
+        if item is None:
+            raise HTTPException(404)
+        purpose = _check_purpose(check)
+        db.refresh(item)
+        data = dict(item.data)
+        for r in parsed:
+            data = rights.apply_to_item(data, r, purpose)
+        try:
+            data["score"] = score_of(result_from_dict(data), request_from_dict(check.request))
+        except Exception as exc:  # noqa: BLE001 — оценка не должна ломать сохранение
+            log.warning("rights: score: %s", exc)
+        item.data = data
+        item.verdict = data["verdict"]
+        item.score = float(data.get("score") or item.score)
+        db.flush()
+        _recount(check)
+        db.commit()
+    return RedirectResponse(back + "#rights", status_code=303)
 
 
 @router.get("/r/{token}", response_class=HTMLResponse)

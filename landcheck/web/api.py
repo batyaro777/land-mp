@@ -100,6 +100,14 @@ def item_json(check: Check, it: CheckItem) -> dict[str, Any]:
             "territorial_zones": _zones(p.get("territorial_zones")),
             "fetched_at": p.get("fetched_at"),
         },
+        "rights": (
+            {
+                k: (d.get("rights") or {}).get(k)
+                for k in ("status", "level", "headline", "source", "as_of", "restrictions")
+            }
+            if d.get("rights")
+            else None
+        ),
         "report_url": f"{_base()}/checks/{check.id}/items/{it.cad_num}",
         "public_url": f"{_base()}/r/{it.token}" if it.token else None,
     }

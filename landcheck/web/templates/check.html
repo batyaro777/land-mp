@@ -42,7 +42,7 @@
   <div class="table-wrap">
   <table class="results">
     <thead><tr>
-      <th>№</th><th>Кадастровый номер</th><th>Вердикт</th>{% if purpose.value != 'any' %}<th title="Категория · ВРИ · терзона">Цель</th>{% endif %}<th>Причины</th><th class="num">Цена</th><th class="num">ЕГРН, сот.</th><th class="num">₽/сот.</th><th title="Цена за сотку к кадастровой стоимости участка, к медиане подборки и к кадастровой ставке соседей (после сбора «Локации»)">Цена к ориентиру</th><th>Категория · ВРИ</th>
+      <th>№</th><th>Кадастровый номер</th><th>Вердикт</th><th title="Право и обременения: по выписке ЕГРН или ЛК Росреестра, иначе форма собственности по НСПД">Право</th>{% if purpose.value != 'any' %}<th title="Категория · ВРИ · терзона">Цель</th>{% endif %}<th>Причины</th><th class="num">Цена</th><th class="num">ЕГРН, сот.</th><th class="num">₽/сот.</th><th title="Цена за сотку к кадастровой стоимости участка, к медиане подборки и к кадастровой ставке соседей (после сбора «Локации»)">Цена к ориентиру</th><th>Категория · ВРИ</th>
     </tr></thead>
     <tbody>
     {% for it in items %}
@@ -56,6 +56,7 @@
           {% set h = d.get('history') or {} %}
           {% if h.get('is_new') %}<br><span class="badge">новый</span>{% elif h.get('changed') %}<br><span class="badge v-check" title="{{ h.get('prev_title') }}">было: {{ h.get('prev_verdict') }}</span>{% endif %}</td>
         <td><span class="badge v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[it.verdict] }}">{{ it.verdict }}</span></td>
+        <td class="small">{% set rg = d.get('rights') %}{% if rg %}<span class="badge mini v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[rg.level] }}" title="{{ rg.headline }}">{{ rg.badge }}</span>{% if rg.as_of %}<div class="muted">на {{ rg.as_of }}</div>{% endif %}{% else %}<span class="muted" title="Только форма собственности по НСПД; права и обременения — в отчёте">{{ (d.parcel.ownership_type or '—')|truncate(22) }}</span>{% endif %}</td>
         {% if purpose.value != 'any' %}
         <td class="goal-cell">
           {% set g = goals.get(it.id) %}

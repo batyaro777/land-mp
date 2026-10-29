@@ -43,6 +43,39 @@
   })();
 </script>
 
+{% if p.found and rights %}
+{% set rsev = {'стоп':'stop','проверить':'check','ок':'ok'}[rights.level] %}
+<article class="rights" id="rights">
+  <h4>Права и ограничения <span class="badge v-{{ rsev }}">{{ rights.badge }}</span></h4>
+  <p>{{ rights.headline|ucfirst }}.</p>
+  <table class="facts">
+    {% for e in rights.rights %}
+    <tr><th>Право</th><td>{{ e.label|ucfirst }}{% if e.holder %} — {{ e.holder }}{% if e.holder_kind == 'person' %} <span class="muted small">(физлицо, маска)</span>{% endif %}{% endif %}{% if e.number %}, № {{ e.number }}{% endif %}{% if e.date %} от {{ e.date }}{% endif %}</td></tr>
+    {% endfor %}
+    <tr><th>Ограничения и обременения</th><td>{% if rights.restrictions %}{% for e in rights.restrictions %}<span class="{% if e.kind in ('arrest','ban') %}err{% endif %}">{{ e.label|ucfirst }}</span>{% if e.number %} № {{ e.number }}{% endif %}{% if e.date %} от {{ e.date }}{% endif %}{% if e.term %}, {{ e.term }}{% endif %}{% if e.holder %} — {{ e.holder }}{% endif %}{% if not loop.last %}; {% endif %}{% endfor %}{% elif rights.restrictions_known %}не зарегистрированы (на дату сведений){% else %}в НСПД не показываются — нужна выписка ЕГРН или справка из ЛК Росреестра{% endif %}</td></tr>
+    {% if rights.claims %}<tr><th>Правопритязания</th><td class="err">{{ rights.claims }}</td></tr>{% endif %}
+    <tr><th>Форма собственности по НСПД</th><td>{{ rights.ownership_type or 'не указана' }}</td></tr>
+    <tr><th>Источник</th><td class="small muted">{{ rights.source_label }}{% if rights.as_of %}, сведения на {{ rights.as_of }}{% endif %}</td></tr>
+  </table>
+  {% if not public %}
+  <details {% if rights.source == 'nspd' %}open{% endif %}>
+    <summary class="small">Уточнить права: справка из ЛК Росреестра или выписка ЕГРН</summary>
+    <ol class="small">
+      <li>Бесплатно и сразу: откройте <a href="{{ lk_url }}" target="_blank" rel="noopener">ЛК Росреестра → «Справочная информация по объектам недвижимости»</a> (вход через Госуслуги, капчи нет), найдите <code>{{ p.cad_num }}</code>, выделите страницу результата целиком (Ctrl+A, Ctrl+C) и вставьте в поле ниже.</li>
+      <li>Точнее: приложите электронную выписку ЕГРН об объекте — PDF с Госуслуг или XML из Росреестра, можно архивом вместе с .sig.</li>
+    </ol>
+    <form method="post" action="{{ rights_url }}" enctype="multipart/form-data">
+      <textarea name="text" rows="5" placeholder="Вставьте текст страницы Росреестра: «Вид, номер и дата государственной регистрации права…», «Ограничение прав и обременение…»"></textarea>
+      <input type="file" name="files" multiple accept=".pdf,.xml,.zip,.sig,.p7s">
+      <button class="sm">Сохранить сведения о правах</button>
+    </form>
+    {% if err == 'rights' %}<p class="err small">В тексте не нашёл раздела о правах, а в файлах — выписки ЕГРН. Вставьте страницу Росреестра целиком или приложите PDF/XML выписки.</p>{% endif %}
+  </details>
+  {% endif %}
+  <p class="muted small">ФИО правообладателей-физлиц не сохраняются, только маска. Сведения из ЛК Росреестра — справочные; для сделки нужна выписка ЕГРН не старше 30 дней.</p>
+</article>
+{% endif %}
+
 {% if goal %}
 <article class="goal">
   <h4>Можно ли здесь: {{ goal.activity|lcfirst }}? <span class="badge v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[goal.level] }}">{{ goal.level }}</span></h4>

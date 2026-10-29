@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from landcheck.web import jobs
 from landcheck.web.config import settings
@@ -596,3 +597,38 @@ def test_locality_strips_landmark_prefix():
         )
         == "Московская область, Волоколамский район, д. Бражниково"
     )
+
+
+def test_rights_form_recomputes_verdict_and_table_badge(client: TestClient):
+    from landcheck.web.db import CheckItem, session
+    from tests.test_rights import LK_ARREST, LK_TEXT
+
+    login(client)
+    r = client.post("/checks", data={"numbers": "50:09:0060202:101"})
+    url = r.headers["location"]
+    item = url + "/items/50:09:0060202:101"
+    page = client.get(item).text
+    assert 'id="rights"' in page and "lk.rosreestr.ru" in page
+    assert "в НСПД не показываются" in page
+    # мусор вместо страницы Росреестра → подсветка ошибки, данные не трогаем
+    r = client.post(item + "/rights", data={"text": "ничего полезного"})
+    assert r.status_code == 303 and r.headers["location"].endswith("?err=rights#rights")
+    assert "не нашёл раздела о правах" in client.get(r.headers["location"]).text
+    # собственность без обременений → ок, строка «Право» и дата сведений
+    r = client.post(item + "/rights", data={"text": LK_TEXT})
+    assert r.status_code == 303 and r.headers["location"].endswith("#rights")
+    page = client.get(item).text
+    assert "40-40-10/002/2013-603" in page and "не зарегистрированы (на дату сведений)" in page
+    assert "сведения на 28.10.2026" in page
+    # запрещение регистрации → стоп по участку, бейдж в таблице подборки
+    r = client.post(item + "/rights", data={"text": LK_ARREST})
+    assert r.status_code == 303
+    page = client.get(item).text
+    assert "Запрет регистрационных действий" in page
+    assert "сделка и регистрация прав невозможны до снятия" in page
+    with session() as db:
+        it = db.scalar(select(CheckItem).where(CheckItem.cad_num == "50:09:0060202:101"))
+        assert it.verdict == "стоп" and it.data["rights"]["status"] == "arrest"
+        assert "Иванов" not in str(it.data)
+    table = client.get(url).text
+    assert ">арест<" in table and 'title="Право и обременения' in table
