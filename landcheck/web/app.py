@@ -117,7 +117,17 @@ def _cite(text: str, sources: list[dict[str, Any]] | None) -> Markup:
     return Markup(re.sub(r"\[(\d+(?:\s*,\s*\d+)*)\]", link, str(escape(text))))
 
 
+def _short_address(address: str | None) -> str:
+    """«Местоположение установлено относительно ориентира… Почтовый адрес ориентира: Калужская
+    обл., …» → «Калужская обл., …» (Клавдий, прод 29.10: шапка отчёта)."""
+    if not address:
+        return address or ""
+    m = re.search(r"почтовый адрес(?: ориентира)?\s*:\s*", address, re.IGNORECASE)
+    return address[m.end() :].strip().rstrip(".") if m else address
+
+
 templates.env.filters["short_category"] = _short_category
+templates.env.filters["short_address"] = _short_address
 templates.env.filters["cite"] = _cite
 templates.env.globals.update(
     brand=settings.brand, version=__version__, Purpose=Purpose, disclaimer=DISCLAIMER

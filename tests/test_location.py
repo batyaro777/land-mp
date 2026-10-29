@@ -400,3 +400,37 @@ def test_price_falls_back_to_dominant_category_when_parcel_category_unset():
     )
     p = price_reference(n, None, None)
     assert p is not None and p["per_sotka"] == 34_600 and "своей группы у участка нет" in p["basis"]
+
+
+def test_fetch_osm_takes_first_successful_mirror(monkeypatch):
+    """Зеркала опрашиваются параллельно: одно падает, второе отвечает — ответ без ожидания
+    остальных; все упали — одна фраза клиенту, хосты в error_detail."""
+    import httpx
+
+    from landcheck import osm
+
+    calls: list[str] = []
+
+    def fake_post(url, **kw):
+        calls.append(url)
+        if "overpass-api.de" in url:
+            raise httpx.ReadTimeout("slow")
+        if "kumi" in url:
+            return httpx.Response(502, request=httpx.Request("POST", url))
+        return httpx.Response(
+            200,
+            json={"elements": [{"type": "node", "tags": {"landuse": "landfill"}}]},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(osm.httpx, "post", fake_post)
+    res = osm.fetch_osm(55.0, 37.0, 3000, timeout=5)
+    assert res["elements"] and "mail.ru" in res["url"] or "private.coffee" in res["url"]
+    assert "error" not in res
+
+    monkeypatch.setattr(
+        osm.httpx, "post", lambda url, **kw: (_ for _ in ()).throw(httpx.ConnectError("x"))
+    )
+    res = osm.fetch_osm(55.0, 37.0, 3000, timeout=5)
+    assert res["elements"] == [] and "OpenStreetMap" in res["error"]
+    assert "overpass-api.de" in res["error_detail"] and "overpass-api.de" not in res["error"]

@@ -571,6 +571,17 @@ def test_checklist_depends_on_ownership_and_purpose():
     assert "СНТ" not in text and "грузового транспорта" in text
 
 
+def test_short_address_filter():
+    from landcheck.web.app import _short_address
+
+    addr = "Местоположение установлено относительно ориентира. Почтовый адрес ориентира: Калужская обл., р-н Козельский, д. Вырск."
+    assert _short_address(addr) == "Калужская обл., р-н Козельский, д. Вырск"
+    assert (
+        _short_address("Московская область, д. Бражниково") == "Московская область, д. Бражниково"
+    )
+    assert _short_address(None) == ""
+
+
 def test_locality_strips_landmark_prefix():
     from landcheck.region import locality_from_address
 
