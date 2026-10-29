@@ -714,3 +714,29 @@ def test_telegram_group_messages_are_silent_except_cad_hint(client: TestClient):
         assert len(sent) == 1 and "@aimpland_bot" in sent[0][1]
         private = {"message": {"chat": {"id": 555, "type": "private"}, "text": "привет"}}
         assert handle_update(db, private, send=send) == "help"
+
+
+def test_site_checklist_for_field_has_no_house_questions():
+    from landcheck.models import Purpose
+    from landcheck.web.content import checklist_for
+
+    field = {
+        "parcel": {
+            "category": "Земли сельскохозяйственного назначения",
+            "ownership_type": "Муниципальная",
+        }
+    }
+    for purpose in (Purpose.ANY, Purpose.FARMING, Purpose.LPH):
+        text = str(checklist_for(field, purpose)["blocks"])
+        assert "зимнее содержание" not in text and "Газ, вода, канализация" not in text
+        assert "101-ФЗ ст. 6" in text and "Подъезд техники" in text
+    house = {
+        "parcel": {
+            "category": "Земли населенных пунктов",
+            "ownership_type": "Частная собственность",
+        }
+    }
+    assert "зимнее содержание" in str(checklist_for(house, Purpose.ANY)["blocks"])
+    # хочет дом на поле — вопросы про дом остаются (R04 скажет «стоп»)
+    assert "зимнее содержание" in str(checklist_for(field, Purpose.IZHS)["blocks"])
+    assert "грузового транспорта" in str(checklist_for(field, Purpose.INDUSTRY)["blocks"])

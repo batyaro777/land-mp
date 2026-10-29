@@ -76,6 +76,30 @@ CHECKLIST_PUBLIC: list[dict[str, Any]] = [
     },
 ]
 
+CHECKLIST_SITE_FARMING: dict[str, Any] = {
+    # Поле под КФХ/ЛПХ: вопросы про дом, газ и «зимнее содержание дороги» тут не к месту
+    # (Андрей, чат «МП Земля» 29.10).
+    "title": "Что проверить на месте для сельхозучастка",
+    "items": [
+        "Подъезд техники: полевая дорога или дорога общего пользования, проезд в распутицу, "
+        "не через чужой участок",
+        "Фактическое использование: кто сейчас косит, пасёт или пашет; следы заброшенности — "
+        "залежь, кустарник, лес на поле (риск изъятия за неиспользование, 101-ФЗ ст. 6)",
+        "Почва и мелиорация: дренаж и каналы (мелиорированные земли — особый режим), "
+        "заболоченность, камни, уклон",
+        "Вода: источник для полива или водопоя — скважина, пруд, ручей; водоохранная зона "
+        "на участке",
+        "Электричество: ближайшая опора и мощность под ферму или насос, плата за присоединение "
+        "по региону (см. блок про сети)",
+        "Границы: межевые знаки на месте, нет ли вклинивания, пересечения с лесфондом или дорогой",
+        "Соседи: действующие фермы и животноводческие комплексы (санзоны), склады агрохимии, "
+        "свалки",
+        "Ограничения из ЗОУИТ в отчёте: ЛЭП и газопроводы пашне не мешают, но запрещают "
+        "постройки в охранной зоне",
+    ],
+}
+
+
 CHECKLIST_SITE_PRODUCTION: dict[str, Any] = {
     "title": "Что проверить на месте и в документах для производства или торговли",
     "items": [
@@ -98,11 +122,9 @@ def checklist_for(item: dict[str, Any], purpose: Purpose) -> dict[str, Any]:
     public = any(
         k in own for k in ("публичн", "государств", "муниципальн", "не разграничен", "федеральн")
     )
+    site = site_block(parcel, purpose)
     if public:
         blocks = list(CHECKLIST_PUBLIC)
-        site = CHECKLIST[3]
-        if purpose in (Purpose.INDUSTRY, Purpose.COMMERCE):
-            site = CHECKLIST_SITE_PRODUCTION
         blocks.append(
             {
                 "title": "Границы и межевание",
@@ -118,8 +140,21 @@ def checklist_for(item: dict[str, Any], purpose: Purpose) -> dict[str, Any]:
             "items": [i for i in blocks[0]["items"] if "СНТ" not in i]
             + ["Справка об отсутствии долгов по земельному налогу"],
         }
-        blocks[3] = CHECKLIST_SITE_PRODUCTION if purpose is not Purpose.FARMING else blocks[3]
+    blocks[3] = site
     return {"title": "Чек-лист перед сделкой", "blocks": blocks}
+
+
+def site_block(parcel: dict[str, Any], purpose: Purpose) -> dict[str, Any]:
+    """Блок «что проверить на месте» по цели и категории: производство/торговля — свой,
+    поле (цель КФХ, или сельхозземля без цели/под ЛПХ) — сельхозный, иначе — под дом."""
+    from landcheck.rules.purpose import category_class
+
+    if purpose in (Purpose.INDUSTRY, Purpose.COMMERCE):
+        return CHECKLIST_SITE_PRODUCTION
+    agri = category_class(parcel.get("category")) == "agri"
+    if purpose is Purpose.FARMING or (agri and purpose in (Purpose.ANY, Purpose.LPH)):
+        return CHECKLIST_SITE_FARMING
+    return CHECKLIST[3]
 
 
 def price_orientation(item: dict[str, Any], median_pps: float | None) -> dict[str, Any] | None:
