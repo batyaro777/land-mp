@@ -1,11 +1,13 @@
 {# Блок «Оценка стоимости» (R6): якоря, диапазон, вердикт, объявления в локации #}
 <article id="valuation">
-  <h4>Оценка стоимости: в рынке ли цена</h4>
+  <h4>Рынок: в рынке ли цена <span class="muted small">только рыночные данные; кадастр — отдельно ниже</span></h4>
   {% if not valuation %}
     <p class="muted">Для оценки не хватает данных: нет площади по ЕГРН или ориентиров.</p>
   {% else %}
+  {% if not valuation.has_market %}<p class="small">Рыночных данных по локации нет: в базе Land-MP пока нет участков этой локации, объявлений с правом использования не найдено. Кадастровые ориентиры — в блоке «Ориентир по кадастру» ниже.</p>{% endif %}
   <table class="facts">
-    {% for a in valuation.anchors %}<tr><th>{{ a.label|ucfirst }}</th><td>{{ a.pps|money }} за сотку{% if a.note %} <span class="muted small">— {{ a.note }}</span>{% endif %}</td></tr>{% endfor %}
+    {% for a in valuation.market_anchors %}<tr><th>{{ a.label|ucfirst }}</th><td>{{ a.pps|money }} за сотку{% if a.note %} <span class="muted small">— {{ a.note }}</span>{% endif %}</td></tr>{% endfor %}
+    {% if valuation.coef %}<tr><th>Рынок к кадастру в локации</th><td>×{{ valuation.coef.value }} <span class="muted small">— середина рынка ({{ valuation.coef.basis }}{% if valuation.coef.n %}, n={{ valuation.coef.n }}{% endif %}) к кадастровой стоимости участка; ориентир экспертов: Подмосковье ~×3, Сочи до ×100</span></td></tr>{% endif %}
     {% if valuation.range %}<tr><th>Середина рынка ({{ valuation.range_source }})</th><td><strong>{{ valuation.range[0]|money }} – {{ valuation.range[1]|money }}</strong> за сотку · для {{ valuation.area_sotka }} сот.: {{ valuation.total_range[0]|money }} – {{ valuation.total_range[1]|money }}</td></tr>{% endif %}
     {% if d.price_per_sotka %}<tr><th>Цена в объявлении</th><td>{{ d.price_per_sotka|money }} за сотку</td></tr>{% endif %}
   </table>

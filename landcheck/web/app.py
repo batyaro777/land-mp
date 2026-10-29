@@ -31,6 +31,7 @@ from landcheck.intent import parse_request
 from landcheck.models import SOTKA_M2, BatchResult, Purpose
 from landcheck.models import Request as CheckRequest
 from landcheck.rules import classifier
+from landcheck.rules.catalog import is_wide_zone
 from landcheck.web import jobs
 from landcheck.web.auth import (
     COOKIE,
@@ -44,6 +45,7 @@ from landcheck.web.config import settings
 from landcheck.web.content import (
     batch_median,
     checklist_for,
+    discrepancies,
     goal_summary,
     price_orientation,
     price_position,
@@ -81,6 +83,9 @@ log = logging.getLogger("landcheck.web")
 BASE = Path(__file__).parent
 templates = Jinja2Templates(directory=str(BASE / "templates"))
 templates.env.filters["money"] = fmt_money
+templates.env.filters["wide_zone"] = lambda z: is_wide_zone(
+    str((z or {}).get("kind") or ""), str((z or {}).get("name") or "")
+)
 templates.env.filters["sotka"] = fmt_sotka
 templates.env.filters["dt"] = fmt_date
 templates.env.filters["day"] = fmt_day
@@ -752,6 +757,29 @@ def _pzz_search_url(parcel: dict[str, Any]) -> str | None:
     )
 
 
+def _nspd_map_url(parcel: dict[str, Any]) -> str | None:
+    """Карта НСПД в точке участка (первоисточник одним кликом, ТЗ v3 п. 6). Параметры URL —
+    как в адресной строке nspd.gov.ru/map (Web Mercator, EPSG:3857); официально не описаны."""
+    geometry = parcel.get("geometry")
+    if not geometry:
+        return None
+    try:
+        import math
+
+        from landcheck.location import centroid
+
+        lat, lon = centroid(geometry)
+        k = 20037508.342789244 / 180
+        x = lon * k
+        y = math.log(math.tan((90 + lat) * math.pi / 360)) / (math.pi / 180) * k
+    except Exception:  # noqa: BLE001 — ссылка справочная
+        return None
+    return (
+        f"https://nspd.gov.ru/map?thematic=PKK&zoom=17&coordinate_x={x:.2f}&coordinate_y={y:.2f}"
+        "&theme_id=1&is_copy_url=true&active_layers=36048"
+    )
+
+
 def _earth_url_for(parcel: dict[str, Any]) -> str | None:
     geometry = parcel.get("geometry")
     if not geometry:
@@ -793,6 +821,8 @@ def _report_ctx(check: Check, item: CheckItem, public: bool) -> dict[str, Any]:
         "checklist_title": ck["title"],
         "pzz_url": _pzz_search_url(data.get("parcel") or {}),
         "earth_url": _earth_url_for(data.get("parcel") or {}),
+        "nspd_url": _nspd_map_url(data.get("parcel") or {}),
+        "discrepancies": discrepancies(data),
         "vri": classifier.describe(
             (data.get("parcel") or {}).get("permitted_use"),
             (data.get("parcel") or {}).get("permitted_use_tab"),

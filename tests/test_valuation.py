@@ -146,7 +146,8 @@ def test_valuation_range_verdict_and_confidence():
     v = valuation(_item(pps=100_000), corridor=None, ads=ads, median_batch=None)
     assert "ниже рынка" in v["verdict"]
     v = valuation(_item(pps=250_000), corridor=None, ads={"n": 1, "ads": []}, median_batch=None)
-    assert v["range"] is None and "не определён" in v["verdict"] and v["confidence"] == "низкая"
+    assert v["range"] is None and "рыночных данных" in v["verdict"] and v["confidence"] == "низкая"
+    assert v["has_market"] is False and v["coef"] is None
     assert valuation(_item(pps=None, area=1.0), corridor=None, ads=None, median_batch=None) is None
     v = valuation(_item(), corridor=None, ads=None, median_batch=None)
     assert v["verdict"] is None and len(v["anchors"]) == 2
@@ -200,11 +201,11 @@ def test_report_loads_ads_block_lazily_and_caches(client, monkeypatch):  # noqa:
 
     monkeypatch.setattr(app_mod, "collect_ads", market_ads.collect_ads, raising=False)
     block = client.get(url + "/items/50:09:0060202:101/ads").text
-    assert "Оценка стоимости" in block and "Объявления в локации (3)" in block
+    assert "Рынок: в рынке ли цена" in block and "Объявления в локации (3)" in block
     report = client.get(url + "/items/50:09:0060202:101").text
     assert (
         "Объявления в локации (3)" in report
-        and "/ads" not in report.split("Оценка стоимости")[1][:200]
+        and "/ads" not in report.split("Рынок: в рынке ли цена")[1][:200]
     )
 
 

@@ -300,6 +300,35 @@ def goal_summary(item: dict[str, Any], purpose: Purpose) -> dict[str, Any] | Non
     }
 
 
+# --- «данные расходятся»: НСПД ↔ выписка/ЛК ↔ ГПЗУ (ТЗ v3, п. 6) ---------------------------
+_PUBLIC_WORDS = ("публичн", "государств", "муниципальн", "не разграничен", "федеральн")
+
+
+def discrepancies(item: dict[str, Any]) -> list[dict[str, str]]:
+    """Отдельная строка карточки: где источники противоречат друг другу."""
+    out: list[dict[str, str]] = []
+    p = item.get("parcel") or {}
+    r = item.get("rights") or {}
+    if r and r.get("source") != "nspd":
+        own = (p.get("ownership_type") or "").lower()
+        kinds = {e.get("holder_kind") for e in r.get("rights") or [] if e.get("holder_kind")}
+        nspd_public = any(k in own for k in _PUBLIC_WORDS)
+        nspd_private = "частн" in own
+        if (nspd_public and "person" in kinds) or (nspd_private and "public" in kinds):
+            who = "физлицо" if "person" in kinds else "публичное образование"
+            out.append(
+                {
+                    "what": "форма собственности",
+                    "text": f"НСПД: «{p.get('ownership_type')}», по документу "
+                    f"({r.get('source_label')}) правообладатель — {who}",
+                }
+            )
+    for row in (item.get("gpzu") or {}).get("compare") or []:
+        if row.get("level") != "ок" and row.get("field") in ("Терзона", "ВРИ", "ЗОУИТ"):
+            out.append({"what": f"ГПЗУ ↔ НСПД, {row['field'].lower()}", "text": row["text"]})
+    return out
+
+
 # --- коридор цены за сотку по базе Land-MP (план 20.10, п.4) -----------------------------
 CORRIDOR_DAYS = 180
 CORRIDOR_MIN_N = 3
@@ -574,6 +603,24 @@ def valuation(
             "рынок по данным не определён: сравните с ориентирами ниже "
             f"(к «{anchors[-1]['label']}» ×{pps / ref:.1f})"
         )
+    cadastral = [a for a in anchors if a["label"].startswith("кадастров")]
+    market = [a for a in anchors if not a["label"].startswith("кадастров")]
+    if pps and not rng and not market:
+        # эксперты (зум 28.10): «не рынок, а государственная цена» — без рыночных данных
+        # вердикта «в рынке» не бывает
+        verdict = (
+            "рыночных данных по локации нет: цена сравнивается только с кадастром "
+            "(блок «Ориентир по кадастру»)"
+        )
+        position = None
+    coef = None
+    if rng and cadastral and cadastral[0]["pps"]:
+        n = (corridor or {}).get("n") if source == "база Land-MP" else (ads or {}).get("n")
+        coef = {
+            "value": round(((rng[0] + rng[1]) / 2) / cadastral[0]["pps"], 1),
+            "basis": source,
+            "n": n,
+        }
     confidence = "низкая"
     n_sources = sum(1 for x in (corridor, ads) if x and x.get("n", 0) >= MIN_MARKET_N)
     if n_sources == 2 or (corridor and corridor.get("n", 0) >= 8) or (ads and ads.get("n", 0) >= 8):
@@ -586,6 +633,10 @@ def valuation(
         "range": rng,
         "range_source": source,
         "total_range": (rng[0] * area_sotka, rng[1] * area_sotka) if rng else None,
+        "cadastral_anchors": cadastral,
+        "market_anchors": market,
+        "has_market": bool(market),
+        "coef": coef,
         "verdict": verdict,
         "position": position,
         "confidence": confidence,
