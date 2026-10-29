@@ -138,7 +138,7 @@
   {% set fl = loc.free_land if loc.free_land is defined else none %}
   {% if fl and user is defined and user and user.is_admin %}
   <details class="free-land">
-    <summary><strong>Свободная земля рядом</strong> <span class="badge mini">внутренний режим</span> — публичных участков в {{ loc.radius_m.neighbors }} м: {{ fl.total }}{% if fl.on_auction %}, из них на аукционе {{ fl.on_auction }}{% endif %}</summary>
+    <summary><strong>Свободная земля рядом</strong> <span class="badge mini">внутренний режим</span> — публичных участков в {{ loc.radius_m.neighbors }} м: {{ fl.total }}{% if fl.on_auction %}, из них на аукционе {{ fl.on_auction }}{% endif %}{% if fl.excluded %} <span class="muted small">(ещё {{ fl.excluded }} исключены: лесфонд, сети, дороги, учреждения)</span>{% endif %}</summary>
     {% if fl['items'] %}
     <table class="facts">
       <tr><th>Участок</th><th>Категория · ВРИ</th><th class="num">Площадь</th><th>Собственность · статус</th><th class="num">До участка</th></tr>

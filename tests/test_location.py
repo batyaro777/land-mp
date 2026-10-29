@@ -564,9 +564,18 @@ def test_free_land_lists_public_neighbors_with_howto():
         ),
         nb("50:09:0:5", "Государственная собственность", sett, status="Архивный"),
         nb("50:09:0:9", "Муниципальная", sett, dist=400.0),
+        nb(
+            "50:09:0:6",
+            "Государственная федеральная",
+            "Земли лесного фонда",
+            vri="Использование лесов",
+        ),
+        nb("50:09:0:7", "Муниципальная", sett, vri="Газоснабжение мкр «Садовый»"),
+        nb("50:09:0:8", "Государственная федеральная", sett, vri="Коммунальное обслуживание"),
     ]
     fl = free_land("50:09:0:9", neighbors, [nb("50:09:0:1", "Муниципальная", sett)])
     assert fl["total"] == 2 and [i["cad_num"] for i in fl["items"]] == ["50:09:0:3", "50:09:0:1"]
+    assert fl["excluded"] == 3  # лесфонд, газоснабжение, коммунальное обслуживание (3.1)
     assert fl["on_auction"] == 1 and fl["items"][1]["on_auction"] is True
     titles = [h["title"] for h in fl["howto"]]
     assert titles == [

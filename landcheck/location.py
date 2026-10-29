@@ -836,9 +836,55 @@ HOWTO_OTHER = {
 }
 
 
+_UNAVAILABLE_CATEGORY = ("лесного фонда", "водного фонда", "особо охраняем", "запаса")
+# группы классификатора, где публичный участок занят учреждением, сетями, транспортом или
+# не передаётся вовсе: 3 (общественное использование), 7 (транспорт), 8 (оборона), 9 (ООПТ),
+# 10 (леса), 11 (вода), 12 (общего пользования, ритуальное, специальное); плюс 6.7/6.8
+_UNAVAILABLE_GROUPS = {"3", "7", "8", "9", "10", "11", "12"}
+_UNAVAILABLE_CODE_PREFIX = ("6.7", "6.8")
+_UNAVAILABLE_WORDS = (
+    "электросет",
+    "газоснабж",
+    "газопровод",
+    "подстанц",
+    "лэп",
+    "водозабор",
+    "водопровод",
+    "канализ",
+    "котельн",
+    "дорог",
+    "кладбищ",
+    "ветеринар",
+    "школ",
+    "детск",
+    "больниц",
+    "олимпийск",
+)
+
+
 def _is_public(own: str) -> bool:
     lo = own.lower()
     return any(k in lo for k in _PUBLIC_OWN)
+
+
+def _unavailable(category: str | None, vri: str | None) -> str | None:
+    """Почему публичный участок нельзя считать «свободной землёй» (Клавдий, прод 29.10: в список
+    попали лесфонд, газоснабжение, электросеть, ветучасток). None — препятствий по данным нет."""
+    cat = (category or "").lower()
+    if any(k in cat for k in _UNAVAILABLE_CATEGORY):
+        return "категория не передаётся гражданам и бизнесу"
+    from landcheck.rules import classifier
+
+    m = classifier.match(vri) if vri else None
+    if m is not None and m.how != "fuzzy":
+        if m.code.split(".")[0] in _UNAVAILABLE_GROUPS or m.code.startswith(
+            _UNAVAILABLE_CODE_PREFIX
+        ):
+            return f"занят по назначению (код {m.code} «{m.name}»)"
+    lo = (vri or "").lower()
+    if any(w in lo for w in _UNAVAILABLE_WORDS):
+        return "занят инфраструктурой или учреждением (по ВРИ)"
+    return None
 
 
 def free_land(
@@ -853,6 +899,7 @@ def free_land(
         ((f.get("properties") or {}).get("options") or {}).get("cad_num") for f in auction
     }
     items: list[dict[str, Any]] = []
+    excluded = 0
     for f in neighbors:
         opts = (f.get("properties") or {}).get("options") or {}
         cad = opts.get("cad_num")
@@ -865,11 +912,15 @@ def free_land(
         status = str(_get(opts, "status", default="") or "")
         if "общего пользования" in vri.lower() or "архив" in status.lower():
             continue
+        category = _get(opts, "land_record_category_type")
+        if _unavailable(str(category or ""), vri):
+            excluded += 1
+            continue
         area = _get(opts, "specified_area", "declared_area", "area", "land_record_area")
         items.append(
             {
                 "cad_num": cad,
-                "category": _get(opts, "land_record_category_type"),
+                "category": category,
                 "vri": vri or None,
                 "area_m2": float(area) if isinstance(area, (int, float)) else None,
                 "ownership": own,
@@ -897,6 +948,7 @@ def free_land(
         howto.append(HOWTO_OTHER)
     return {
         "total": len(items),
+        "excluded": excluded,
         "on_auction": sum(1 for i in items if i["on_auction"]),
         "items": items[:FREE_LAND_MAX],
         "categories": sorted(cats.items(), key=lambda kv: -kv[1]),
