@@ -21,6 +21,8 @@ OPEN_METEO_URL = "https://api.open-meteo.com/v1/elevation"
 RING_M = 300.0  # кольцо вокруг участка для оценки «низина / возвышенность»
 SLOPE_STEEP_PCT = 15.0
 SLOPE_NOTABLE_PCT = 8.0
+LOWLAND_MAX_SLOPE_PCT = 3.0  # «низина» и подтопление имеют смысл только на ровной местности
+FLAT_DROP_M = 1.5  # перепад меньше точности модели — участок ровный (зум 28.10, п. 1.5)
 LOWLAND_M = -3.0
 HILL_M = 3.0
 
@@ -142,11 +144,17 @@ def terrain_summary(
         notes.append(
             f"заметный уклон {slope:.0f} % ({slope_scope}): учесть в проекте дома и дренаже"
         )
+    elif drop < FLAT_DROP_M:
+        notes.append(f"ровный участок: перепад {drop:.1f} м ({slope_scope}, точность модели ±1 м)")
     else:
         notes.append(f"ровно: уклон {slope:.0f} % ({slope_scope})")
     near_water = water_distance_m is not None and water_distance_m <= 300
-    if relief <= LOWLAND_M:
-        if flood_zone or near_water or water_zone:
+    # На склоне «низина» и «подтопление» не имеют смысла: Красная Поляна при уклоне 26 %
+    # получала «низина, риск подтопления» (Влад, зум 28.10). Про подтопление — только на
+    # ровной местности; зона затопления по ЗОУИТ — факт при любом рельефе.
+    flat = slope < SLOPE_NOTABLE_PCT
+    if flat and relief <= LOWLAND_M:
+        if slope <= LOWLAND_MAX_SLOPE_PCT and (flood_zone or near_water or water_zone):
             level = "risk"
             if flood_zone:
                 why = "участок в зоне затопления"
@@ -160,10 +168,9 @@ def terrain_summary(
             )
         else:
             notes.append(
-                f"низина: на {abs(relief):.0f} м ниже окружения — проверить сток воды и "
-                "грунтовые воды"
+                f"ниже окружения на {abs(relief):.0f} м — проверить сток воды и грунтовые воды"
             )
-    elif relief >= HILL_M:
+    elif flat and relief >= HILL_M:
         if level != "risk":
             level = "plus"
         notes.append(
@@ -172,6 +179,7 @@ def terrain_summary(
     elif flood_zone:
         level = "risk"
         notes.append("участок в зоне затопления по ЗОУИТ — риск подтопления независимо от рельефа")
+    lat, lon = pts["center"]
     return {
         "elevation_m": round(elev, 1),
         "drop_m": round(drop, 1),
@@ -182,6 +190,13 @@ def terrain_summary(
         "notes": notes,
         "source": "Copernicus DEM 90 м"
         + (" (Open-Meteo)" if "open-meteo" in (elevation_url() or "") else " (OpenTopoData)"),
+        # Наклонный спутниковый вид: так Андрей смотрит далёкие участки (зум 28.10, 1:16).
+        "earth_url": earth_url(lat, lon),
         "fetched_at": datetime.now(UTC).isoformat(),
         "error": None,
     }
+
+
+def earth_url(lat: float, lon: float, *, distance_m: float = 600.0, tilt_deg: float = 60.0) -> str:
+    """Ссылка на Google Earth (web) с наклоном камеры — рельеф и застройка видны объёмно."""
+    return f"https://earth.google.com/web/@{lat:.6f},{lon:.6f},0a,{distance_m:.0f}d,35y,0h,{tilt_deg:.0f}t,0r"

@@ -28,12 +28,16 @@ SCHEMA_VERSION = 1
 MIN_AREA_M2 = 50  # площадь ЕГРН меньше полусотки — ошибка данных, цену за м² по ней не считаем
 NSPD_RADIUS_M = 1000  # ЗОУИТ и проекты межевания
 NEIGHBORS_RADIUS_M = 400  # соседи по кадастровой стоимости: ближний круг, иначе сотни участков
+CONSTRUCTIONS_RADIUS_M = 300  # сооружения ЕГРН: сети, трубопроводы, дороги (зум 28.10, п. 1.6)
+AT_BORDER_M = 20  # сооружение ближе — «по границе участка»
 OSM_RADIUS_M = 3000  # ТЗ М2.2
+MIN_NEIGHBORS = 5  # ориентир по одному соседу — не ориентир (зум 28.10, п. 1.12)
 
 SRC_NSPD_AROUND = "НСПД, объекты в радиусе от контура участка"
 SRC_GKO = "НСПД, удельный показатель кадастровой стоимости соседних участков (ГКО, не рынок)"
 SRC_OSM = "OpenStreetMap (Overpass API); полнота данных зависит от региона"
 SRC_PMT = "НСПД, слой «ЗУ, образуемые по проекту межевания территории»"
+SRC_CONSTR = "НСПД, слой «Сооружения» (ЕГРН), в радиусе от контура участка"
 
 # --- геометрия --------------------------------------------------------------------------
 _M_PER_DEG = 111_320.0
@@ -100,11 +104,25 @@ ZOUIT_KINDS: tuple[tuple[str, str, str, str], ...] = (
     ("затоплен", "зона затопления", "risk", "паводковый риск, страховка и стройка дороже"),
     ("подтоплен", "зона подтопления", "risk", "высокая вода, дренаж и фундамент дороже"),
     ("приаэродром", "приаэродромная территория", "risk", "шум и согласования строительства"),
+    # Округ санитарной охраны курорта накрывает весь Сочи или всю Белокуриху: на участок
+    # не влияет, это факт, а не риск и не «плюс» (Влад, зум 28.10, п. 1.4).
     (
         "лечебно-оздоровительн",
         "округ санитарной охраны курорта",
-        "plus",
-        "курортная локация: спрос на рекреацию выше, режим застройки строже",
+        "neutral",
+        "действует на весь курорт, на конкретный участок не влияет",
+    ),
+    (
+        "горно-санитарн",
+        "округ санитарной охраны курорта",
+        "neutral",
+        "действует на весь курорт, на конкретный участок не влияет",
+    ),
+    (
+        "курорт",
+        "округ санитарной охраны курорта",
+        "neutral",
+        "действует на весь курорт, на конкретный участок не влияет",
     ),
     (
         "культурного наследия",
@@ -120,6 +138,17 @@ ZOUIT_KINDS: tuple[tuple[str, str, str, str], ...] = (
     ("инженерных коммуникаций", "охранная зона инженерных сетей", "neutral", "сети рядом"),
     ("публичн", "публичный сервитут", "neutral", "проход или сети через участки"),
 )
+
+
+# Риск от зоны — только когда она задевает участок. «Зона затопления в 151 м» читалась как
+# «участок в зоне затопления» (Андрей, зум 28.10, п. 1.2–1.3). Порог в метрах от контура.
+ZOUIT_RISK_M: dict[str, int] = {
+    "зона затопления": 50,
+    "зона подтопления": 0,
+    "санитарно-защитная зона предприятия": 0,
+    "санитарная зона кладбища": 300,
+    "приаэродромная территория": 0,
+}
 
 
 def _zouit_kind(type_zone: str, name: str) -> tuple[str, str, str]:
@@ -170,6 +199,15 @@ def summarize_zouit(
         if dist is not None and (g["min_distance_m"] is None or dist < g["min_distance_m"]):
             g["min_distance_m"] = dist
             g["nearest_name"] = _get(opts, "name_by_doc", "type_zone")
+    for g in groups.values():
+        if g["severity"] == "risk":
+            limit = ZOUIT_RISK_M.get(g["label"], 0)
+            if g["min_distance_m"] is None or g["min_distance_m"] > limit:
+                g["severity"] = "neutral"
+                g["far"] = True
+                g["note"] = "вне участка" + (
+                    f", ближайшая в {g['min_distance_m']} м" if g["min_distance_m"] else ""
+                )
     order = {"risk": 0, "plus": 1, "neutral": 2}
     return sorted(
         groups.values(),
@@ -321,7 +359,7 @@ def summarize_neighbors(
         "uses": uses,
         "ownership": sorted(ownership.items(), key=lambda kv: -kv[1]),
         "same_category": same,
-        "target_rub_m2": target_cost_index,
+        "target_rub_m2": round(target_cost_index, 1) if target_cost_index else target_cost_index,
         "position": position,
         "source": SRC_GKO,
         "note": (
@@ -338,10 +376,14 @@ def price_reference(
     """Ориентир за сотку и гектар по кадастровой ставке своей группы; цена объявления к нему."""
     same = neighbors.get("same_category")
     basis = "медиана кадастровой ставки соседей той же категории"
-    if not same or not same.get("median_rub_m2"):
-        # Категория участка не установлена или у своей группы нет ставки — берём самую
-        # многочисленную группу соседей и говорим об этом прямо.
-        candidates = [c for c in neighbors.get("categories") or [] if c.get("median_rub_m2")]
+    if not same or not same.get("median_rub_m2") or same.get("count", 0) < MIN_NEIGHBORS:
+        # Категория участка не установлена, у своей группы нет ставки или соседей меньше пяти —
+        # берём самую многочисленную группу соседей и говорим об этом прямо.
+        candidates = [
+            c
+            for c in neighbors.get("categories") or []
+            if c.get("median_rub_m2") and c.get("count", 0) >= MIN_NEIGHBORS
+        ]
         if not candidates:
             return None
         same = max(candidates, key=lambda c: c["count"])
@@ -383,9 +425,23 @@ OSM_CLASSES: tuple[tuple[str, str, str], ...] = (
 _OSM_LABEL = {k: (label, sev) for k, label, sev in OSM_CLASSES}
 
 
+# Риск от объекта OSM — только вблизи; дальше это «окружение». Красная Поляна получала
+# «свалка/полигон ×32 в 353 м» и «промзона ×31» из контейнерных площадок и котельных
+# (зум 28.10, п. 1.3, 1.11). Пороги — метры от контура; None — никогда не риск.
+OSM_RISK_M: dict[str, int | None] = {
+    "landfill": 500,
+    "quarry": 500,
+    "cemetery": 300,
+    "industrial": 0,
+    "military": None,
+    "aerodrome": None,
+}
+OSM_MIN_AREA_M2 = {"landfill": 10_000, "industrial": 20_000}  # 1 га и 2 га
+
+
 def osm_class(tags: dict[str, str]) -> str | None:
     lu = tags.get("landuse", "")
-    if lu == "landfill" or tags.get("amenity") == "waste_disposal":
+    if lu == "landfill":
         return "landfill"
     if lu == "industrial":
         return "industrial"
@@ -443,6 +499,35 @@ def _osm_geojson(el: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def _osm_area_m2(el: dict[str, Any], parcel_geojson: dict[str, Any] | None) -> float | None:
+    """Площадь замкнутого контура OSM в м² (для фильтра мелких промзон и свалок)."""
+    if el.get("area_m2") is not None:
+        return el["area_m2"]
+    geom = el.get("geometry")
+    if not isinstance(geom, list) or len(geom) < 4:
+        return None
+    coords = [(p["lon"], p["lat"]) for p in geom if "lat" in p]
+    if len(coords) < 4 or coords[0] != coords[-1]:
+        return None
+    try:
+        poly = shapely.Polygon(coords)
+        lat0 = poly.centroid.y if not parcel_geojson else centroid(parcel_geojson)[0]
+        return round(abs(_local(poly, lat0, poly.centroid.x).area))
+    except Exception:  # noqa: BLE001 — кривой контур
+        return None
+
+
+def _osm_too_small(cls: str, el: dict[str, Any], parcel_geojson: dict[str, Any] | None) -> bool:
+    limit = OSM_MIN_AREA_M2.get(cls)
+    if limit is None:
+        return False
+    area = _osm_area_m2(el, parcel_geojson)
+    if area is None:
+        # Точка «промзона» (без контура) — это гараж или котельная, не промзона.
+        return cls == "industrial"
+    return area < limit
+
+
 def summarize_osm(
     parcel_geojson: dict[str, Any] | None, elements: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -451,7 +536,7 @@ def summarize_osm(
     for el in elements:
         tags = el.get("tags") or {}
         cls = osm_class(tags)
-        if cls is None:
+        if cls is None or _osm_too_small(cls, el, parcel_geojson):
             continue
         dist = el.get("distance_m")
         if dist is None:
@@ -459,6 +544,10 @@ def summarize_osm(
             dist = distance_m(parcel_geojson, g) if (parcel_geojson and g) else None
         name = tags.get("name") or tags.get("ref")
         label, severity = _OSM_LABEL[cls]
+        if severity == "risk":
+            limit = OSM_RISK_M.get(cls)
+            if limit is None or dist is None or dist > limit:
+                severity = "neutral"
         cur = best.get(cls)
         if cur is None or (
             dist is not None and (cur["distance_m"] is None or dist < cur["distance_m"])
@@ -505,12 +594,17 @@ def summarize_location(
         },
         "zouit": summarize_zouit(parcel_geojson, nspd.get("zouit") or []),
         "plans": summarize_plans(parcel_geojson, nspd.get("pmt") or []),
+        "constructions": summarize_constructions(parcel_geojson, nspd.get("constructions")),
         "auction_parcels": len(nspd.get("auction") or []),
         "neighbors": neighbors,
         "price": price_reference(neighbors, listing_price_rub, area_m2),
         "osm": summarize_osm(parcel_geojson, (osm or {}).get("elements") or []) if osm else None,
         "osm_error": (osm or {}).get("error") if osm else "OSM не запрашивался",
         "errors": list(nspd.get("errors") or []),
+        # Тексты исключений — в лог и в кэш, клиенту — одна фраза (зум 28.10, п. 1.10).
+        "errors_public": (
+            "часть запросов к НСПД не ответила, нажмите «обновить»" if nspd.get("errors") else None
+        ),
         "disclaimer": (
             "Окружение и ориентир стоимости собраны автоматически из НСПД и OpenStreetMap. "
             "Это не отчёт об оценке и не анализ генплана: документы терпланирования в НСПД "
@@ -522,7 +616,7 @@ def summarize_location(
 # --- разделы «Вода» и «Негативные факторы» поверх сводки (ТЗ v2, М2.2–2.3) ----------------
 WATER_RISK_LABELS = ("зона затопления", "зона подтопления")
 WATER_NEUTRAL_LABELS = ("водоохранная зона", "прибрежная защитная полоса")
-FLOOD_NEAR_M = 300
+FLOOD_NEAR_M = 50  # граница зоны затопления ближе — риск; дальше участок «вне зоны» (п. 1.2)
 WATER_NEAR_M = 1000
 _WATER_LOCATIVE = {
     "зона затопления": "зоне затопления",
@@ -543,12 +637,15 @@ def water_summary(loc: dict[str, Any]) -> dict[str, Any]:
     for g in loc.get("zouit") or []:
         label = g.get("label")
         if label in WATER_RISK_LABELS or label in WATER_NEUTRAL_LABELS:
+            dist = g.get("min_distance_m")
+            near = dist is not None and dist <= ZOUIT_RISK_M.get(label, FLOOD_NEAR_M)
             items.append(
                 {
                     "label": label,
-                    "distance_m": g.get("min_distance_m"),
+                    "distance_m": dist,
                     "count": g.get("count", 1),
-                    "severity": "risk" if label in WATER_RISK_LABELS else "neutral",
+                    "severity": "risk" if (label in WATER_RISK_LABELS and near) else "neutral",
+                    "flood": label in WATER_RISK_LABELS,
                     "name": g.get("nearest_name"),
                     "note": g.get("note"),
                     "source": g.get("source"),
@@ -580,8 +677,14 @@ def water_summary(loc: dict[str, Any]) -> dict[str, Any]:
 
     flood_in = [i for i in near("risk", 0)]
     flood_near = [i for i in near("risk", FLOOD_NEAR_M) if i["distance_m"] > 0]
-    protect_in = near("neutral", 0)
+    flood_far = [i for i in items if i.get("flood") and i["severity"] != "risk" and i["distance_m"]]
+    protect_in = [i for i in near("neutral", 0) if not i.get("flood")]
     water_near = near("plus", WATER_NEAR_M)
+    outside = (
+        f"участок вне зон затопления и подтопления (ближайшая в {flood_far[0]['distance_m']} м)"
+        if flood_far
+        else "зон затопления и подтопления рядом по НСПД нет"
+    )
     if flood_in:
         level = "risk"
         text = (
@@ -591,26 +694,27 @@ def water_summary(loc: dict[str, Any]) -> dict[str, Any]:
     elif flood_near:
         level = "risk"
         text = (
-            f"{flood_near[0]['label']} в {flood_near[0]['distance_m']} м: уточнить отметки "
-            "участка относительно уреза воды и историю паводков"
+            f"граница {_WATER_LOCATIVE[flood_near[0]['label']].replace('зоне', 'зоны')} "
+            f"в {flood_near[0]['distance_m']} м от участка: уточнить отметки относительно "
+            "уреза воды и историю паводков"
         )
     elif protect_in:
         level = "neutral"
         where = _WATER_LOCATIVE[protect_in[0]["label"]]
         text = (
             f"участок в {where}: берег рядом (плюс к спросу), ограничения на стоки, "
-            "стоянку техники и застройку у воды"
+            f"стоянку техники и застройку у воды; {outside}"
         )
     elif water_near:
         w = water_near[0]
         level = "plus"
         text = (
             f"вода в {w['distance_m']} м{(' (' + w['name'] + ')') if w.get('name') else ''}: "
-            "плюс к спросу; зон затопления рядом в НСПД нет, весной проверить подтопление на месте"
+            f"плюс к спросу; {outside}"
         )
     elif items:
         level = "neutral"
-        text = "водные зоны есть, но дальше порогов риска; подробности в списке"
+        text = outside
     else:
         level = "none"
         text = "зон затопления, водоохранных зон и водоёмов рядом не найдено"
@@ -620,11 +724,16 @@ def water_summary(loc: dict[str, Any]) -> dict[str, Any]:
 def negative_factors(
     loc: dict[str, Any], region: dict[str, Any] | None = None
 ) -> list[dict[str, Any]]:
-    """Свод негативных факторов с расстояниями и датами источников: ЗОУИТ-риски из НСПД,
-    объекты риска из OSM и пункты раздела «Негативные факторы» блока «Регион»."""
+    """Свод негативных факторов с расстояниями: ЗОУИТ-риски из НСПД (только задевающие
+    участок) и объекты риска из OSM в пределах порогов. Новости региона сюда не идут:
+    «полигон Ядрово, пятеро госпитализированы» в рисках участка пугает клиента и не про
+    участок (Антон М, зум 28.10, п. 1.3) — они остаются в блоке «Регион» со ссылками."""
     out: list[dict[str, Any]] = []
     for g in loc.get("zouit") or []:
-        if g.get("severity") == "risk":
+        dist = g.get("min_distance_m")
+        # Сводки, собранные до порогов (кэш на проде), тоже проходят через пороги.
+        near = dist is not None and dist <= ZOUIT_RISK_M.get(g.get("label"), 0)
+        if g.get("severity") == "risk" and near:
             out.append(
                 {
                     "label": g["label"],
@@ -637,7 +746,9 @@ def negative_factors(
                 }
             )
     for o in loc.get("osm") or []:
-        if o.get("severity") == "risk":
+        limit = OSM_RISK_M.get(o.get("kind"))
+        dist = o.get("distance_m")
+        if o.get("severity") == "risk" and limit is not None and dist is not None and dist <= limit:
             out.append(
                 {
                     "label": o["label"],
@@ -650,26 +761,90 @@ def negative_factors(
                 }
             )
     out.sort(key=lambda i: (i["distance_m"] is None, i["distance_m"] or 0))
-    if region and not region.get("error"):
-        for sec in region.get("sections") or []:
-            if not str(sec.get("title", "")).lower().startswith("негативн"):
-                continue
-            for it in sec.get("items") or []:
-                low = it.lower()
-                if "не найдено" in low or "нет данных" in low or "данных нет" in low:
-                    continue
-                out.append(
-                    {
-                        "label": it,
-                        "distance_m": None,
-                        "count": 1,
-                        "name": None,
-                        "note": None,
-                        "source": "открытые источники, блок «Регион»",
-                        "date": region.get("fetched_at"),
-                    }
-                )
     return out
+
+
+# --- сооружения ЕГРН рядом: сети, трубопроводы, дороги (зум 28.10, п. 1.6) -------------------
+# (класс, подпись, ключи в наименовании/назначении)
+CONSTRUCTION_KINDS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("gas", "газопровод", ("газ",)),
+    ("water", "водопровод", ("водопровод", "водовод", "водоснабж", "скважин", "водонапор")),
+    ("sewer", "канализация", ("канализац", "водоотвед", "очистн")),
+    (
+        "power",
+        "электросети",
+        ("электр", "лэп", "вл-", "вл ", "кл-", "кл ", "трансформат", "подстанц", "тп-", "тп "),
+    ),
+    ("heat", "теплосети", ("тепло", "котельн")),
+    ("telecom", "связь", ("связ", "волс", "кабел")),
+    ("road", "дорога, проезд", ("дорог", "проезд", "улиц", "7.4")),
+)
+_CONSTR_LABEL = {k: label for k, label, _ in CONSTRUCTION_KINDS}
+COMM_KINDS = ("gas", "water", "sewer", "power", "heat", "telecom")
+
+
+def construction_kind(name: str | None, purpose: str | None) -> str:
+    text = f"{name or ''} {purpose or ''}".lower()
+    for kind, _label, keys in CONSTRUCTION_KINDS:
+        if any(k in text for k in keys):
+            return kind
+    return "other"
+
+
+def summarize_constructions(
+    parcel_geojson: dict[str, Any] | None, features: list[dict[str, Any]] | None
+) -> dict[str, Any] | None:
+    """Сооружения ЕГРН в радиусе: что подведено к границе и что рядом. None — не запрашивались
+    (кэш старого формата). По участку в Красной Поляне НСПД показывал газопровод, воду и
+    электричество по границе, а сервис писал «коммуникаций не найдено»."""
+    if features is None:
+        return None
+    items: list[dict[str, Any]] = []
+    for f in features:
+        opts = (f.get("properties") or {}).get("options") or {}
+        name = _get(opts, "params_name")
+        purpose = _get(opts, "params_purpose")
+        kind = construction_kind(str(name or ""), str(purpose or ""))
+        dist = _feature_distance(f, parcel_geojson)
+        items.append(
+            {
+                "kind": kind,
+                "label": _CONSTR_LABEL.get(kind, "иное сооружение"),
+                "name": name,
+                "purpose": purpose,
+                "cad_num": _get(opts, "cad_number"),
+                "length_m": _to_float(_get(opts, "params_extension")),
+                "distance_m": dist,
+                "at_border": dist is not None and dist <= AT_BORDER_M,
+                "source": SRC_CONSTR,
+            }
+        )
+    items.sort(key=lambda i: (i["distance_m"] is None, i["distance_m"] or 0, i["kind"]))
+    at_border = [i for i in items if i["at_border"] and i["kind"] in COMM_KINDS]
+    nearby = [i for i in items if not i["at_border"] and i["kind"] in COMM_KINDS]
+    roads = [i for i in items if i["kind"] == "road"]
+    comm_labels = list(dict.fromkeys(i["label"] for i in at_border))
+    if comm_labels:
+        text = "по границе участка: " + ", ".join(comm_labels)
+    elif nearby:
+        n = nearby[0]
+        text = f"по границе сетей нет; ближайшее — {n['label']} в {n['distance_m']} м"
+    else:
+        text = f"сетей и трубопроводов в радиусе {CONSTRUCTIONS_RADIUS_M} м в ЕГРН не найдено"
+    text += (
+        "; подключение — по техусловиям сетевой организации"
+        if comm_labels or nearby
+        else "; в деревне с домами электричество обычно есть — ТУ в сетевой организации"
+    )
+    return {
+        "items": items,
+        "at_border": at_border,
+        "nearby": nearby,
+        "roads": roads,
+        "text": text,
+        "radius_m": CONSTRUCTIONS_RADIUS_M,
+        "source": SRC_CONSTR,
+    }
 
 
 _KEEP_ZONE_KEYS = ("reg_numb_border", "type_zone", "name_by_doc", "subcategory")
@@ -681,6 +856,15 @@ _KEEP_PMT_KEYS = (
     "document_number",
     "document_date",
     "document_issuer",
+)
+_KEEP_CONSTR_KEYS = (
+    "cad_number",
+    "params_name",
+    "params_purpose",
+    "params_extension",
+    "address_readable_address",
+    "ownership_type",
+    "object_type_value",
 )
 _KEEP_PLOT_KEYS = (
     "cad_num",
@@ -731,6 +915,10 @@ def slim_raw(raw: dict[str, Any], parcel_geojson: dict[str, Any] | None = None) 
         _with_distance(f, _KEEP_ZONE_KEYS, parcel_geojson) for f in nspd.get("zouit") or []
     ]
     nspd["pmt"] = [_with_distance(f, _KEEP_PMT_KEYS, parcel_geojson) for f in nspd.get("pmt") or []]
+    if nspd.get("constructions") is not None:
+        nspd["constructions"] = [
+            _with_distance(f, _KEEP_CONSTR_KEYS, parcel_geojson) for f in nspd["constructions"]
+        ]
     nspd["neighbors"] = [
         slim_feature(f, _KEEP_PLOT_KEYS, geometry=False) for f in nspd.get("neighbors") or []
     ]
@@ -746,6 +934,9 @@ def slim_raw(raw: dict[str, Any], parcel_geojson: dict[str, Any] | None = None) 
                 continue
             keep = {k: el.get(k) for k in ("type", "lat", "lon", "center") if el.get(k) is not None}
             g = _osm_geojson(el)
+            area = _osm_area_m2(el, parcel_geojson)
+            if area is not None:
+                keep["area_m2"] = area
             if parcel_geojson and g:
                 keep["distance_m"] = distance_m(parcel_geojson, g)
             elif el.get("geometry") is not None:
@@ -785,6 +976,13 @@ def empty_location_raw(cad_num: str) -> dict[str, Any]:
         "nspd_radius_m": NSPD_RADIUS_M,
         "neighbors_radius_m": NEIGHBORS_RADIUS_M,
         "osm_radius_m": OSM_RADIUS_M,
-        "nspd": {"zouit": [], "pmt": [], "neighbors": [], "auction": [], "errors": []},
+        "nspd": {
+            "zouit": [],
+            "pmt": [],
+            "neighbors": [],
+            "auction": [],
+            "constructions": [],
+            "errors": [],
+        },
         "osm": None,
     }

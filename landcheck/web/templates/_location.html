@@ -27,7 +27,7 @@
       {% else %}{% if terrain.level != 'neutral' %}<span class="badge mini v-{{ sev[terrain.level] }}">{{ {'risk':'риск','plus':'плюс'}[terrain.level] }}</span>{% endif %}
       <span class="small">высота {{ terrain.elevation_m }} м, перепад по участку {{ terrain.drop_m }} м</span>{% endif %}</p>
     {% if not terrain.error %}<ul class="loc-list">{% for n in terrain.notes %}<li>{{ n|ucfirst }}</li>{% endfor %}</ul>
-    <p class="muted small">{{ terrain.source }}: модель местности 90 м, для проекта нужна топосъёмка.</p>{% endif %}
+    <p class="muted small">{{ terrain.source }}: модель местности 90 м, точность высот ±1–4 м, для проекта нужна топосъёмка.{% if terrain.earth_url %} <a href="{{ terrain.earth_url }}" target="_blank" rel="noopener">Посмотреть рельеф и застройку в Google Earth (3D)</a>.{% endif %}</p>{% endif %}
     {% endif %}
   </div>
   <div>
@@ -39,8 +39,8 @@
         <div class="muted small">{{ n.source }}{% if n.date %}, {{ n.date|dt }}{% endif %}{% if n.note %} — {{ n.note }}{% endif %}</div></li>
       {% endfor %}
     </ul>
-    {% else %}<p class="muted small">Объектов с риском в радиусе {{ loc.radius_m.nspd }} м (НСПД) и {{ loc.radius_m.osm }} м (OSM) не найдено.</p>{% endif %}
-    {% if region is not defined or not region %}<p class="muted small">Планируемые негативные объекты по региону добавятся из блока «Регион» после его загрузки.</p>{% endif %}
+    {% else %}<p class="muted small">Объектов, которые задевают участок или стоят вплотную, не найдено: зоны затопления, СЗЗ и приаэродромные — только при пересечении контура, свалка — до 500 м, кладбище — до 300 м. Остальное окружение — в списке «Что рядом».</p>{% endif %}
+    <p class="muted small">Новости района (полигоны, стройки, протесты) — в блоке «Регион» со ссылками на источники; в риски участка они не включаются.</p>
   </div>
   </div>
   {% endif %}
@@ -59,7 +59,7 @@
         {% if g.nearest_name %}<div class="muted small">{{ g.nearest_name|truncate(110) }}</div>{% endif %}</li>
       {% endfor %}
     </ul>
-    {% else %}<p class="muted small">ЗОУИТ в радиусе не найдены{% if loc.errors %} ({{ loc.errors|join('; ') }}){% endif %}.</p>{% endif %}
+    {% else %}<p class="muted small">ЗОУИТ в радиусе не найдены{% if loc.errors_public %} ({{ loc.errors_public }}){% endif %}.</p>{% endif %}
 
     {% if loc.osm %}
     <ul class="loc-list">
@@ -71,6 +71,29 @@
     {% elif loc.osm_error %}<p class="muted small">OpenStreetMap: {{ loc.osm_error }}.</p>
     {% else %}<p class="muted small">OpenStreetMap: объектов выбранных классов в радиусе нет.</p>{% endif %}
     {% if loc.auction_parcels %}<p class="small">Участков, выставленных на аукцион рядом: {{ loc.auction_parcels }}.</p>{% endif %}
+
+    {% set c = loc.constructions if loc.constructions is defined else none %}
+    <strong>Коммуникации и подъезд</strong>
+    {% if c is none %}
+    <p class="muted small">Сооружения ЕГРН (сети, трубопроводы, дороги) в этой сводке не запрашивались — нажмите «обновить».</p>
+    {% else %}
+    <p class="small">{{ c.text|ucfirst }}.</p>
+    {% if c.at_border or c.nearby or c.roads %}
+    <ul class="loc-list">
+      {% for i in c.at_border + c.nearby %}
+      <li><span class="badge mini v-ok">факт</span> {{ i.label|ucfirst }}{% if i.name %} — {{ i.name|truncate(70) }}{% endif %}:
+        {% if i.at_border %}по границе участка{% elif i.distance_m is not none %}в {{ i.distance_m }} м{% else %}рядом{% endif %}
+        {% if i.cad_num %}<span class="muted small">{{ i.cad_num }}</span>{% endif %}</li>
+      {% endfor %}
+      {% for r in c.roads %}
+      <li><span class="badge mini v-ok">факт</span> {{ r.label|ucfirst }}{% if r.name %} — {{ r.name|truncate(70) }}{% endif %}:
+        {% if r.at_border %}по границе участка{% elif r.distance_m is not none %}в {{ r.distance_m }} м{% else %}рядом{% endif %}{% if r.length_m %}, протяжённость {{ (r.length_m / 1000)|round(1) }} км{% endif %}
+        {% if r.cad_num %}<span class="muted small">{{ r.cad_num }}</span>{% endif %}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    <p class="muted small">{{ c.source }}, радиус {{ c.radius_m }} м. Сети без кадастрового учёта в ЕГРН не видны; охранные зоны сетей — в списке «Что рядом».</p>
+    {% endif %}
   </div>
 
   <div>
@@ -91,10 +114,10 @@
   {% set n = loc.neighbors %}
   <strong>Ориентир стоимости по соседям</strong>
   {% if n.total %}
-  <table class="facts">
+  <table class="facts neighbors">
     <tr><th>Категория</th><th class="num">Участков</th><th class="num">Медиана, ₽/м²</th><th class="num">25–75 %, ₽/м²</th><th class="num">Медиана площади</th></tr>
     {% for c in n.categories %}
-    <tr><td>{{ c.category }}</td><td class="num">{{ c.count }}</td><td class="num">{{ c.median_rub_m2 or '—' }}</td>
+    <tr><td>{{ c.category|short_category }}</td><td class="num">{{ c.count }}</td><td class="num">{{ c.median_rub_m2 or '—' }}</td>
       <td class="num">{% if c.p25_rub_m2 %}{{ c.p25_rub_m2 }} – {{ c.p75_rub_m2 }}{% else %}—{% endif %}</td>
       <td class="num">{{ (c.median_area_m2 / 100)|round(1) if c.median_area_m2 else '—' }} сот.</td></tr>
     {% endfor %}
@@ -106,6 +129,6 @@
   {% endif %}
   {% if n.uses %}<p class="muted small">Частые ВРИ рядом: {% for u in n.uses %}{{ u.vri|lower|truncate(45) }} ({{ u.count }}{% if u.median_rub_m2 %}, {{ u.median_rub_m2 }} ₽/м²{% endif %}){% if not loop.last %}; {% endif %}{% endfor %}.</p>{% endif %}
   <p class="muted small">{{ n.note }}</p>
-  {% else %}<p class="muted small">Соседние участки не получены{% if loc.errors %}: {{ loc.errors|join('; ') }}{% endif %}.</p>{% endif %}
+  {% else %}<p class="muted small">Соседние участки не получены{% if loc.errors_public %}: {{ loc.errors_public }}{% endif %}.</p>{% endif %}
   <p class="muted small">{{ loc.disclaimer }}</p>
 </article>

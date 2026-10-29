@@ -7,18 +7,16 @@
     <p>Вставьте кадастровые номера с ценой и площадью из объявлений или загрузите файл. До {{ 300 }} участков за запуск.</p>
   </hgroup>
   <form method="post" action="/checks" enctype="multipart/form-data">
-    <label>Название подборки
-      <input name="title" placeholder="Истра, ИЖС, октябрь">
-    </label>
-    <label for="numbers">Кадастровые номера</label>
+    <label for="numbers">Кадастровые номера <small class="muted">— одно обязательное поле: вставьте сюда</small></label>
     <div class="mic-wrap">
-      <textarea id="numbers" name="numbers" rows="8" placeholder="50:09:0060202:101; 2 500 000; 10 сот; https://avito.ru/...
-50:09:0060202:102; 1,2 млн; 8 сот
-50:09:0060202:103"></textarea>
+      <textarea id="numbers" name="numbers" rows="6" placeholder="50:09:0060202:101" required></textarea>
       {% if voice_enabled %}<button type="button" class="mic outline sm" data-target="numbers" title="Продиктовать номера и цены, до 60 секунд">🎙 Голосом</button>{% endif %}
       <small class="mic-status muted"></small>
     </div>
-    <small class="muted">По одному участку в строке: номер, цена, площадь, ссылка — в любом порядке и разделителе. Площадь без подписи — в сотках.</small>
+    <small class="muted">По одному участку в строке. Можно добавить цену, площадь и ссылку в любом порядке, например: <code>50:09:0060202:102; 1,2 млн; 8 сот; https://avito.ru/…</code>. Площадь без подписи — в сотках.</small>
+    <label>Название подборки <small class="muted">(необязательно: по умолчанию — первый номер и дата)</small>
+      <input name="title" placeholder="Истра, ИЖС, октябрь">
+    </label>
     <label>Или файл CSV / XLSX
       <input type="file" name="file" accept=".csv,.xlsx,.txt">
       <small class="muted">Колонки: кадастровый номер, цена, площадь (единицы читаются из заголовка), ссылка.</small>
@@ -68,7 +66,7 @@
         <span class="badge v-ok">ок {{ k.get('ок', 0) }}</span>
         <span class="badge v-check">проверить {{ k.get('проверить', 0) }}</span>
         <span class="badge v-stop">стоп {{ k.get('стоп', 0) }}</span>
-      {% elif c.status == 'error' %}<span class="badge v-stop">ошибка</span>
+      {% elif c.status == 'error' %}<span class="badge v-stop">ошибка</span> <span class="muted">{{ (c.error or 'причина не записана')|truncate(90) }}</span> · <form method="post" action="/checks/{{ c.id }}/rerun" class="inline" style="display:inline"><button class="outline sm">повторить</button></form>
       {% else %}<span class="badge">в работе {{ c.done }}/{{ c.total }}</span>{% endif %}
     </div>
   </div>

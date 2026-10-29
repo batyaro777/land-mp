@@ -17,6 +17,7 @@ from landcheck.providers.base import empty_payload
 ZOUIT_LAYER_TITLE = "Иные ЗОУИТ"  # все 5 слоёв ЗОУИТ делят categoryId 36940 → один запрос
 TERRITORIAL_ZONES_TITLE = "Территориальные зоны"
 LANDPLOT_LAYER_ID = 36048  # Земельные участки из ЕГРН
+CONSTRUCTIONS_LAYER_ID = 36328  # Сооружения ЕГРН: сети, трубопроводы, дороги (зум 28.10, п. 1.6)
 PMT_LAYER_ID = 36473  # ЗУ, образуемые по проекту межевания территории
 AUCTION_LAYER_ID = 37299  # ЗУ, выставленные на аукцион
 
@@ -132,12 +133,14 @@ class LiveNspdProvider:
     def fetch_location_raw(self, cad_num: str, parcel_geojson: dict[str, Any]) -> dict[str, Any]:
         """ЗОУИТ и проекты межевания в радиусе NSPD_RADIUS_M, соседи в NEIGHBORS_RADIUS_M.
 
-        Четыре запроса к НСПД на участок. Каждый шаг изолирован: ошибка пишется в errors.
+        Пять запросов к НСПД на участок (плюс сооружения ЕГРН в CONSTRUCTIONS_RADIUS_M).
+        Каждый шаг изолирован: ошибка пишется в errors.
         """
         from pynspd import NspdFeature
         from pynspd import schemas as pschemas
 
         from landcheck.location import (
+            CONSTRUCTIONS_RADIUS_M,
             NEIGHBORS_RADIUS_M,
             NSPD_RADIUS_M,
             bbox_polygon,
@@ -155,6 +158,7 @@ class LiveNspdProvider:
             return raw
         wide = bbox_polygon(lat, lon, NSPD_RADIUS_M)
         near = bbox_polygon(lat, lon, NEIGHBORS_RADIUS_M)
+        close = bbox_polygon(lat, lon, CONSTRUCTIONS_RADIUS_M)
 
         def layer(layer_id: int):
             return getattr(pschemas, f"Layer{layer_id}Feature")
@@ -164,6 +168,7 @@ class LiveNspdProvider:
             ("pmt", wide, lambda: layer(PMT_LAYER_ID)),
             ("neighbors", near, lambda: layer(LANDPLOT_LAYER_ID)),
             ("auction", wide, lambda: layer(AUCTION_LAYER_ID)),
+            ("constructions", close, lambda: layer(CONSTRUCTIONS_LAYER_ID)),
         )
         for key, poly, layer_def in steps:
             try:

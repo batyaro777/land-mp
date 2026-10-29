@@ -45,10 +45,28 @@ def test_lph_on_agri_land_stops_house():
     assert flags["R04"].level is Level.STOP
 
 
-def test_garden_vri_for_house_is_check_with_217fz():
+def test_garden_vri_for_house_is_ok_with_217fz():
+    # Карточка и флаг говорили разное (зум 28.10, п. 1.1): ВРИ 13.2 и «дачное» допускают дом,
+    # вопрос этажности — у терзоны (R11), а не у ВРИ
     _, flags = run(make_payload("x", category=AGRI, vri="Ведение садоводства"), Purpose.IZHS)
-    assert flags["R05"].level is Level.CHECK and "217-ФЗ" in flags["R05"].source
-    assert flags["R04"].level is Level.CHECK  # сельхозземля, но садовый ВРИ — не «стоп»
+    assert flags["R05"].level is Level.OK and "217-ФЗ" in flags["R05"].source
+    assert "13.2" in flags["R05"].message and "Ведение садоводства" in flags["R05"].message
+    assert flags["R04"].level is Level.OK  # сельхозземля, но садовый ВРИ — не «стоп»
+    _, flags = run(make_payload("x", category=AGRI, vri="Под дачное строительство"), Purpose.IZHS)
+    assert flags["R05"].level is Level.OK and "ст. 54" in flags["R05"].source
+    assert "Под дачное строительство" in flags["R05"].message
+    assert flags["R04"].level is Level.OK and "ст. 54" in flags["R04"].source
+
+
+def test_farming_vri_wordings_match_kfh_goal():
+    # «для ведения сельскохозяйственной деятельности» — это и есть КФХ (Андрей, зум 28.10)
+    for vri in (
+        "Для ведения сельскохозяйственной деятельности",
+        "Для сельскохозяйственного использования",
+        "Сельскохозяйственное использование (1.0)",
+    ):
+        _, flags = run(make_payload("x", category=AGRI, vri=vri), Purpose.FARMING)
+        assert "R04" not in flags and "R05" not in flags, vri
 
 
 def test_vegetable_garden_stops_any_house():
@@ -169,9 +187,10 @@ def test_goal_summary_three_rows_and_worst_level():
     g = goal_summary(result_to_dict(result), Purpose.IZHS)
     assert g["activity"].startswith("Построить жилой дом")
     assert [r["rule_id"] for r in g["rows"]] == ["R04", "R05", "R11"]
-    # сельхозземля под дом — исключение только благодаря садовому ВРИ (217-ФЗ): «проверить», не «стоп»
-    assert g["rows"][0]["level"] == "проверить" and "217-ФЗ" in g["rows"][0]["source"]
-    assert g["rows"][1]["level"] == "проверить" and g["rows"][2]["level"] == "проверить"
+    # сельхозземля под дом — садовый ВРИ допускает дом (217-ФЗ): категория и ВРИ «ок»,
+    # «проверить» остаётся только за терзоной
+    assert g["rows"][0]["level"] == "ок" and "217-ФЗ" in g["rows"][0]["source"]
+    assert g["rows"][1]["level"] == "ок" and g["rows"][2]["level"] == "проверить"
     assert g["level"] == "проверить"
     assert goal_summary(result_to_dict(result), Purpose.ANY) is None
 

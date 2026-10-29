@@ -124,8 +124,18 @@ def test_water_summary_levels():
     assert w2["level"] == "neutral" and "водоохранной зоне" in w2["text"]
     w3 = water_summary({"zouit": [], "osm": [LOC["osm"][1]]})
     assert w3["level"] == "plus" and "Катунь" in w3["text"]
+    # зона затопления в 200 м — участок вне зоны: факт, не риск (зум 28.10, п. 1.2)
     w4 = water_summary({"zouit": [LOC["zouit"][0] | {"min_distance_m": 200}], "osm": None})
-    assert w4["level"] == "risk" and "в 200 м" in w4["text"]
+    assert w4["level"] == "neutral" and "вне зон затопления" in w4["text"] and "200 м" in w4["text"]
+    assert w4["items"][0]["severity"] == "neutral"
+    # граница зоны в 30 м — риск
+    w5 = water_summary({"zouit": [LOC["zouit"][0] | {"min_distance_m": 30}], "osm": None})
+    assert w5["level"] == "risk" and "в 30 м" in w5["text"]
+    # вода рядом и зона затопления далеко: «плюс» с честной фразой про зону
+    w6 = water_summary(
+        {"zouit": [LOC["zouit"][0] | {"min_distance_m": 512}], "osm": [LOC["osm"][1]]}
+    )
+    assert w6["level"] == "plus" and "вне зон затопления" in w6["text"] and "512 м" in w6["text"]
     assert water_summary({"zouit": [], "osm": []})["level"] == "none"
 
 
@@ -140,14 +150,14 @@ def test_negative_factors_merges_nspd_osm_region():
             },
         ],
     }
+    # СЗЗ в 630 м и свалка в 1 015 м — окружение, не риск; новости региона остаются в блоке
+    # «Регион» и в риски участка не попадают (зум 28.10, п. 1.3)
     n = negative_factors(LOC, region)
-    assert [x["label"] for x in n] == [
-        "зона затопления",
-        "санитарно-защитная зона предприятия",
-        "свалка",
-        "Планируется полигон ТКО в 5 км (2027)",
-    ]
-    assert n[2]["source"] == "OpenStreetMap" and n[3]["source"].startswith("открытые источники")
+    assert [x["label"] for x in n] == ["зона затопления"]
+    loc2 = {"zouit": LOC["zouit"], "osm": [LOC["osm"][0] | {"distance_m": 300}]}
+    n2 = negative_factors(loc2, region)
+    assert [x["label"] for x in n2] == ["зона затопления", "свалка"]
+    assert n2[1]["source"] == "OpenStreetMap"
     assert negative_factors({"zouit": [], "osm": None}, {"error": "x", "sections": []}) == []
 
 

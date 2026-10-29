@@ -97,3 +97,18 @@ fieldset label { display: inline-block; margin-right: 1.2rem; }
 .check-card.unread { border-left: 4px solid #2E75B6; padding-left: 0.75rem; }
 table.facts.actions th { width: auto; font-weight: 600; color: inherit; }
 table.facts.actions td { vertical-align: top; width: 33%; }
+
+/* карта: кнопки +/− Leaflet под Pico съезжали (экран Андрея, зум 28.10, п. 1.8) */
+.leaflet-container a[role=button], .leaflet-bar a, .leaflet-bar a:hover, .leaflet-bar a:focus {
+  display: block; width: 30px; height: 30px; line-height: 30px; padding: 0; margin: 0;
+  border: 0; border-radius: 0; background: #fff; color: #000; font-size: 22px; font-weight: 700;
+  text-align: center; text-decoration: none; box-shadow: none;
+}
+.leaflet-bar a + a { border-top: 1px solid #ccc; }
+.leaflet-bar a.leaflet-disabled { color: #bbb; }
+.leaflet-container .leaflet-control-attribution a { display: inline; width: auto; height: auto; line-height: inherit; font-size: inherit; font-weight: 400; }
+
+/* таблица соседей: колонки сжимались в три строки (зум 28.10, п. 1.12) */
+table.facts.neighbors th:first-child, table.facts.neighbors td:first-child { width: 38%; }
+table.facts.neighbors .num { white-space: nowrap; text-align: right; }
+table.results td.cad { white-space: nowrap; }

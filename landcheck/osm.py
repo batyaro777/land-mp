@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import httpx
+
+log = logging.getLogger(__name__)
 
 # Проверено с VPS 15.10.2026: overpass-api.de и kumi отвечали 406/502/500, зеркало mail.ru
 # отдавало данные за ~25 с. Перебираем по порядку, первый успешный — в ответе.
@@ -21,7 +24,7 @@ _QUERY = """
 (
   way["landuse"~"^(industrial|landfill|cemetery|quarry|military)$"](around:{r},{lat},{lon});
   relation["landuse"~"^(industrial|landfill|cemetery|quarry)$"](around:{r},{lat},{lon});
-  nwr["amenity"~"^(grave_yard|waste_disposal)$"](around:{r},{lat},{lon});
+  nwr["amenity"="grave_yard"](around:{r},{lat},{lon});
   nwr["aeroway"="aerodrome"](around:{r},{lat},{lon});
   way["highway"~"^(motorway|trunk|primary)$"](around:{r},{lat},{lon});
   way["railway"="rail"](around:{r},{lat},{lon});
@@ -56,7 +59,13 @@ def fetch_osm(lat: float, lon: float, radius_m: int, *, timeout: float = 45.0) -
             return {"elements": data.get("elements") or [], "url": url}
         except Exception as e:  # noqa: BLE001 — сеть; окружение не должно валить отчёт
             failures.append(f"{_host(url)}: {type(e).__name__}")
-    return {"elements": [], "error": "все зеркала Overpass отказали (" + "; ".join(failures) + ")"}
+    # Хосты и коды ошибок — в лог; клиенту в отчёте — одна понятная фраза (зум 28.10, п. 1.10).
+    log.warning("overpass: все зеркала отказали: %s", "; ".join(failures))
+    return {
+        "elements": [],
+        "error": "серверы OpenStreetMap не ответили, нажмите «обновить» позже",
+        "error_detail": "; ".join(failures),
+    }
 
 
 def _host(url: str) -> str:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import logging
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import quote
@@ -19,6 +20,7 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from markupsafe import Markup, escape
 from sqlalchemy import func, select
 
 from landcheck import __version__
@@ -39,8 +41,8 @@ from landcheck.web.auth import (
 )
 from landcheck.web.config import settings
 from landcheck.web.content import (
-    CHECKLIST,
     batch_median,
+    checklist_for,
     goal_summary,
     price_orientation,
     price_position,
@@ -82,6 +84,41 @@ templates.env.filters["sotka"] = fmt_sotka
 templates.env.filters["dt"] = fmt_date
 templates.env.filters["day"] = fmt_day
 templates.env.filters["ucfirst"] = lambda s: (s[:1].upper() + s[1:]) if s else s
+templates.env.filters["lcfirst"] = lambda s: (s[:1].lower() + s[1:]) if s else s
+
+
+def _short_category(name: str | None) -> str:
+    """«Земли промышленности, энергетики, транспорта, связи, …» → «земли промышленности и
+    иного спецназначения»: длинное имя категории ломало таблицу соседей (зум 28.10, п. 1.12)."""
+    from landcheck.rules.purpose import CATEGORY_CLASS_LABEL, category_class
+
+    cls = category_class(name)
+    return CATEGORY_CLASS_LABEL[cls] if cls else (name or "—")
+
+
+def _cite(text: str, sources: list[dict[str, Any]] | None) -> Markup:
+    """«… [2]» → ссылка на источник 2: Андрей хотел «провалиться и почитать» (зум 28.10, п. 1.8)."""
+    by_n = {str(src.get("n")): src.get("url") for src in sources or [] if src.get("url")}
+
+    def link(m: re.Match) -> str:
+        nums = [n.strip() for n in m.group(1).split(",")]
+        parts = []
+        for n in nums:
+            url = by_n.get(n)
+            if url:
+                href = escape(url)
+                parts.append(
+                    f'<a href="{href}" target="_blank" rel="noopener" title="источник {n}">{n}</a>'
+                )
+            else:
+                parts.append(escape(n))
+        return "[" + ", ".join(parts) + "]"
+
+    return Markup(re.sub(r"\[(\d+(?:\s*,\s*\d+)*)\]", link, str(escape(text))))
+
+
+templates.env.filters["short_category"] = _short_category
+templates.env.filters["cite"] = _cite
 templates.env.globals.update(
     brand=settings.brand, version=__version__, Purpose=Purpose, disclaimer=DISCLAIMER
 )
@@ -398,11 +435,20 @@ async def create_check(
             lines.append("; ".join(parts))
         text = (text + "\n" + "\n".join(lines)).strip()
     numbers_found = CAD_RE.findall(text)
+    if not numbers_found and CAD_RE.findall(title):
+        # Андрей вставил кадастровый номер в «Название подборки» (зум 28.10, п. 1.9):
+        # берём номера оттуда, а не падаем.
+        numbers_found = CAD_RE.findall(title)
+        text = (text + "\n" + "\n".join(numbers_found)).strip()
     if not numbers_found:
         return render(
             request,
             "error.html",
             message="Не нашёл ни одного кадастрового номера во вводе.",
+            hint="Вставьте номера вида 50:07:0070507:567 в поле «Кадастровые номера» — по одному "
+            "в строке. Название подборки заполнять необязательно.",
+            back_url="/",
+            back_label="К форме подборки",
             user=user,
         )
     if len(numbers_found) > settings.max_items:
@@ -440,7 +486,7 @@ async def create_check(
     with session() as db:
         check = Check(
             user_id=user.id,
-            title=title.strip() or f"Подборка из {len(set(numbers_found))} участков",
+            title=title.strip() or _default_title(numbers_found),
             request=request_to_dict(req),
             input_text=text,
             input_name=input_name,
@@ -451,6 +497,13 @@ async def create_check(
         check_id = check.id
     jobs.enqueue(check_id)
     return RedirectResponse(f"/checks/{check_id}", status_code=303)
+
+
+def _default_title(numbers: list[str]) -> str:
+    """Название по умолчанию: один номер — он сам, иначе число участков; плюс дата."""
+    today = f"{datetime.now(UTC):%d.%m.%Y}"
+    uniq = len(set(numbers))
+    return f"{numbers[0]} · {today}" if uniq == 1 else f"Подборка из {uniq} участков · {today}"
 
 
 def _filtered_items(check: Check, verdict: str | None, sort: str) -> list[CheckItem]:
@@ -674,6 +727,34 @@ def _merge_item_data(db, item: CheckItem, **keys: Any) -> dict[str, Any]:
     return item.data
 
 
+def _pzz_search_url(parcel: dict[str, Any]) -> str | None:
+    """Поиск карты ПЗЗ муниципалитета, когда НСПД не привязала терзону (зум 28.10, п. 1.7)."""
+    if not parcel.get("territorial_zone_checked") or parcel.get("territorial_zones"):
+        return None
+    from landcheck.region import locality_from_address
+
+    where = locality_from_address(parcel.get("address")) or parcel.get("address")
+    if not where:
+        return None
+    return "https://yandex.ru/search/?text=" + quote(
+        f"правила землепользования и застройки карта градостроительного зонирования {where}"
+    )
+
+
+def _earth_url_for(parcel: dict[str, Any]) -> str | None:
+    geometry = parcel.get("geometry")
+    if not geometry:
+        return None
+    try:
+        from landcheck.location import centroid
+        from landcheck.terrain import earth_url
+
+        lat, lon = centroid(geometry)
+    except Exception:  # noqa: BLE001 — кривая геометрия не должна ронять отчёт
+        return None
+    return earth_url(lat, lon)
+
+
 def _report_ctx(check: Check, item: CheckItem, public: bool) -> dict[str, Any]:
     data = item.data
     purpose = _check_purpose(check)
@@ -694,7 +775,10 @@ def _report_ctx(check: Check, item: CheckItem, public: bool) -> dict[str, Any]:
         "docs": data.get("docs"),
         "docs_url": f"/checks/{check.id}/items/{item.cad_num}/docs",
         "region_enabled": settings.region_enabled,
-        "checklist": CHECKLIST,
+        "checklist": (ck := checklist_for(data, purpose))["blocks"],
+        "checklist_title": ck["title"],
+        "pzz_url": _pzz_search_url(data.get("parcel") or {}),
+        "earth_url": _earth_url_for(data.get("parcel") or {}),
         "plan": action_plan(data),
         "price": price_orientation(data, (check.stats or {}).get("median_price_per_sotka")),
         "price_pos": price_position(data, median),

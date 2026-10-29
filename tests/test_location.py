@@ -155,6 +155,20 @@ def raw_sample() -> dict:
                 "lon": 37.0005,
                 "tags": {"landuse": "landfill", "name": "Полигон ТКО"},
             },
+            # контейнерная площадка — не свалка (зум 28.10, п. 1.11)
+            {"type": "node", "lat": 55.001, "lon": 37.001, "tags": {"amenity": "waste_disposal"}},
+            # промзона 0,2 га в 150 м — котельная, не промзона: отсекается по площади
+            {
+                "type": "way",
+                "tags": {"landuse": "industrial"},
+                "geometry": [
+                    {"lat": 55.0025, "lon": 37.0},
+                    {"lat": 55.0025, "lon": 37.0006},
+                    {"lat": 55.0029, "lon": 37.0006},
+                    {"lat": 55.0029, "lon": 37.0},
+                    {"lat": 55.0025, "lon": 37.0},
+                ],
+            },
             {
                 "type": "way",
                 "tags": {"waterway": "river", "name": "Катунь"},
@@ -175,13 +189,20 @@ def test_distance_zero_when_intersecting_and_meters_when_apart():
 
 def test_zouit_groups_sorted_by_risk_with_distance():
     groups = summarize_zouit(PARCEL, raw_sample()["nspd"]["zouit"])
-    labels = [g["label"] for g in groups]
-    assert labels[0] == "санитарно-защитная зона предприятия" and groups[0]["severity"] == "risk"
-    assert 250 <= groups[0]["min_distance_m"] <= 350
-    resort = next(g for g in groups if g["severity"] == "plus")
-    assert resort["min_distance_m"] == 0 and "курорт" in resort["label"]
+    # СЗЗ в ~300 м не задевает участок — факт окружения, не риск (зум 28.10, п. 1.3)
+    szz = next(g for g in groups if g["label"] == "санитарно-защитная зона предприятия")
+    assert szz["severity"] == "neutral" and szz["far"] and 250 <= szz["min_distance_m"] <= 350
+    assert "ближайшая в" in szz["note"]
+    assert all(g["severity"] != "risk" for g in groups)
+    # округ санитарной охраны курорта накрывает участок — факт на весь курорт, не «плюс»
+    resort = next(g for g in groups if "курорт" in g["label"])
+    assert resort["min_distance_m"] == 0 and resort["severity"] == "neutral"
+    assert "на конкретный участок не влияет" in resort["note"]
     nets = next(g for g in groups if g["label"] == "охранная зона инженерных сетей")
     assert nets["count"] == 2
+    # зона рядом с участком — риск
+    near = summarize_zouit(PARCEL, [raw_sample()["nspd"]["zouit"][0] | {"geometry": PARCEL}])
+    assert near[0]["severity"] == "risk" and near[0]["min_distance_m"] == 0
 
 
 def test_plans_grouped_by_document_with_string_area_and_iso_date():
@@ -212,6 +233,7 @@ def test_osm_classes_and_nearest_distance():
     assert osm_class({"landuse": "landfill"}) == "landfill"
     assert osm_class({"highway": "trunk"}) == "motorway"
     assert osm_class({"amenity": "bench"}) is None
+    assert osm_class({"amenity": "waste_disposal"}) is None  # контейнерная площадка
     loc = summarize_location(
         raw_sample(),
         parcel_geojson=PARCEL,
@@ -222,7 +244,10 @@ def test_osm_classes_and_nearest_distance():
         area_m2=1000,
     )
     osm = {o["kind"]: o for o in loc["osm"]}
-    assert osm["landfill"]["severity"] == "risk" and 1000 <= osm["landfill"]["distance_m"] <= 1200
+    # полигон в 1,1 км — факт окружения, а не риск; мелкая промзона отсечена по площади
+    assert osm["landfill"]["severity"] == "neutral"
+    assert 1000 <= osm["landfill"]["distance_m"] <= 1200 and osm["landfill"]["count"] == 1
+    assert "industrial" not in osm
     assert osm["water"]["distance_m"] < 300 and osm["school"]["name"] is None
     assert loc["price"]["per_sotka"] == 34_600 and loc["price"]["per_ha"] == 3_460_000
     assert loc["price"]["listing_vs_gko"] == round(2500 / 346, 2)
@@ -267,7 +292,12 @@ def test_slim_raw_drops_geometry_of_neighbors_and_keeps_zone_geometry():
     assert "geometry" not in river and river["distance_m"] < 300
     assert "content_restrict_encumbrances" not in slim["nspd"]["zouit"][0]["properties"]["options"]
     # лишние OSM-элементы (лавочки) выброшены, нужные остались
-    assert all(el["tags"] for el in slim["osm"]["elements"]) and len(slim["osm"]["elements"]) == 3
+    # лавочка и контейнерная площадка выброшены; свалка, промзона (с площадью), река, школа остались
+    assert all(el["tags"] for el in slim["osm"]["elements"]) and len(slim["osm"]["elements"]) == 4
+    industrial = next(
+        el for el in slim["osm"]["elements"] if el["tags"].get("landuse") == "industrial"
+    )
+    assert 1500 <= industrial["area_m2"] <= 2000 and "geometry" not in industrial
     loc = summarize_location(
         slim,
         parcel_geojson=PARCEL,
@@ -275,7 +305,91 @@ def test_slim_raw_drops_geometry_of_neighbors_and_keeps_zone_geometry():
         category=SETTLEMENT,
         cost_index=270.0,
     )
-    assert loc["zouit"][0]["label"] == "санитарно-защитная зона предприятия"
+    labels = [g["label"] for g in loc["zouit"]]
+    assert "санитарно-защитная зона предприятия" in labels and labels[0].startswith("округ")
+
+
+def test_osm_risk_only_near_and_large():
+    from landcheck.location import summarize_osm
+
+    def square(lat, lon, size):
+        return [
+            {"lat": lat, "lon": lon},
+            {"lat": lat, "lon": lon + size},
+            {"lat": lat + size, "lon": lon + size},
+            {"lat": lat + size, "lon": lon},
+            {"lat": lat, "lon": lon},
+        ]
+
+    elements = [
+        # полигон ТКО 4 га в ~250 м к северу — риск
+        {"type": "way", "tags": {"landuse": "landfill"}, "geometry": square(55.0032, 37.0, 0.002)},
+        # промзона 0,5 га вплотную — отсечена по площади (меньше 2 га)
+        {
+            "type": "way",
+            "tags": {"landuse": "industrial"},
+            "geometry": square(55.0, 37.0012, 0.0007),
+        },
+        # военный объект в 100 м — никогда не риск по OSM, только по НСПД
+        {"type": "way", "tags": {"landuse": "military"}, "geometry": square(55.0, 36.998, 0.0005)},
+    ]
+    osm = {o["kind"]: o for o in summarize_osm(PARCEL, elements)}
+    assert osm["landfill"]["severity"] == "risk" and osm["landfill"]["distance_m"] < 500
+    assert "industrial" not in osm
+    assert osm["military"]["severity"] == "neutral"
+
+
+def test_zouit_far_zones_are_facts_and_resort_district_is_neutral():
+    from landcheck.location import summarize_zouit
+
+    zones = [
+        _zouit("Зона затопления", "Зона затопления р. Катунь 1 %", _poly(37.006, 55.0)),  # ~400 м
+        _zouit(
+            "Округ санитарной (горно-санитарной) охраны лечебно-оздоровительных местностей, курортов и природных лечебных ресурсов",
+            "Граница округа санитарной охраны курорта Сочи",
+            _poly(36.99, 54.99, 0.03),
+        ),
+    ]
+    groups = {g["label"]: g for g in summarize_zouit(PARCEL, zones)}
+    flood = groups["зона затопления"]
+    assert flood["severity"] == "neutral" and flood["far"] and "вне участка" in flood["note"]
+    resort = groups["округ санитарной охраны курорта"]
+    assert resort["severity"] == "neutral" and "на конкретный участок не влияет" in resort["note"]
+
+
+def test_constructions_at_border_and_nearby():
+    from landcheck.location import summarize_constructions
+
+    def constr(name, purpose, geom, cad="50:07:0070507:1645"):
+        return {
+            "type": "Feature",
+            "geometry": geom,
+            "properties": {
+                "options": {
+                    "cad_number": cad,
+                    "params_name": name,
+                    "params_purpose": purpose,
+                    "params_extension": "6366",
+                }
+            },
+        }
+
+    feats = [
+        constr(
+            "Газопровод среднего давления",
+            "7.1. сооружения трубопроводного транспорта",
+            _poly(37.0005, 55.0),
+        ),
+        constr("Дорога гравийная", "7.4. сооружения дорожного транспорта", _poly(37.0012, 55.0)),
+        constr("ВЛ-10 кВ", "3.1.1. сооружения электроэнергетики", _poly(37.004, 55.0)),
+    ]
+    c = summarize_constructions(PARCEL, feats)
+    assert [i["kind"] for i in c["at_border"]] == ["gas"]
+    assert c["roads"][0]["name"] == "Дорога гравийная" and c["roads"][0]["length_m"] == 6366.0
+    assert c["nearby"][0]["kind"] == "power" and 150 <= c["nearby"][0]["distance_m"] <= 300
+    assert c["text"].startswith("по границе участка: газопровод")
+    assert summarize_constructions(PARCEL, None) is None
+    assert "не найдено" in summarize_constructions(PARCEL, [])["text"]
 
 
 def test_price_falls_back_to_dominant_category_when_parcel_category_unset():

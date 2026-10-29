@@ -116,8 +116,19 @@ def locality_from_address(address: str | None) -> str | None:
     → «Республика Алтай, Чемальский район, с. Элекмонар» (до улицы, дома, участка)."""
     if not address:
         return None
+    # «Местоположение установлено относительно ориентира, расположенного за пределами участка.
+    # Ориентир здание мед.пункта. Почтовый адрес ориентира: Калужская обл., р-н Козельский,
+    # д. Вырск» — локация начинается после «Почтовый адрес ориентира:» (зум 28.10, п. 1.12).
+    m = re.search(r"почтовый адрес(?: ориентира)?\s*:\s*", address, re.IGNORECASE)
+    if m:
+        address = address[m.end() :]
     parts = [p.strip() for p in address.split(",") if p.strip()]
     parts = [p for p in parts if p.lower() not in ("российская федерация", "россия", "рф")]
+    parts = [
+        p
+        for p in parts
+        if not re.match(r"^(местоположение|ориентир\b|расположенн|относительно)", p, re.IGNORECASE)
+    ]
     stop = re.compile(
         r"^(ул\.?|улица|пер\.?|переулок|пр-?кт|проспект|ш\.?|шоссе|д\.?\s*\d|дом|з/у|участок|уч\.?|"
         r"стр\.?|строение|кв\.?|тер\.?|снт|тсн|днп|мкр|квартал|линия|проезд|\d)",
@@ -895,17 +906,23 @@ def research_region_search(
 
     if chat_fn is None and not llm.providers_from_env():
         return _failed(
-            "search", "нет провайдера LLM: задайте бесплатный GROQ_API_KEY (или OPENROUTER_API_KEY)"
+            "search",
+            "сводка временно недоступна: не настроен провайдер языковой модели",
+            detail="нет провайдера LLM: задайте GROQ_API_KEY или OPENROUTER_API_KEY",
         )
     chat_fn = chat_fn or llm.chat
     docs, queries, errors = collect_documents(
         locality, purpose, search_fn=search_fn, fetch_fn=fetch_fn
     )
     if not docs:
+        # Красная Поляна получала «ничего не найдено», когда не ответил провайдер поиска:
+        # клиенту — честная причина без хостов и таймаутов (зум 28.10, п. 1.10).
         return _failed(
             "search",
-            "по локации ничего не найдено в открытых источниках"
-            + (": " + "; ".join(errors) if errors else ""),
+            "поиск по открытым источникам не дал результата"
+            + (" (провайдер поиска не ответил)" if errors else "")
+            + " — нажмите «обновить» позже",
+            detail="; ".join(errors) if errors else "0 документов по запросам",
         )
     prompt = _RAG_PROMPT.format(
         locality=locality,
@@ -921,7 +938,11 @@ def research_region_search(
         max_tokens=4000,
     )
     if res.get("error") or not res.get("json"):
-        return _failed("search", res.get("error") or "модель не вернула JSON")
+        return _failed(
+            "search",
+            "сводка временно недоступна: модель не ответила, нажмите «обновить» позже",
+            detail=res.get("error") or "модель не вернула JSON",
+        )
     data = res["json"]
     sections: list[dict[str, Any]] = []
     cited: set[int] = set()
@@ -1044,7 +1065,10 @@ def _research_once(
     return parsed
 
 
-def _failed(model: str, error: str) -> dict[str, Any]:
+def _failed(model: str, error: str, detail: str | None = None) -> dict[str, Any]:
+    """Пустая сводка с причиной. `error` — для клиента, `detail` — для лога и кэша."""
+    if detail:
+        log.warning("region [%s]: %s (%s)", model, error, detail)
     return {
         "model": model,
         "fetched_at": datetime.now(UTC).isoformat(),
@@ -1055,5 +1079,6 @@ def _failed(model: str, error: str) -> dict[str, Any]:
         "grounded": False,
         "usage": None,
         "error": error,
+        "error_detail": detail,
         "source": SRC,
     }

@@ -49,7 +49,8 @@
       {% set d = it.data %}
       <tr>
         <td class="muted">{{ loop.index }}</td>
-        <td><a href="/checks/{{ check.id }}/items/{{ it.cad_num }}"><code>{{ it.cad_num }}</code></a>
+        <td class="cad"><a href="/checks/{{ check.id }}/items/{{ it.cad_num }}"><code>{{ it.cad_num }}</code></a>
+          <br><a href="/checks/{{ check.id }}/items/{{ it.cad_num }}" role="button" class="outline sm" title="Карточка, карта, риски, план действий, локация, регион, документы, оценка">Открыть отчёт</a>
           {% if d.listing.url %}<br><a href="{{ d.listing.url }}" target="_blank" rel="noopener" class="small muted">объявление</a>{% endif %}
           {% if d.duplicates %}<br><span class="small muted">в {{ d.duplicates|length + 1 }} объявлениях</span>{% endif %}
           {% set h = d.get('history') or {} %}

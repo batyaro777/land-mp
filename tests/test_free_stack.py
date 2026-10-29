@@ -251,7 +251,9 @@ def test_region_search_pipeline_with_fakes():
         fetch_fn=lambda urls: {},
         chat_fn=chat_fn,
     )
-    assert "ничего не найдено" in r["error"] and "Ratelimit" in r["error"]
+    # клиенту — причина без хостов и таймаутов, техника — в error_detail (зум 28.10, п. 1.10)
+    assert "не дал результата" in r["error"] and "Ratelimit" not in r["error"]
+    assert "Ratelimit" in r["error_detail"]
 
 
 def test_collect_documents_prefers_page_text_over_snippet():

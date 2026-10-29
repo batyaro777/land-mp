@@ -45,7 +45,7 @@
 
 {% if goal %}
 <article class="goal">
-  <h4>Можно ли здесь: {{ goal.activity|lower }}? <span class="badge v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[goal.level] }}">{{ goal.level }}</span></h4>
+  <h4>Можно ли здесь: {{ goal.activity|lcfirst }}? <span class="badge v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[goal.level] }}">{{ goal.level }}</span></h4>
   <p>{{ goal.text }}.</p>
   <table class="facts goal-table">
     {% for r in goal.rows %}
@@ -85,7 +85,7 @@
     <tr><th>Форма собственности</th><td>{{ p.ownership_type or 'в карточке не указана' }}</td></tr>
     <tr><th>Вид участка</th><td>{{ p.land_record_subtype or p.land_record_type or '—' }}</td></tr>
     <tr><th>Дата постановки на учёт</th><td>{{ p.reg_date|day }}</td></tr>
-    <tr><th>Территориальная зона</th><td>{% if not p.territorial_zone_checked %}не проверялась{% elif p.territorial_zones %}{% for z in p.territorial_zones %}{{ z.describe }}{% if not loop.last %}; {% endif %}{% endfor %}{% else %}в НСПД не найдена: ПЗЗ не опубликованы{% endif %}</td></tr>
+    <tr><th>Территориальная зона</th><td>{% if not p.territorial_zone_checked %}не проверялась{% elif p.territorial_zones %}{% for z in p.territorial_zones %}{{ z.describe }}{% if not loop.last %}; {% endif %}{% endfor %}{% else %}к участку в НСПД не привязана (ПЗЗ муниципалитета в НСПД не загружены){% if pzz_url %} — <a href="{{ pzz_url }}" target="_blank" rel="noopener">найти карту ПЗЗ муниципалитета</a> и проверить границу зоны{% endif %}{% endif %}</td></tr>
     <tr><th>Источник</th><td class="small muted">{{ p.source }}, получено {{ p.fetched_at|dt }}</td></tr>
   </table>
 </article>
@@ -93,7 +93,7 @@
   <h4>Карта</h4>
   {% if p.geometry %}
   <div id="map"></div>
-  <p class="muted small">Оранжевый контур — участок по ЕГРН, синие пунктиры — ЗОУИТ. Подложка © OpenStreetMap.</p>
+  <p class="muted small">Оранжевый контур — участок по ЕГРН, синие пунктиры — ЗОУИТ. Подложка © OpenStreetMap.{% if earth_url %} <a href="{{ earth_url }}" target="_blank" rel="noopener">Открыть в Google Earth (3D, рельеф и застройка)</a>.{% endif %}</p>
   {% else %}<p class="muted">Координат границ в НСПД нет, на карте показать нечего.</p>{% endif %}
 </article>
 </div>
@@ -167,13 +167,13 @@
 
 {% if price %}
 <article>
-  <h4>Ценовой ориентир за сотку</h4>
+  <h4>Ценовой ориентир за сотку <span class="muted small">по кадастру и подборке, не рыночная цена</span></h4>
   <table class="facts">
     {% for label, v in price.points %}<tr><th>{{ label }}</th><td>{{ v|money }}</td></tr>{% endfor %}
   </table>
   {% if price_pos %}<p><strong>Цена к ориентиру:</strong> {{ price_pos.text }}.</p>{% endif %}
   {% if corridor %}<p><strong>Коридор по базе Land-MP</strong> ({{ corridor.kind_label }}, {{ corridor.where }}, {{ corridor.n }} уч. за {{ corridor.days }} дней): медиана {{ corridor.median|money }} за сотку, середина рынка {{ corridor.p25|money }} – {{ corridor.p75|money }}{% if corridor.position_text %}; цена участка <strong>{{ corridor.position_text }}</strong>{% endif %}.</p>{% endif %}
-  <p class="small muted">Диапазон {{ price.low|money }} – {{ price.high|money }}. {{ price.disclaimer }}</p>
+  <p class="small muted">{% if price.low == price.high %}Единственный ориентир — {{ price.low|money }} за сотку (кадастровая стоимость, государственная оценка, обычно ниже рынка); рыночный диапазон — в блоке «Оценка стоимости».{% else %}Диапазон {{ price.low|money }} – {{ price.high|money }}.{% endif %} {{ price.disclaimer }}</p>
 </article>
 {% elif corridor %}
 <article>
@@ -184,7 +184,7 @@
 {% endif %}
 
 <article>
-  <h4>Чек-лист перед сделкой</h4>
+  <h4>{{ checklist_title or 'Чек-лист перед сделкой' }}</h4>
   <div class="grid two">
   {% for block in checklist %}
     <div><strong>{{ block.title }}</strong>

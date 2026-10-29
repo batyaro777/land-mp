@@ -16,7 +16,8 @@ def test_sample_points_and_flat_terrain():
     pts = sample_points(SQUARE)
     assert len(pts["parcel"]) == 9 and len(pts["ring"]) == 8 and pts["diag_m"] > 100
     t = terrain_summary(SQUARE, fetch=lambda points: [200.0] * len(points))
-    assert t["level"] == "neutral" and t["slope_pct"] == 0.0 and "ровно" in t["notes"][0]
+    assert t["level"] == "neutral" and t["slope_pct"] == 0.0 and "ровный участок" in t["notes"][0]
+    assert t["earth_url"].startswith("https://earth.google.com/web/@51.98")
 
 
 def test_steep_slope_and_lowland_near_water_are_risks():
@@ -34,9 +35,18 @@ def test_steep_slope_and_lowland_near_water_are_risks():
     t = terrain_summary(SQUARE, fetch=lowland, water_distance_m=120)
     assert t["level"] == "risk" and any("риск подтопления" in n for n in t["notes"])
     t = terrain_summary(SQUARE, fetch=lowland)
-    assert t["level"] == "neutral" and any("низина" in n for n in t["notes"])
+    assert t["level"] == "neutral" and any("ниже окружения" in n for n in t["notes"])
     t = terrain_summary(SQUARE, fetch=lowland, water_zone=True)
     assert t["level"] == "risk" and any("водоохранной зоне" in n for n in t["notes"])
+
+    # на склоне «низина» и подтопление не упоминаются (Красная Поляна, зум 28.10, п. 1.11):
+    # кольцо с перепадом 150 м → уклон ~25 %, участок на 30 м ниже среднего по кольцу
+    def mountain(points):
+        return [500.0] * 9 + [450.0, 470, 490, 510, 530, 560, 590, 640]
+
+    t = terrain_summary(SQUARE, fetch=mountain, water_distance_m=96)
+    assert t["level"] == "risk" and "крутой склон" in t["notes"][0]
+    assert not any("низина" in n or "подтоплен" in n for n in t["notes"])
     hill = lambda points: [110.0] * 9 + [105.0] * 8  # noqa: E731
     assert terrain_summary(SQUARE, fetch=hill)["level"] == "plus"
     assert terrain_summary(SQUARE, fetch=lambda p: [None] * 17)["error"]

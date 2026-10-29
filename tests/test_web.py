@@ -512,3 +512,76 @@ def test_api_v1_key_checks_export_and_revoke(client: TestClient, monkeypatch):
         client.get("/api/v1/checks", headers={"Authorization": "Bearer lmp_wrong"}).status_code
         == 401
     )
+
+
+# --- зум 28.10, P0: форма, фильтры шаблонов, чек-лист, локация ----------------------------
+def test_cad_number_in_title_is_used_and_empty_input_gives_hint(client):
+    login(client)
+    # Андрей вставил номер в «Название подборки» (п. 1.9) — подборка создаётся по нему
+    r = client.post(
+        "/checks", data={"title": "50:09:0060202:101", "numbers": ""}, follow_redirects=False
+    )
+    assert r.status_code == 303 and r.headers["location"].startswith("/checks/")
+    r = client.post("/checks", data={"title": "Истра", "numbers": "нет номеров"})
+    assert r.status_code == 200 and "поле «Кадастровые номера»" in r.text
+    assert 'href="/"' in r.text
+
+
+def test_template_filters_cite_lcfirst_short_category():
+    from landcheck.web.app import _cite, _short_category, templates
+
+    html = str(
+        _cite(
+            "Завод [2] и мост [1, 3]",
+            [{"n": 2, "url": "https://a.ru/x"}, {"n": 1, "url": "https://b.ru"}],
+        )
+    )
+    assert (
+        'href="https://a.ru/x"' in html
+        and 'title="источник 2"' in html
+        and "[1, 3]"
+        in html.replace(
+            '<a href="https://b.ru" target="_blank" rel="noopener" title="источник 1">1</a>', "1"
+        )
+    )
+    assert str(_cite("<b>x</b> [9]", [])) == "&lt;b&gt;x&lt;/b&gt; [9]"
+    assert (
+        templates.env.filters["lcfirst"]("Выращивать культуры (КФХ)") == "выращивать культуры (КФХ)"
+    )
+    long = "Земли промышленности, энергетики, транспорта, связи, радиовещания, телевидения"
+    assert _short_category(long) == "земли промышленности и иного спецназначения"
+    assert _short_category("Что-то своё") == "Что-то своё"
+
+
+def test_checklist_depends_on_ownership_and_purpose():
+    from landcheck.models import Purpose
+    from landcheck.web.content import checklist_for
+
+    muni = {"parcel": {"ownership_type": "Муниципальная"}}
+    ck = checklist_for(muni, Purpose.FARMING)
+    text = " ".join(i for b in ck["blocks"] for i in b["items"])
+    assert ck["title"].startswith("Чек-лист перед оформлением") and "39.18" in text
+    assert "супруга" not in text and "СНТ" not in text and "наследств" not in text.lower()
+    private = {"parcel": {"ownership_type": "Частная собственность"}}
+    ck = checklist_for(private, Purpose.IZHS)
+    text = " ".join(i for b in ck["blocks"] for i in b["items"])
+    assert "супруга" in text and ck["title"] == "Чек-лист перед сделкой"
+    ck = checklist_for(private, Purpose.INDUSTRY)
+    text = " ".join(i for b in ck["blocks"] for i in b["items"])
+    assert "СНТ" not in text and "грузового транспорта" in text
+
+
+def test_locality_strips_landmark_prefix():
+    from landcheck.region import locality_from_address
+
+    addr = (
+        "Местоположение установлено относительно ориентира, расположенного за пределами участка. "
+        "Ориентир здание мед.пункта. Почтовый адрес ориентира: Калужская обл., р-н Козельский, д. Вырск"
+    )
+    assert locality_from_address(addr) == "Калужская обл., р-н Козельский, д. Вырск"
+    assert (
+        locality_from_address(
+            "Российская Федерация, Московская область, Волоколамский район, д. Бражниково, ул. Лесная, 5"
+        )
+        == "Московская область, Волоколамский район, д. Бражниково"
+    )

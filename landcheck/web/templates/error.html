@@ -3,6 +3,7 @@
 <article class="narrow">
   <h3>Не получилось</h3>
   <p class="err">{{ message }}</p>
-  <a href="javascript:history.back()" role="button" class="outline">Назад</a>
+  {% if hint %}<p class="small">{{ hint }}</p>{% endif %}
+  <a href="{{ back_url or 'javascript:history.back()' }}" role="button" class="outline">{{ back_label or 'Назад' }}</a>
 </article>
 {% endblock %}

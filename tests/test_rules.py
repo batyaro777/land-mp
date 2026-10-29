@@ -71,6 +71,39 @@ def test_agri_land_for_snt_is_ok_when_vri_matches():
     assert "R04" not in flags and "R05" not in flags
 
 
+def test_resort_district_alone_is_fact_not_risk():
+    # Округ санитарной охраны курорта накрывает весь Сочи: не риск (Влад, зум 28.10, п. 1.4)
+    p = make_payload(
+        "x",
+        zouit=[
+            zone(
+                "Иные ЗОУИТ",
+                "0:0-6.3",
+                "Округ санитарной (горно-санитарной) охраны лечебно-оздоровительных местностей, курортов и природных лечебных ресурсов",
+                "Граница округа санитарной охраны лечебного климата курорта федерального значения Сочи",
+            )
+        ],
+    )
+    flags = run(p)
+    assert flags["R10"].level is Level.OK and "на весь курорт" in flags["R10"].message
+    assert flags["R10"].details["wide"] and flags["R10"].details["zouit"] == []
+    # вместе с реальной зоной — флаг по реальной зоне, курорт в details
+    p = make_payload(
+        "x",
+        zouit=[
+            zone("Иные ЗОУИТ", "1", "Округ санитарной охраны курорта", "Сочи"),
+            zone(
+                "ЗОУИТ объектов энергетики",
+                "2",
+                "Охранная зона инженерных коммуникаций",
+                "ЛЭП 10 кВ",
+            ),
+        ],
+    )
+    f = run(p)["R10"]
+    assert f.level is Level.CHECK and "ЗОУИТ (1)" in f.message and "ЛЭП" in f.message
+
+
 def test_vri_from_tab_is_used():
     flags = run(
         make_payload("x", vri=None, vri_tab=["Для индивидуального жилищного строительства (2.1)"])

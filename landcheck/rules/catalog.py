@@ -9,7 +9,6 @@ from landcheck.rules.engine import RuleContext, rule
 from landcheck.rules.purpose import (
     CATEGORY_CLASS_LABEL,
     CATEGORY_MATRIX,
-    SRC_217,
     category_class,
     house_possible_on_agri,
     vri_match,
@@ -27,6 +26,10 @@ SRC_LISTING = "объявление брокера против карточки
 SRC_BATCH = "расчёт по подборке: медиана цены за сотку"
 SRC_LAW_ZOUIT = "ст. 104–106 ЗК РФ: в ЗОУИТ ограничения на строительство и использование"
 SRC_PZZ = "ПЗЗ муниципалитета; в НСПД опубликованы не для всех территорий"
+SRC_KURORT = (
+    "26-ФЗ о природных лечебных ресурсах, ст. 16: режим округа санитарной охраны курорта "
+    "действует на всю территорию курорта; ограничения для участка — по зонам 1–3 в положении об округе"
+)
 
 
 def _fmt_money(v: float) -> str:
@@ -127,7 +130,7 @@ def r04_category(ctx: RuleContext):
     if cls == "agri" and ctx.request.purpose is Purpose.IZHS:
         exception = house_possible_on_agri(p.permitted_use_all)
         if exception:
-            level, text, source = Level.CHECK, exception, SRC_217
+            level, text, source = exception
     return Flag(
         "R04",
         level,
@@ -289,6 +292,15 @@ ZOUIT_SEVERITY: tuple[tuple[str, Level, str], ...] = (
 )
 RESIDENTIAL = {"izhs", "lph", "snt"}
 SRC_SANPIN = "СанПиН 2.2.1/2.1.1.1200-03, п. 5.1: жилая застройка в СЗЗ не допускается"
+# ЗОУИТ «на весь муниципалитет»: округ санитарной охраны курорта накрывает весь Сочи или всю
+# Белокуриху и на выделение, покупку и стройку конкретного участка не влияет (Влад, зум 28.10).
+# Это факт для карточки, а не риск.
+WIDE_ZONE_KEYS = ("лечебно-оздоровительн", "горно-санитарн", "санитарной охраны курорт", "курорт")
+
+
+def is_wide_zone(kind: str | None, name: str | None) -> bool:
+    text = f"{kind or ''} {name or ''}".lower()
+    return any(k in text for k in WIDE_ZONE_KEYS)
 
 
 def _zouit_level(z, residential: bool) -> tuple[Level, str | None]:
@@ -307,16 +319,40 @@ def r10_zouit(ctx: RuleContext):
     if not p.found or not p.zouit_checked or not p.zouit:
         return None
     residential = ctx.request.purpose.value in RESIDENTIAL
+    wide = [z for z in p.zouit if is_wide_zone(z.kind, z.name)]
+    zones = [z for z in p.zouit if not is_wide_zone(z.kind, z.name)]
+    details = {
+        "zouit": [
+            {
+                "kind": z.kind,
+                "name": z.name,
+                "reg_number": z.reg_number,
+                "restrictions": z.restrictions,
+            }
+            for z in zones
+        ],
+        "wide": [z.describe(max_len=90) for z in wide],
+    }
+    if not zones:
+        return Flag(
+            "R10",
+            Level.OK,
+            f"участок в округе санитарной охраны курорта ({wide[0].describe(max_len=90)}): "
+            "зона действует на весь курорт и на покупку, выделение и стройку участка не влияет; "
+            "режим конкретной зоны округа (1–3) — по положению об округе",
+            SRC_KURORT,
+            details,
+        )
     worst = Level.CHECK
     notes: list[str] = []
-    for z in p.zouit:
+    for z in zones:
         level, note = _zouit_level(z, residential)
         if level.rank > worst.rank:
             worst = level
         if note and note not in notes:
             notes.append(note)
-    names = "; ".join(z.describe(max_len=90) for z in p.zouit[:4])
-    more = f" и ещё {len(p.zouit) - 4}" if len(p.zouit) > 4 else ""
+    names = "; ".join(z.describe(max_len=90) for z in zones[:4])
+    more = f" и ещё {len(zones) - 4}" if len(zones) > 4 else ""
     tail = ("; ".join(notes)) if notes else "ограничения на строительство"
     source = SRC_NSPD_ZOUIT + "; " + SRC_LAW_ZOUIT
     if worst is Level.STOP:
@@ -324,19 +360,9 @@ def r10_zouit(ctx: RuleContext):
     return Flag(
         "R10",
         worst,
-        f"участок пересекает ЗОУИТ ({len(p.zouit)}): {names}{more} — {tail}, текст на листе «ЗОУИТ»",
+        f"участок пересекает ЗОУИТ ({len(zones)}): {names}{more} — {tail}, текст на листе «ЗОУИТ»",
         source,
-        {
-            "zouit": [
-                {
-                    "kind": z.kind,
-                    "name": z.name,
-                    "reg_number": z.reg_number,
-                    "restrictions": z.restrictions,
-                }
-                for z in p.zouit
-            ]
-        },
+        details,
     )
 
 
@@ -349,7 +375,8 @@ def r11_territorial_zone(ctx: RuleContext):
         return Flag(
             "R11",
             Level.CHECK,
-            "территориальная зона в НСПД не найдена: ПЗЗ не опубликованы, уточнять в администрации",
+            "территориальная зона к участку в НСПД не привязана (ПЗЗ муниципалитета в НСПД "
+            "не загружены): проверить зону по карте ПЗЗ на сайте администрации или во ФГИС ТП",
             SRC_PZZ,
         )
     purpose = ctx.request.purpose
@@ -399,7 +426,9 @@ def r12_ownership(ctx: RuleContext):
         return Flag(
             "R12",
             Level.CHECK,
-            f"собственность «{p.ownership_type}»: продавец может быть арендатором, покупка только через торги",
+            f"собственность «{p.ownership_type}»: участок либо свободен (оформление через торги "
+            "или предварительное согласование), либо уже в аренде у третьего лица — "
+            "НСПД этого не показывает, нужна выписка ЕГРН, раздел «Права и ограничения»",
             SRC_NSPD,
         )
     return Flag(
