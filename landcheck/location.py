@@ -721,8 +721,14 @@ def access_summary(
             )
         )
         level, text = "plus", f"съезд с дороги общего пользования у границы есть: {names}"
-    elif not osm_ok and not (constructions or {}).get("items"):
-        level, text = "neutral", "подъезд по картам не определён: данные о дорогах не получены"
+    elif not osm_ok:
+        # Клавдий (прод 29.10): при сбое Overpass Сочи получал «риск», потому что в НСПД были
+        # сооружения (газопровод). Без OSM вывод о проезде через соседей делать нельзя.
+        level, text = (
+            "neutral",
+            "подъезд по картам не определён: OpenStreetMap не ответил, а дорог у границы в ЕГРН "
+            "нет — нажмите «обновить» позже",
+        )
     elif neighbors_total:
         level, text = (
             "risk",

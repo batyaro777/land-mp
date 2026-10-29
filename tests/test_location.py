@@ -575,3 +575,20 @@ def test_free_land_lists_public_neighbors_with_howto():
     ]
     assert "39.18" in fl["howto"][1]["source"] and "101-ФЗ" in fl["howto"][0]["source"]
     assert free_land("x", [], [])["total"] == 0 and free_land("x", [], [])["howto"] == []
+
+
+def test_access_without_osm_is_undetermined_and_water_zone_is_not_wide():
+    from landcheck.location import access_summary
+    from landcheck.rules.catalog import is_wide_zone
+
+    a = access_summary({"roads": [], "items": [{"kind": "gas"}]}, {"elements": [], "error": "x"}, 7)
+    assert a["level"] == "neutral" and "не ответил" in a["text"]
+    assert not is_wide_zone(
+        "Водоохранная зона",
+        "Водоохранная зона реки в границах муниципального образования город-курорт Сочи",
+    )
+    assert not is_wide_zone("Прибрежная защитная полоса", "ПЗП реки Мзымта, город-курорт Сочи")
+    assert is_wide_zone(
+        "Округ санитарной (горно-санитарной) охраны курорта",
+        "Граница округа санитарной охраны лечебного климата курорта федерального значения Сочи",
+    )
