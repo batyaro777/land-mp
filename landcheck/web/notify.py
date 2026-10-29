@@ -34,6 +34,9 @@ KIND_LABELS = {
 }
 
 
+BOT_USERNAME = "aimpland_bot"  # имя бота Land-MP в Telegram (подключён 21.10)
+
+
 def notify(db, user_id: int, kind: str, text: str, url: str | None = None) -> Notification | None:
     """Создать уведомление (без commit — его делает вызывающий код) и запланировать доставку."""
     user = db.get(User, user_id)
@@ -272,6 +275,20 @@ def handle_update(db, update: dict[str, Any], send=None, enqueue=None) -> str:
     text = (msg.get("text") or "").strip()
     if not chat_id or not text:
         return "ignored"
+    chat_type = str((msg.get("chat") or {}).get("type") or "private")
+    if chat_type != "private":
+        # Групповой чат (экспертный «МП Земля», 29.10): бот только публикует обновления и
+        # молчит на разговоры людей — иначе каждая реплика получала бы «пришлите номер».
+        from landcheck.inputs import CAD_RE as _CAD
+
+        if _CAD.search(text) and not text.startswith("/"):
+            send(
+                chat_id,
+                "Проверку по кадастровому номеру делаю в личных сообщениях: откройте "
+                f"@{BOT_USERNAME} и пришлите номер туда — вердикт и ссылка на отчёт придут там.",
+            )
+            return "group-hint"
+        return "group-ignored"
     parts = text.split(maxsplit=1)
     cmd = parts[0].split("@")[0].lower()
     if cmd == "/start" and len(parts) == 2:

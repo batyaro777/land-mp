@@ -693,3 +693,24 @@ def test_rights_from_lk_close_r12_and_api_lists_entries(client: TestClient):
     after = client.get(item).text
     assert "НСПД этого не показывает" not in after  # R12 закрыт справкой ЛК
     assert "не зарегистрированы (на дату сведений)" in after and ">свободен<" in after
+
+
+def test_telegram_group_messages_are_silent_except_cad_hint(client: TestClient):
+    from landcheck.web.db import session
+    from landcheck.web.notify import handle_update
+
+    sent: list[tuple[str, str]] = []
+
+    def send(chat: str, text: str) -> None:
+        sent.append((chat, text))
+
+    with session() as db:
+        upd = {"message": {"chat": {"id": -100123, "type": "supergroup"}, "text": "Спасибо, гляну"}}
+        assert handle_update(db, upd, send=send) == "group-ignored" and sent == []
+        upd["message"]["text"] = "/start abc"
+        assert handle_update(db, upd, send=send) == "group-ignored" and sent == []
+        upd["message"]["text"] = "проверь 50:09:0060202:101"
+        assert handle_update(db, upd, send=send) == "group-hint"
+        assert len(sent) == 1 and "@aimpland_bot" in sent[0][1]
+        private = {"message": {"chat": {"id": 555, "type": "private"}, "text": "привет"}}
+        assert handle_update(db, private, send=send) == "help"
