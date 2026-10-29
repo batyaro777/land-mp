@@ -120,7 +120,9 @@ def test_apply_to_item_recomputes_verdict():
     # R12 (вопрос «свободен или в аренде?» по НСПД) закрыт справкой ЛК — остаётся только R18
     assert [f["rule_id"] for f in out["flags"]] == ["R18"]
     assert len(out["rights_sources"]) == 1
-    # повторная загрузка того же источника заменяет, а не дублирует
+    # повторная загрузка того же источника заменяет, а не дублирует; без обременений и
+    # без R12 участок становится «ок»
     out2 = rights.apply_to_item(out, rights.parse_lk_text(LK_TEXT), Purpose.IZHS)
-    assert len(out2["rights_sources"]) == 1 and out2["verdict"] == "проверить"
+    assert len(out2["rights_sources"]) == 1 and out2["verdict"] == "ок"
+    assert out2["rights"]["status"] == "public_free"
     assert out2["rights"]["status"] == "public_free"
