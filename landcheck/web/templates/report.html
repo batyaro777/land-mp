@@ -1,0 +1,319 @@
+{% extends "base.html" %}
+{% set p = d.parcel %}
+{% set vclass = {'стоп':'stop','проверить':'check','ок':'ok'}[d.verdict] %}
+{% block title %}Отчёт {{ p.cad_num }} — {{ brand }}{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
+{% endblock %}
+{% block content %}
+<div class="report-brand{% if not public %} print-only{% endif %}">
+  <div class="brand-line">{% if logo_url %}<img src="{{ logo_url }}" alt="" class="brand-logo">{% endif %}<strong>{{ owner.brand or owner.name }}</strong></div>
+  <span class="muted small">Отчёт по участку для клиента · данные НСПД от {{ p.fetched_at|dt }}</span>
+</div>
+{% if not public %}
+<p class="no-print small"><a href="/checks/{{ check.id }}">← {{ check.title }}</a></p>
+{% endif %}
+
+<hgroup>
+  <h2><code>{{ p.cad_num }}</code> <span class="badge v-{{ vclass }} big">{{ d.verdict }}</span></h2>
+  <p>{{ (p.address or 'Адрес в НСПД не указан')|short_address }}{% if p.address and (p.address|short_address) != p.address %} <span class="muted small" title="{{ p.address }}">(адрес по ЕГРН задан относительно ориентира)</span>{% endif %}</p>
+</hgroup>
+{% if p.errors %}
+<p class="err small">{% if p.from_stale_cache %}НСПД не ответил, показаны данные прошлой проверки от {{ p.fetched_at|dt }}{% else %}Данные НСПД получены с ошибкой{% endif %}: {{ p.errors[0]|truncate(120) }}.{% if not public %} Нажмите «Обновить данные» в подборке позже.{% endif %}</p>
+{% endif %}
+
+{% if not public %}
+<div class="toolbar no-print">
+  <div><button class="outline sm" onclick="navigator.clipboard.writeText('{{ share_url }}');this.textContent='Ссылка скопирована'">Ссылка для клиента</button>
+    <a href="/r/{{ item.token }}" target="_blank" class="small">открыть</a></div>
+  <div><button class="outline sm" onclick="window.print()" title="В окне печати выберите «Сохранить как PDF»: шапка с вашим логотипом, все разделы раскрыты">Скачать PDF</button></div>
+  <div><form method="post" action="/watch/{{ item.cad_num }}" style="margin:0"><input type="hidden" name="back" value="/checks/{{ check.id }}/items/{{ item.cad_num }}"><button class="outline sm{% if watched %} secondary{% endif %}" title="Раз в сутки перепроверка в НСПД: изменения статуса, границ, категории, ВРИ, площади, стоимости, ЗОУИТ придут уведомлением">{% if watched %}Слежу за изменениями · выключить{% else %}Следить за изменениями{% endif %}</button></form></div>
+</div>
+{% endif %}
+<script>
+  // Для печати и PDF раскрываем все свёрнутые разделы, после — возвращаем как было.
+  (function () {
+    let opened = [];
+    window.addEventListener('beforeprint', () => {
+      opened = Array.from(document.querySelectorAll('details:not([open])'));
+      opened.forEach(d => d.setAttribute('open', ''));
+    });
+    window.addEventListener('afterprint', () => { opened.forEach(d => d.removeAttribute('open')); opened = []; });
+  })();
+</script>
+
+{% if p.found and rights %}
+{% set rsev = {'стоп':'stop','проверить':'check','ок':'ok'}[rights.level] %}
+<article class="rights" id="rights">
+  <h4>Права и ограничения <span class="badge v-{{ rsev }}">{{ rights.badge }}</span></h4>
+  <p>{{ rights.headline|ucfirst }}.</p>
+  <table class="facts">
+    {% for e in rights.rights %}
+    <tr><th>Право</th><td>{{ e.label|ucfirst }}{% if e.holder %} — {{ e.holder }}{% if e.holder_kind == 'person' %} <span class="muted small">(физлицо, маска)</span>{% endif %}{% endif %}{% if e.number %}, № {{ e.number }}{% endif %}{% if e.date %} от {{ e.date }}{% endif %}</td></tr>
+    {% endfor %}
+    <tr><th>Ограничения и обременения</th><td>{% if rights.restrictions %}{% for e in rights.restrictions %}<span class="{% if e.kind in ('arrest','ban') %}err{% endif %}">{{ e.label|ucfirst }}</span>{% if e.number %} № {{ e.number }}{% endif %}{% if e.date %} от {{ e.date }}{% endif %}{% if e.term %}, {{ e.term }}{% endif %}{% if e.holder %} — {{ e.holder }}{% endif %}{% if not loop.last %}; {% endif %}{% endfor %}{% elif rights.restrictions_known %}не зарегистрированы (на дату сведений){% else %}в НСПД не показываются — нужна выписка ЕГРН или справка из ЛК Росреестра{% endif %}</td></tr>
+    {% if rights.claims %}<tr><th>Правопритязания</th><td class="err">{{ rights.claims }}</td></tr>{% endif %}
+    <tr><th>Форма собственности по НСПД</th><td>{{ rights.ownership_type or 'не указана' }}</td></tr>
+    <tr><th>Источник</th><td class="small muted">{{ rights.source_label }}{% if rights.as_of %}, сведения на {{ rights.as_of }}{% endif %}</td></tr>
+  </table>
+  {% if not public %}
+  <details {% if rights.source == 'nspd' %}open{% endif %}>
+    <summary class="small">Уточнить права: справка из ЛК Росреестра или выписка ЕГРН</summary>
+    <ol class="small">
+      <li>Бесплатно и сразу: откройте <a href="{{ lk_url }}" target="_blank" rel="noopener">ЛК Росреестра → «Справочная информация по объектам недвижимости»</a> (вход через Госуслуги, капчи нет), найдите <code>{{ p.cad_num }}</code>, выделите страницу результата целиком (Ctrl+A, Ctrl+C) и вставьте в поле ниже.</li>
+      <li>Точнее: приложите электронную выписку ЕГРН об объекте — PDF с Госуслуг или XML из Росреестра, можно архивом вместе с .sig.</li>
+    </ol>
+    <form method="post" action="{{ rights_url }}" enctype="multipart/form-data">
+      <textarea name="text" rows="5" placeholder="Вставьте текст страницы Росреестра: «Вид, номер и дата государственной регистрации права…», «Ограничение прав и обременение…»"></textarea>
+      <input type="file" name="files" multiple accept=".pdf,.xml,.zip,.sig,.p7s">
+      <button class="sm">Сохранить сведения о правах</button>
+    </form>
+    {% if err == 'rights' %}<p class="err small">В тексте не нашёл раздела о правах, а в файлах — выписки ЕГРН. Вставьте страницу Росреестра целиком или приложите PDF/XML выписки.</p>{% endif %}
+  </details>
+  {% endif %}
+  <p class="muted small">ФИО правообладателей-физлиц не сохраняются, только маска. Сведения из ЛК Росреестра — справочные; для сделки нужна выписка ЕГРН не старше 30 дней.</p>
+</article>
+{% endif %}
+
+{% if goal %}
+<article class="goal">
+  <h4>Можно ли здесь: {{ goal.activity|lcfirst }}? <span class="badge v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[goal.level] }}">{{ goal.level }}</span></h4>
+  <p>{{ goal.text }}.</p>
+  <table class="facts goal-table">
+    {% for r in goal.rows %}
+    <tr>
+      <th>{{ r.title }}<br><span class="muted small">{{ r.value|truncate(90) }}</span></th>
+      <td><span class="badge mini v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[r.level] }}">{{ r.level }}</span> {{ r.text }}{% if r.rule_id == 'R11' and pzz_url and not p.territorial_zones %} — <a href="{{ pzz_url }}" target="_blank" rel="noopener">найти карту ПЗЗ муниципалитета</a>{% endif %}{% if r.source %}<div class="muted small">Источник: {{ r.source }}</div>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="muted small">Три уровня: категория земель задаёт, что на земле бывает в принципе; ВРИ — что разрешено на этом участке; территориальная зона ПЗЗ — что и какой этажности можно строить именно здесь. Один и тот же ВРИ в разных зонах разрешает разное.</p>
+</article>
+{% endif %}
+
+{% if p.found %}
+<article class="gpzu" id="gpzu">
+  {% set g = gpzu %}
+  <h4>ГПЗУ — градостроительный план участка{% if g %} <span class="badge v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[g.level or 'ок'] }}">ГПЗУ приложен</span>{% else %} <span class="badge">не приложен</span>{% endif %}</h4>
+  {% if g %}
+  <p class="small">{% if g.number %}№ {{ g.number }}{% endif %}{% if g.issued %} от {{ g.issued }}{% endif %}{% if g.issuer %}, выдан: {{ g.issuer }}{% endif %}{% if g.document %} <span class="muted">(файл {{ g.document }})</span>{% endif %}. Разобрано автоматически по текстовому слою — сверяйте с документом.</p>
+  <table class="facts">
+    <tr><th>Территориальная зона</th><td>{% if g.zone_code %}<b>{{ g.zone_code }}</b>{% if g.zone_name %} — {{ g.zone_name }}{% endif %}{% else %}не прочитана{% endif %}{% if g.pzz_act %}<div class="muted small">{{ g.pzz_act|truncate(220) }}</div>{% endif %}</td></tr>
+    <tr><th>Основные ВРИ зоны</th><td>{% if g.vri_main %}{{ g.vri_main|join('; ') }}{% else %}не прочитаны{% endif %}</td></tr>
+    {% if g.vri_conditional %}<tr><th>Условно разрешённые</th><td class="small">{{ g.vri_conditional|join('; ') }}</td></tr>{% endif %}
+    {% if g.vri_aux %}<tr><th>Вспомогательные</th><td class="small">{{ g.vri_aux|join('; ') }}</td></tr>{% endif %}
+    <tr><th>Предельные параметры</th><td>{% if g.setbacks %}отступы от границ: {{ g.setbacks }}{% endif %}{% if g.floors %}; этажность: {{ g.floors }}{% endif %}{% if g.height %}; высота: {{ g.height }}{% endif %}{% if g.coverage_pct %}; процент застройки: {{ g.coverage_pct }}{% endif %}{% if not (g.setbacks or g.floors or g.height or g.coverage_pct) %}не прочитаны (раздел 2.3){% endif %}</td></tr>
+    <tr><th>ЗОУИТ по ГПЗУ</th><td>{% if g.zouit %}{% for z in g.zouit %}{{ z.name }}{% if z.reg_number %} <span class="muted small">{{ z.reg_number }}</span>{% endif %}{% if not loop.last %}; {% endif %}{% endfor %}{% else %}в разделах 5–6 не найдены{% endif %}</td></tr>
+    {% if g.red_lines is not none %}<tr><th>Красные линии</th><td>{{ 'есть — смотреть чертёж' if g.red_lines else 'отсутствуют' }}</td></tr>{% endif %}
+    {% for n in g.code_notes %}<tr><th>Примечание о ВРИ</th><td class="small">{{ n }}</td></tr>{% endfor %}
+  </table>
+  <table class="facts goal-table">
+    {% for r in g.compare %}<tr><th>{{ r.field }}</th><td><span class="badge mini v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[r.level] }}">{{ r.level }}</span> {{ r.text }}</td></tr>{% endfor %}
+  </table>
+  {% else %}
+  <p class="small">ГПЗУ — единственный документ, где администрация прямо пишет территориальную зону, основные и условно разрешённые ВРИ, отступы, этажность и все ЗОУИТ с реестровыми номерами. По нему строят и получают уведомление о строительстве.</p>
+  {% endif %}
+  {% if not public %}
+  <details {% if not g %}open{% endif %}>
+    <summary class="small">{{ 'Заменить ГПЗУ' if g else 'Приложить ГПЗУ' }} (PDF с текстовым слоем или вставленный текст)</summary>
+    <form method="post" action="{{ gpzu_url }}" enctype="multipart/form-data">
+      <input type="file" name="files" multiple accept=".pdf,.txt">
+      <textarea name="text" rows="4" placeholder="Или вставьте текст ГПЗУ целиком (Ctrl+A, Ctrl+C из PDF)"></textarea>
+      <button class="sm">Разобрать ГПЗУ и сверить с НСПД</button>
+    </form>
+    {% if err == 'gpzu' %}<p class="err small">Это не ГПЗУ: не нашёл заголовка «Градостроительный план земельного участка» и раздела 2.2 о видах разрешённого использования.</p>{% endif %}
+    {% if err == 'gpzu_scan' %}<p class="err small">PDF без текстового слоя (скан). Нужен электронный ГПЗУ с Госуслуг или текст, распознанный из скана.</p>{% endif %}
+    {% if err == 'gpzu_cad' %}<p class="err small">ГПЗУ выдан на другой кадастровый номер — к этому участку не приложен.</p>{% endif %}
+    <p class="muted small">Как получить: {{ gpzu_howto }}. Файл не сохраняется, только разобранные поля.</p>
+  </details>
+  {% endif %}
+</article>
+{% endif %}
+
+{% if not p.found %}
+<article>
+{% if p.errors %}
+<p class="err">Данные НСПД по участку не получены: сбой запроса. Это не значит, что участка нет. Нажмите «Обновить данные» в подборке или повторите позже.</p>
+<p class="muted small">{{ p.errors|join('; ') }}</p>
+{% else %}
+<p class="err">Участок с таким номером в НСПД не найден.</p>
+{% endif %}
+{% for f in d.flags %}<p>{{ f.message }} <span class="muted small">— {{ f.source }}</span></p>{% endfor %}</article>
+{% else %}
+
+<div class="grid two">
+<article>
+  <h4>Карточка участка</h4>
+  <table class="facts">
+    <tr><th>Статус</th><td>{{ p.status or '—' }}</td></tr>
+    <tr><th>Категория земель</th><td>{{ p.category or '—' }}</td></tr>
+    <tr><th>Вид разрешённого использования</th><td>{{ p.permitted_use or '—' }}{% for v in p.permitted_use_tab if v != p.permitted_use %}<br><span class="muted small">{{ v }}</span>{% endfor %}</td></tr>
+    {% if vri %}<tr><th>Код классификатора ВРИ</th><td>{% if vri.main %}<b>{{ vri.main.code }}</b> — {{ vri.main.name }}{% if vri.main.legacy %} <span class="muted small">(формулировка участка старая или местная, код подобран по смыслу)</span>{% endif %}<div class="small">{{ vri.main.desc }}</div>{% if vri.main.limits %}<div class="small"><span class="muted">Можно:</span> {{ vri.main.limits.can }}. <span class="muted">Нельзя:</span> {{ vri.main.limits.cannot }}. <span class="muted">Источник: {{ vri.main.limits.source }}</span></div>{% endif %}{% if vri.main.note %}<div class="small muted">{{ vri.main.note|ucfirst }}</div>{% endif %}{% for o in vri.others %}<div class="small muted">Также {{ o.code }} — {{ o.name }}</div>{% endfor %}{% for u in vri.unmatched %}<div class="small muted">«{{ u }}» — с классификатором не сопоставлено</div>{% endfor %}{% else %}не определён: формулировка не из классификатора П/0412 — что разрешено, скажет ГПЗУ или выписка из ПЗЗ{% endif %}<div class="muted small">{{ vri.source }}</div></td></tr>{% endif %}
+    <tr><th>Площадь по ЕГРН</th><td>{{ p.area_m2|sotka }} ({{ '%.0f'|format(p.area_m2 or 0) }} м²){% if p.specified_area_m2 is none and p.declared_area_m2 %} <span class="muted small">декларированная</span>{% endif %}</td></tr>
+    {% if d.listing.declared_area_m2 %}<tr><th>Площадь в объявлении</th><td>{{ d.listing.declared_area_m2|sotka }}</td></tr>{% endif %}
+    <tr><th>Границы в ЕГРН</th><td>{{ 'установлены' if p.has_borders else 'не установлены' }}</td></tr>
+    <tr><th>Кадастровая стоимость</th><td>{{ p.cadastral_cost_rub|money }}{% if p.cost_index_rub_m2 %} <span class="muted small">({{ p.cost_index_rub_m2|money }}/м²)</span>{% endif %}</td></tr>
+    {% if d.listing.price_rub %}<tr><th>Цена в объявлении</th><td>{{ d.listing.price_rub|money }}{% if d.price_per_sotka %} <span class="muted small">({{ d.price_per_sotka|money }} за сотку)</span>{% endif %}</td></tr>{% endif %}
+    <tr><th>Форма собственности</th><td>{{ p.ownership_type or 'в карточке не указана' }}</td></tr>
+    <tr><th>Вид участка</th><td>{{ p.land_record_subtype or p.land_record_type or '—' }}</td></tr>
+    <tr><th>Дата постановки на учёт</th><td>{{ p.reg_date|day }}</td></tr>
+    <tr><th>Территориальная зона</th><td>{% if not p.territorial_zone_checked %}не проверялась{% elif p.territorial_zones %}{% for z in p.territorial_zones %}{{ z.describe }}{% if not loop.last %}; {% endif %}{% endfor %}{% else %}к участку в НСПД не привязана (ПЗЗ муниципалитета в НСПД не загружены){% if pzz_url %} — <a href="{{ pzz_url }}" target="_blank" rel="noopener">найти карту ПЗЗ муниципалитета</a> и проверить границу зоны{% endif %}{% endif %}</td></tr>
+    <tr><th>Источник</th><td class="small muted">{{ p.source }}, получено {{ p.fetched_at|dt }}{% if nspd_url %} · <a href="{{ nspd_url }}" target="_blank" rel="noopener">открыть карту НСПД в этой точке</a>{% endif %}</td></tr>
+    {% if discrepancies %}<tr><th>Данные расходятся</th><td>{% for x in discrepancies %}<div><span class="badge mini v-check">проверить</span> {{ x.what|ucfirst }}: {{ x.text }}</div>{% endfor %}</td></tr>{% endif %}
+  </table>
+</article>
+<article>
+  <h4>Карта</h4>
+  {% if p.geometry %}
+  <div id="map"></div>
+  <p class="muted small">Оранжевый контур — участок по ЕГРН, синие пунктиры — ЗОУИТ. Подложка © OpenStreetMap.{% if earth_url %} <a href="{{ earth_url }}" target="_blank" rel="noopener">Открыть в Google Earth (3D, рельеф и застройка)</a>.{% endif %}</p>
+  {% else %}<p class="muted">Координат границ в НСПД нет, на карте показать нечего.</p>{% endif %}
+</article>
+</div>
+
+<article>
+  <h4>Риск-флаги</h4>
+  {% for level, cls in [('стоп','stop'),('проверить','check')] %}
+    {% for f in by_level[level] %}
+    <div class="flag {{ cls }}"><span class="badge v-{{ cls }}">{{ level }}</span> {{ f.message }}<div class="muted small">Источник: {{ f.source }}</div></div>
+    {% endfor %}
+  {% endfor %}
+  {% if by_level['ок'] %}
+  <details><summary class="small">Справочно ({{ by_level['ок']|length }})</summary>
+    {% for f in by_level['ок'] %}<div class="flag ok">{{ f.message }}<div class="muted small">Источник: {{ f.source }}</div></div>{% endfor %}
+  </details>
+  {% endif %}
+  {% if not d.flags %}<p class="muted">Замечаний нет.</p>{% endif %}
+</article>
+
+{% include "_actions.html" %}
+
+{% if p.zouit %}
+<article>
+  <h4>Зоны с особыми условиями использования ({{ p.zouit|length }})</h4>
+  {% for z in p.zouit %}
+  <details {% if loop.first %}open{% endif %}>
+    <summary><strong>{{ z.kind or 'ЗОУИТ' }}</strong>{% if z.name %} — {{ z.name }}{% endif %} <span class="muted small">{{ z.reg_number or '' }}</span> {% if z|wide_zone %}<span class="badge mini v-ok">действует на весь курорт/муниципалитет, участок не ограничивает</span>{% else %}<span class="badge mini v-check">действует на участок</span>{% endif %}</summary>
+    {% if z.restrictions %}<p class="small restrictions">{{ z.restrictions }}</p>{% else %}<p class="muted small">Текст ограничений в НСПД не приведён.</p>{% endif %}
+    {% set ex = z.extra %}
+    {% if ex.get('legal_act_document_name') %}<p class="muted small">Основание: {{ ex.get('legal_act_document_name') }} № {{ ex.get('legal_act_document_number') }} от {{ ex.get('legal_act_document_date') }}, {{ ex.get('legal_act_document_issuer') }}</p>{% endif %}
+  </details>
+  {% endfor %}
+</article>
+{% endif %}
+
+{% if p.found and pzz %}
+<article class="pzz">
+  <h4>Где смотреть ПЗЗ и что стоит подключение сетей</h4>
+  <div class="grid two">
+  <div>
+    <strong>Правила землепользования и застройки</strong>
+    {% if pzz.municipal %}
+    <p class="small">{{ pzz.municipal.name }}{% if pzz.municipal.act %} — {{ pzz.municipal.act }}{% endif %}.</p>
+    <ul class="small">{% for l in pzz.municipal.links %}<li><a href="{{ l.url }}" target="_blank" rel="noopener">{{ l.title }}</a>{% if not l.verified %} <span class="muted">(адрес не проверен роботом{% if l.note %}: {{ l.note }}{% endif %})</span>{% endif %}</li>{% endfor %}</ul>
+    {% else %}<p class="small muted">Для этого муниципалитета прямой ссылки в реестре Land-MP нет — ищем на сайте администрации и во ФГИС ТП.</p>{% endif %}
+    {% if pzz.regional %}<ul class="small">{% for l in pzz.regional %}<li>{{ pzz.region }}: <a href="{{ l.url }}" target="_blank" rel="noopener">{{ l.title }}</a>{% if not l.verified %} <span class="muted">(не проверено{% if l.note %}: {{ l.note }}{% endif %})</span>{% endif %}</li>{% endfor %}</ul>{% endif %}
+    <ul class="small">{% for l in pzz.federal %}<li><a href="{{ l.url }}" target="_blank" rel="noopener">{{ l.title }}</a>{% if l.note %} <span class="muted">({{ l.note }})</span>{% endif %}</li>{% endfor %}{% if pzz.search_url %}<li><a href="{{ pzz.search_url }}" target="_blank" rel="noopener">Поиск карты ПЗЗ по адресу участка</a></li>{% endif %}</ul>
+    <p class="muted small">Реестр ссылок проверен {{ pzz.checked }}. Действующую редакцию ПЗЗ сверять на странице муниципалитета.</p>
+  </div>
+  <div>
+    <strong>Электричество, до 15 кВт</strong>
+    {% if power.region and power.region.rate_rub_kw %}
+    <p class="small"><b>{{ '{:,.0f}'.format(power.region.rate_rub_kw).replace(',', ' ') }} ₽/кВт</b> — за 15 кВт ≈ {{ '{:,.0f}'.format(power.region.cost_15kw_rub).replace(',', ' ') }} ₽ ({{ power.region.act }}; сети: {{ power.region.grid }}).{% if power.region.note %} {{ power.region.note|ucfirst }}.{% endif %}</p>
+    {% elif power.region %}
+    <p class="small">Ставка региона на 2026 год: {{ power.region.act }}. Сети: {{ power.region.grid }}.{% if power.region.note %} {{ power.region.note|ucfirst }}.{% endif %}</p>
+    {% else %}<p class="small muted">Ставки этого региона в реестре нет — запросить расчёт у сетевой организации.</p>{% endif %}
+    <p class="muted small">{{ power.note }} Льготные категории граждан: {{ '{:,.2f}'.format(power.preferential_rub_kw).replace(',', ' ').replace('.', ',') }} ₽/кВт. Источники: {% for s_ in power.sources %}<a href="{{ s_.url }}" target="_blank" rel="noopener">{{ s_.title|truncate(60) }}</a>{% if not loop.last %}; {% endif %}{% endfor %}. Проверено {{ power.checked }}.</p>
+    <strong>Газ — {{ gas.title|lower }}</strong>
+    <p class="small">{{ gas.text }}</p>
+    <ul class="small">{% for l in gas.links %}<li><a href="{{ l.url }}" target="_blank" rel="noopener">{{ l.title }}</a></li>{% endfor %}</ul>
+    <p class="muted small">{{ gas.operator }}. Основание: {{ gas.acts }}{% if not gas.acts_verified %} (реквизиты актов по памяти, сверить){% endif %}.</p>
+  </div>
+  </div>
+</article>
+{% endif %}
+
+{% if loc %}
+  {% include "_location.html" %}
+{% elif not public and p.geometry %}
+<article id="location" hx-get="{{ location_url }}" hx-trigger="load" hx-swap="outerHTML">
+  <h4>Локация: окружение и ориентир стоимости</h4>
+  <p class="muted small" aria-busy="true">Собираю окружение по НСПД и OpenStreetMap, до минуты…</p>
+</article>
+{% endif %}
+
+{% if region %}
+  {% include "_region.html" %}
+{% elif not public and region_enabled and p.address %}
+<article id="region" hx-get="{{ region_url }}" hx-trigger="load delay:1s" hx-swap="outerHTML">
+  <h4>Регион: планы, инфраструктура, рынок</h4>
+  <p class="muted small" aria-busy="true">Ищу по открытым источникам: инвестиции, дороги, риски, рынок земли. До двух минут…</p>
+</article>
+{% endif %}
+
+{% if docs %}
+  {% include "_docs.html" %}
+{% elif not public %}
+<article id="docs" hx-get="{{ docs_url }}" hx-trigger="load delay:2s" hx-swap="outerHTML">
+  <h4>Документы и упоминания участка</h4>
+  <p class="muted small" aria-busy="true">Ищу кадастровый номер в судах, торгах, актах и новостях…</p>
+</article>
+{% endif %}
+
+{% if d.get('market_ads') is not none or public %}
+  {% include "_valuation.html" %}
+{% else %}
+<div id="valuation-slot" hx-get="{{ ads_url }}" hx-trigger="load delay:3s" hx-swap="outerHTML">
+  {% include "_valuation.html" %}
+  <p class="muted small" aria-busy="true">Ищу объявления о продаже участков в локации…</p>
+</div>
+{% endif %}
+
+{% if price %}
+<article>
+  <h4>Ориентир по кадастру <span class="muted small">кадастровая стоимость — государственная оценка, не рынок; рынок — в блоке выше</span></h4>
+  <table class="facts">
+    {% for label, v in price.points %}<tr><th>{{ label }}</th><td>{{ v|money }}</td></tr>{% endfor %}
+  </table>
+  {% if price_pos %}<p><strong>Цена к ориентиру:</strong> {{ price_pos.text }}.</p>{% endif %}
+  {% if corridor %}<p><strong>Коридор по базе Land-MP</strong> ({{ corridor.kind_label }}, {{ corridor.where }}, {{ corridor.n }} уч. за {{ corridor.days }} дней): медиана {{ corridor.median|money }} за сотку, середина рынка {{ corridor.p25|money }} – {{ corridor.p75|money }}{% if corridor.position_text %}; цена участка <strong>{{ corridor.position_text }}</strong>{% endif %}.</p>{% endif %}
+  <p class="small muted">{% if price.low == price.high %}Единственный ориентир — {{ price.low|money }} за сотку (кадастровая стоимость, государственная оценка, обычно ниже рынка); рыночный диапазон — в блоке «Рынок».{% else %}Диапазон {{ price.low|money }} – {{ price.high|money }}.{% endif %} {{ price.disclaimer }}</p>
+</article>
+{% elif corridor %}
+<article>
+  <h4>Ориентир по базе Land-MP</h4>
+  <p><strong>Коридор по базе Land-MP</strong> ({{ corridor.kind_label }}, {{ corridor.where }}, {{ corridor.n }} уч. за {{ corridor.days }} дней): медиана {{ corridor.median|money }} за сотку, середина рынка {{ corridor.p25|money }} – {{ corridor.p75|money }}.</p>
+  <p class="small muted">Цены из проверок брокеров и объявлений в базе, не сделки. Справочно.</p>
+</article>
+{% endif %}
+
+<article>
+  <h4>{{ checklist_title or 'Чек-лист перед сделкой' }}</h4>
+  <div class="grid two">
+  {% for block in checklist %}
+    <div><strong>{{ block.title }}</strong>
+      <ul class="checklist">{% for i in block['items'] %}<li>{{ i }}</li>{% endfor %}</ul>
+    </div>
+  {% endfor %}
+  </div>
+</article>
+{% endif %}
+
+<p class="muted small">{{ disclaimer }}</p>
+
+{% if p.geometry %}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  const parcel = {{ p.geometry|tojson }};
+  const zones = {{ p.zouit_geometries|tojson }};
+  const map = L.map('map', { scrollWheelZoom: false });
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+  zones.forEach(z => L.geoJSON(z.geometry, { style: { color: '#2E75B6', weight: 1, dashArray: '4 4', fillOpacity: 0.05 } })
+    .bindPopup('<b>' + (z.kind || 'ЗОУИТ') + '</b><br>' + (z.name || '') + '<br><small>' + (z.reg_number || '') + '</small>').addTo(map));
+  const layer = L.geoJSON(parcel, { style: { color: '#C4663A', weight: 3, fillOpacity: 0.15 } }).addTo(map);
+  map.fitBounds(layer.getBounds().pad(0.6));
+});
+</script>
+{% endif %}
+{% endblock %}

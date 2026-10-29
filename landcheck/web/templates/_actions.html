@@ -1,0 +1,20 @@
+{# «План действий по рискам» (R7): по каждому флагу стоп/проверить — что подтвердить, где взять, следующий шаг #}
+{% if plan and plan.steps %}
+<article id="actions">
+  <h4>План действий по рискам</h4>
+  <p class="muted small">По каждому флагу «стоп» и «проверить»: что подтвердить, где взять, следующий шаг. Документы — одним списком внизу.</p>
+  {% for s in plan.steps %}
+  <div class="flag {{ 'stop' if s.level == 'стоп' else 'check' }}">
+    <span class="badge v-{{ 'stop' if s.level == 'стоп' else 'check' }}">{{ s.level }}</span> {{ s.message }}
+    <table class="facts actions">
+      <thead><tr><th>Что подтвердить</th><th>Где взять</th><th>Следующий шаг</th></tr></thead>
+      <tbody>{% for a in s.actions %}<tr><td>{{ a.what }}</td><td>{{ a.where }}</td><td>{{ a.next }}</td></tr>{% endfor %}</tbody>
+    </table>
+  </div>
+  {% endfor %}
+  {% if plan.documents %}
+  <p><strong>Документы к запросу</strong></p>
+  <ul class="small">{% for d in plan.documents %}<li>{{ d.name }} <span class="muted">— {{ d.where }}</span></li>{% endfor %}</ul>
+  {% endif %}
+</article>
+{% endif %}

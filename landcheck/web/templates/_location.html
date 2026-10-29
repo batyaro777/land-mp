@@ -1,0 +1,183 @@
+{# Блок «Локация»: окружение по НСПД и OSM, ориентир стоимости по соседям #}
+{% set sev = {'risk':'stop','plus':'ok','neutral':'check'} %}
+<article class="location" id="location">
+  <hgroup>
+    <h4>Локация: окружение и ориентир стоимости</h4>
+    <p class="muted small">НСПД в радиусе {{ loc.radius_m.nspd }} м и соседи в {{ loc.radius_m.neighbors }} м, OpenStreetMap в {{ loc.radius_m.osm }} м
+      {% if loc.fetched_at %}· собрано {{ loc.fetched_at|dt }}{% endif %}
+      {% if not public %}· <a href="{{ location_url }}?refresh=1" hx-get="{{ location_url }}?refresh=1" hx-target="#location" hx-swap="outerHTML" class="small">обновить</a>{% endif %}</p>
+  </hgroup>
+
+  {% if water %}
+  <div class="grid two">
+  <div>
+    <strong>Вода</strong> {% if water.level != 'none' %}<span class="badge mini v-{{ sev[water.level] }}">{{ {'risk':'риск','plus':'плюс','neutral':'факт'}[water.level] }}</span>{% endif %}
+    <p class="small">{{ water.text|ucfirst }}.</p>
+    {% if water['items'] %}
+    <ul class="loc-list">
+      {% for i in water['items'] %}
+      <li>{{ i.label|ucfirst }}{% if i.count > 1 %} ×{{ i.count }}{% endif %}:
+        {% if i.distance_m == 0 %}участок внутри{% elif i.distance_m is not none %}в {{ i.distance_m }} м{% else %}расстояние не определено{% endif %}{% if i.name %} <span class="muted small">{{ i.name|truncate(80) }}</span>{% endif %}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% if terrain is defined and terrain %}
+    <p style="margin-top:0.75rem"><strong>Рельеф</strong>
+      {% if terrain.error %}<span class="muted small">— {{ terrain.error }}</span>
+      {% else %}{% if terrain.level != 'neutral' %}<span class="badge mini v-{{ sev[terrain.level] }}">{{ {'risk':'риск','plus':'плюс'}[terrain.level] }}</span>{% endif %}
+      <span class="small">высота {{ terrain.elevation_m }} м, перепад по участку {{ terrain.drop_m }} м</span>{% endif %}</p>
+    {% if not terrain.error %}<ul class="loc-list">{% for n in terrain.notes %}<li>{{ n|ucfirst }}</li>{% endfor %}</ul>
+    <p class="muted small">{{ terrain.source }}: модель местности 90 м, точность высот ±1–4 м, для проекта нужна топосъёмка.{% if terrain.earth_url %} <a href="{{ terrain.earth_url }}" target="_blank" rel="noopener">Посмотреть рельеф и застройку в Google Earth (3D)</a>.{% endif %}</p>{% endif %}
+    {% endif %}
+  </div>
+  <div>
+    <strong>Негативные факторы</strong>
+    {% if negatives %}
+    <ul class="loc-list">
+      {% for n in negatives %}
+      <li><span class="badge mini v-stop">риск</span> {{ n.label|ucfirst }}{% if n.count > 1 %} ×{{ n.count }}{% endif %}{% if n.distance_m == 0 %}: участок внутри{% elif n.distance_m is not none %}: в {{ n.distance_m }} м{% endif %}{% if n.name %} <span class="muted small">{{ n.name|truncate(80) }}</span>{% endif %}
+        <div class="muted small">{{ n.source }}{% if n.date %}, {{ n.date|dt }}{% endif %}{% if n.note %} — {{ n.note }}{% endif %}</div></li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="muted small">Объектов, которые задевают участок или стоят вплотную, не найдено: зоны затопления, СЗЗ и приаэродромные — только при пересечении контура, свалка — до 500 м, кладбище — до 300 м. Остальное окружение — в списке «Что рядом».</p>{% endif %}
+    <p class="muted small">Новости района (полигоны, стройки, протесты) — в блоке «Регион» со ссылками на источники; в риски участка они не включаются.</p>
+  </div>
+  </div>
+  {% endif %}
+
+  <div class="grid two">
+  <div>
+    <strong>Что рядом</strong>
+    {% set z = loc.zouit %}
+    {% if z %}
+    <ul class="loc-list">
+      {% for g in z %}
+      <li><span class="badge mini v-{{ sev[g.severity] }}">{{ {'risk':'риск','plus':'плюс','neutral':'факт'}[g.severity] }}</span>
+        {{ g.label }}{% if g.count > 1 %} ×{{ g.count }}{% endif %}:
+        {% if g.min_distance_m is not none %}{% if g.wide %}действует на весь курорт/муниципалитет, участок не ограничивает{% elif g.min_distance_m == 0 %}действует на участок{% else %}рядом, не пересекает — ближайшая в {{ g.min_distance_m }} м{% endif %}{% else %}расстояние не определено{% endif %}
+        {% if g.note %}<span class="muted small">— {{ g.note }}</span>{% endif %}
+        {% if g.nearest_name %}<div class="muted small">{{ g.nearest_name|truncate(110) }}</div>{% endif %}</li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="muted small">ЗОУИТ в радиусе не найдены{% if loc.errors_public %} ({{ loc.errors_public }}){% endif %}.</p>{% endif %}
+
+    {% if loc.osm %}
+    <ul class="loc-list">
+      {% for o in loc.osm %}
+      <li><span class="badge mini v-{{ sev[o.severity] }}">OSM</span> {{ o.label }}{% if o.count > 1 %} ×{{ o.count }}{% endif %}:
+        {% if o.distance_m is not none %}{{ o.distance_m }} м{% else %}рядом{% endif %}{% if o.name %} <span class="muted small">{{ o.name }}</span>{% endif %}</li>
+      {% endfor %}
+    </ul>
+    {% elif loc.osm_error %}<p class="muted small">OpenStreetMap: {{ loc.osm_error }}.</p>
+    {% else %}<p class="muted small">OpenStreetMap: объектов выбранных классов в радиусе нет.</p>{% endif %}
+    {% if loc.auction_parcels %}<p class="small">Участков, выставленных на аукцион рядом: {{ loc.auction_parcels }}.</p>{% endif %}
+
+    {% set c = loc.constructions if loc.constructions is defined else none %}
+    <strong>Коммуникации и подъезд</strong>
+    {% if c is none %}
+    <p class="muted small">Сооружения ЕГРН (сети, трубопроводы, дороги) в этой сводке не запрашивались — нажмите «обновить».</p>
+    {% else %}
+    <p class="small">{{ c.text|ucfirst }}.</p>
+    {% if c.at_border or c.nearby or c.roads %}
+    <ul class="loc-list">
+      {% for i in c.at_border + c.nearby %}
+      <li><span class="badge mini v-ok">факт</span> {{ i.label|ucfirst }}{% if i.name %} — {{ i.name|truncate(70) }}{% endif %}:
+        {% if i.at_border %}по границе участка{% elif i.distance_m is not none %}в {{ i.distance_m }} м{% else %}рядом{% endif %}
+        {% if i.cad_num %}<span class="muted small">{{ i.cad_num }}</span>{% endif %}</li>
+      {% endfor %}
+      {% for r in c.roads %}
+      <li><span class="badge mini v-ok">факт</span> {{ r.label|ucfirst }}{% if r.name %} — {{ r.name|truncate(70) }}{% endif %}:
+        {% if r.at_border %}по границе участка{% elif r.distance_m is not none %}в {{ r.distance_m }} м{% else %}рядом{% endif %}{% if r.length_m %}, протяжённость {{ (r.length_m / 1000)|round(1) }} км{% endif %}
+        {% if r.cad_num %}<span class="muted small">{{ r.cad_num }}</span>{% endif %}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    <p class="muted small">{{ c.source }}, радиус {{ c.radius_m }} м. Сети без кадастрового учёта в ЕГРН не видны; охранные зоны сетей — в списке «Что рядом».</p>
+    {% endif %}
+
+    {% set ac = loc.access if loc.access is defined else none %}
+    {% if ac %}
+    <strong>Подъезд и сервитут</strong> <span class="badge mini v-{{ sev[ac.level] }}">{{ {'risk':'риск','plus':'плюс','neutral':'факт'}[ac.level] }}</span>
+    <p class="small">{{ ac.text|ucfirst }}.</p>
+    {% if ac.roads %}<ul class="loc-list">{% for r in ac.roads %}<li>{{ r.label|ucfirst }}{% if r.name %} «{{ r.name }}»{% endif %}: в {{ r.distance_m }} м <span class="muted small">{{ r.source }}</span></li>{% endfor %}</ul>{% endif %}
+    {% set rg = rights if rights is defined else none %}
+    {% set gz = gpzu if gpzu is defined else none %}
+    {% if rg and rg.source != 'nspd' %}
+      {% set serv = rg.restrictions|selectattr('kind', 'equalto', 'servitude')|list %}
+      {% if serv %}<p class="small"><span class="badge mini v-check">факт</span> Сервитут зарегистрирован: {% for e in serv %}{{ e.label }}{% if e.number %} № {{ e.number }}{% endif %}{% if e.holder %} — {{ e.holder }}{% endif %}{% if not loop.last %}; {% endif %}{% endfor %} <span class="muted small">({{ rg.source_label }})</span>.</p>
+      {% elif rg.restrictions_known %}<p class="small"><span class="badge mini v-ok">плюс</span> Сервитутов не зарегистрировано <span class="muted small">({{ rg.source_label }}{% if rg.as_of %}, на {{ rg.as_of }}{% endif %})</span>.</p>{% endif %}
+    {% elif gz and gz.public_servitudes is defined and gz.public_servitudes is not none %}
+      <p class="small"><span class="badge mini v-{{ 'check' if gz.public_servitudes else 'ok' }}">{{ 'факт' if gz.public_servitudes else 'плюс' }}</span> {% if gz.public_servitudes %}В ГПЗУ есть публичный сервитут (раздел 7) — смотреть, через какую часть участка{% else %}Публичных сервитутов по ГПЗУ нет (раздел 7){% endif %}.</p>
+    {% else %}<p class="muted small">Сервитуты видны только в выписке ЕГРН или ГПЗУ — приложите их в блоках выше, и строка появится здесь.</p>{% endif %}
+    <p class="muted small">{{ ac.source }}.</p>
+    {% endif %}
+
+    {% set fr = loc.forest if loc.forest is defined else none %}
+    {% if fr %}
+    <strong>Лесной фонд</strong> <span class="badge mini v-{{ {'check':'check','neutral':'check','risk':'stop','plus':'ok'}[fr.level] }}">{{ 'проверить' if fr.level == 'check' else 'факт' }}</span>
+    <p class="small">{{ fr.text|ucfirst }}.</p>
+    <p class="muted small">{{ fr.source }}. {{ fr.law }}.</p>
+    {% endif %}
+  </div>
+
+  <div>
+    <strong>Что здесь планируют строить</strong>
+    {% if loc.plans %}
+    <ul class="loc-list">
+      {% for d in loc.plans %}
+      <li>{{ d.document|truncate(140) }}{% if d.issuer %} <span class="muted small">({{ d.issuer }})</span>{% endif %}
+        <div class="small">{{ d.parcels }} уч.{% if d.area_m2 %}, {{ (d.area_m2 / 10000)|round(1) }} га{% endif %}{% if d.min_distance_m is not none %}, {% if d.min_distance_m == 0 %}вплотную{% else %}в {{ d.min_distance_m }} м{% endif %}{% endif %}:
+          {% for use, n in d.uses %}{{ use|lower|truncate(50) }}{% if n > 1 %} ×{{ n }}{% endif %}{% if not loop.last %}; {% endif %}{% endfor %}</div></li>
+      {% endfor %}
+    </ul>
+    <p class="muted small">Источник: проекты межевания территории в НСПД. Генплан и планируемые дороги в НСПД не публикуются, их смотреть во ФГИС ТП и у администрации.</p>
+    {% else %}<p class="muted small">Проектов межевания в радиусе {{ loc.radius_m.nspd }} м в НСПД нет. Генплан и планируемые дороги в НСПД не публикуются.</p>{% endif %}
+  </div>
+  </div>
+
+  {% set fl = loc.free_land if loc.free_land is defined else none %}
+  {% if fl and user is defined and user and user.is_admin %}
+  <details class="free-land">
+    <summary><strong>Свободная земля рядом</strong> <span class="badge mini">внутренний режим</span> — публичных участков в {{ loc.radius_m.neighbors }} м: {{ fl.total }}{% if fl.on_auction %}, из них на аукционе {{ fl.on_auction }}{% endif %}{% if fl.excluded %} <span class="muted small">(ещё {{ fl.excluded }} исключены: лесфонд, сети, дороги, учреждения)</span>{% endif %}</summary>
+    {% if fl['items'] %}
+    <table class="facts">
+      <tr><th>Участок</th><th>Категория · ВРИ</th><th class="num">Площадь</th><th>Собственность · статус</th><th class="num">До участка</th></tr>
+      {% for i in fl['items'] %}
+      <tr><td><code>{{ i.cad_num }}</code>{% if i.on_auction %} <span class="badge mini v-check">аукцион</span>{% endif %}</td>
+        <td class="small">{{ i.category|short_category if i.category else '—' }}{% if i.vri %} · {{ i.vri|truncate(60) }}{% endif %}</td>
+        <td class="num">{% if i.area_m2 %}{{ (i.area_m2 / 100)|round(1) }} сот.{% else %}—{% endif %}</td>
+        <td class="small">{{ i.ownership|truncate(28) }}{% if i.status %} · {{ i.status }}{% endif %}</td>
+        <td class="num">{% if i.distance_m is not none %}{{ i.distance_m }} м{% else %}—{% endif %}</td></tr>
+      {% endfor %}
+    </table>
+    {% else %}<p class="muted small">Публичных участков рядом в НСПД нет (или форма собственности у соседей не указана).</p>{% endif %}
+    {% for h in fl.howto %}
+    <p class="small" style="margin-top:0.6rem"><strong>{{ h.title }}</strong></p>
+    <ol class="small">{% for st in h.steps %}<li>{{ st }}</li>{% endfor %}</ol>
+    <p class="muted small">Основание: {{ h.source }}.</p>
+    {% endfor %}
+    <p class="muted small">{{ fl.source }}. Этап 1 модуля «Свободная земля» (ТЗ v3, п. 8): без проектов межевания администрации и без фильтра по региону — только ближний круг участка.</p>
+  </details>
+  {% endif %}
+
+  {% set n = loc.neighbors %}
+  <strong>Ориентир стоимости по соседям</strong>
+  {% if n.total %}
+  <table class="facts neighbors">
+    <tr><th>Категория</th><th class="num">Участков</th><th class="num">Медиана, ₽/м²</th><th class="num">25–75 %, ₽/м²</th><th class="num">Медиана площади</th></tr>
+    {% for c in n.categories %}
+    <tr><td>{{ c.category|short_category }}</td><td class="num">{{ c.count }}</td><td class="num">{{ c.median_rub_m2 or '—' }}</td>
+      <td class="num">{% if c.p25_rub_m2 %}{{ c.p25_rub_m2 }} – {{ c.p75_rub_m2 }}{% else %}—{% endif %}</td>
+      <td class="num">{{ (c.median_area_m2 / 100)|round(1) if c.median_area_m2 else '—' }} сот.</td></tr>
+    {% endfor %}
+  </table>
+  {% if n.position %}<p>Этот участок: {{ n.target_rub_m2 }} ₽/м², <strong>{{ n.position }}</strong> той же категории.</p>{% endif %}
+  {% if loc.price %}
+  <p class="small">Кадастровый ориентир ({{ loc.price.basis }}): {{ loc.price.per_sotka|money }} за сотку · {{ loc.price.per_10_sotka|money }} за 10 соток · {{ loc.price.per_ha|money }} за гектар.
+    {% if loc.price.listing_vs_gko %}Цена в объявлении: {{ loc.price.listing_rub_m2 }} ₽/м², это {{ loc.price.listing_vs_gko }}× кадастровой ставки соседей.{% endif %}</p>
+  {% endif %}
+  {% if n.uses %}<p class="muted small">Частые ВРИ рядом: {% for u in n.uses %}{{ u.vri|lower|truncate(45) }} ({{ u.count }}{% if u.median_rub_m2 %}, {{ u.median_rub_m2 }} ₽/м²{% endif %}){% if not loop.last %}; {% endif %}{% endfor %}.</p>{% endif %}
+  <p class="muted small">{{ n.note }}</p>
+  {% else %}<p class="muted small">Соседние участки не получены{% if loc.errors_public %}: {{ loc.errors_public }}{% endif %}.</p>{% endif %}
+  <p class="muted small">{{ loc.disclaimer }}</p>
+</article>

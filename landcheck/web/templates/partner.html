@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Партнёрская ссылка — {{ brand }}{% endblock %}
+{% block content %}
+<article class="narrow">
+  <hgroup>
+    <h2>Партнёрская ссылка</h2>
+    <p>Приводите покупателей, продавцов и брокеров — все, кто зарегистрируется по вашей ссылке, закрепляются за вами. Два уровня: те, кого привели вы, и те, кого привели они. Вознаграждение — процент от дохода платформы, который принесли приведённые; ставки объявим вместе с тарифами.</p>
+  </hgroup>
+  <label>Ссылка на регистрацию
+    <div class="mic-wrap"><input value="{{ link }}" readonly id="reflink"><button type="button" class="outline sm" onclick="navigator.clipboard.writeText(document.getElementById('reflink').value);this.textContent='Скопировано'">Скопировать</button></div>
+  </label>
+  <label>Ссылка на базу участков <small class="muted">(код запомнится, регистрация может быть позже)</small>
+    <div class="mic-wrap"><input value="{{ market_link }}" readonly id="mlink"><button type="button" class="outline sm" onclick="navigator.clipboard.writeText(document.getElementById('mlink').value);this.textContent='Скопировано'">Скопировать</button></div>
+  </label>
+  <table class="facts">
+    <tr><th>Приведены вами (уровень 1)</th><td>{{ n1 }}{% if level1 %}: {% for k, v in level1.items() %}{{ k|lower }} {{ v }}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}</td></tr>
+    <tr><th>Приведены ими (уровень 2)</th><td>{{ n2 }}{% if level2 %}: {% for k, v in level2.items() %}{{ k|lower }} {{ v }}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}</td></tr>
+    <tr><th>Их проверки подборок</th><td>{{ checks }}</td></tr>
+    <tr><th>Их объявления с подтверждённым правом</th><td>{{ listings_verified }}</td></tr>
+    <tr><th>Начисления</th><td>пока нет: тарифы и ставки вознаграждения ещё не запущены</td></tr>
+  </table>
+  <p class="muted small">Ваш код: <code>{{ code }}</code>. Третьего уровня нет.</p>
+</article>
+{% endblock %}

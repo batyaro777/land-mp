@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Сохранённые участки — {{ brand }}{% endblock %}
+{% block content %}
+<hgroup>
+  <h2>Сохранённые участки и сравнение</h2>
+  <p>{% if req %}Цель для вердикта: {{ purpose.activity|lower }} (запрос «{{ req.text or purpose.activity }}»).{% else %}Сделайте <a href="/search">запрос</a>, чтобы сравнивать под цель.{% endif %}</p>
+</hgroup>
+{% if not rows %}<p class="muted">Пока ничего не сохранено. Кнопка «Сохранить» есть в подборке и на странице участка.</p>{% else %}
+<div class="table-wrap">
+<table class="results">
+  <thead><tr><th>Участок</th><th class="num">Цена</th><th class="num">Соток</th><th class="num">₽/сот.</th><th>Вердикт под цель</th><th>Категория · ВРИ</th><th>По словам продавца</th><th>Право</th><th></th></tr></thead>
+  <tbody>
+  {% for m in rows %}
+  <tr>
+    <td><a href="/l/{{ m.id }}"><strong>{{ m.title }}</strong></a><br><span class="small muted">{{ m.address or '' }}</span><br><code class="small">{{ m.cad_num }}</code></td>
+    <td class="num">{{ m.price_rub|money if m.price_rub else '—' }}</td>
+    <td class="num">{{ m.area_sotka or '—' }}</td>
+    <td class="num">{{ m.price_per_sotka|money if m.price_per_sotka else '—' }}</td>
+    <td>{% if m.verdict %}<span class="badge v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[m.verdict.level] }}">{{ m.verdict.level }}</span> <span class="small">{{ m.verdict.text }}</span>{% else %}—{% endif %}</td>
+    <td class="small">{{ m.category or '—' }}<br><span class="muted">{{ (m.permitted_use or '')|truncate(60) }}</span></td>
+    <td class="small">{% if m.claims %}{% for c in m.claims %}{{ c.label }} {{ '✓' if c.mentioned else '—' }}{% if not loop.last %}<br>{% endif %}{% endfor %}{% else %}—{% endif %}</td>
+    <td class="small">подтверждено {{ m.verified_at|day }}</td>
+    <td><form method="post" action="/favorites/{{ m.id }}" class="inline"><input type="hidden" name="back" value="/saved"><button class="outline secondary sm">убрать</button></form>
+      <a href="/single?cad_num={{ m.cad_num }}&purpose={{ purpose.value }}" class="small">отчёт</a></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

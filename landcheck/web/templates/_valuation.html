@@ -1,0 +1,27 @@
+{# Блок «Оценка стоимости» (R6): якоря, диапазон, вердикт, объявления в локации #}
+<article id="valuation">
+  <h4>Рынок: в рынке ли цена <span class="muted small">только рыночные данные; кадастр — отдельно ниже</span></h4>
+  {% if not valuation %}
+    <p class="muted">Для оценки не хватает данных: нет площади по ЕГРН или ориентиров.</p>
+  {% else %}
+  {% if not valuation.has_market %}<p class="small">Рыночных данных по локации нет: в базе Land-MP пока нет участков этой локации, объявлений с правом использования не найдено. Кадастровые ориентиры — в блоке «Ориентир по кадастру» ниже.</p>{% endif %}
+  <table class="facts">
+    {% for a in valuation.market_anchors %}<tr><th>{{ a.label|ucfirst }}</th><td>{{ a.pps|money }} за сотку{% if a.note %} <span class="muted small">— {{ a.note }}</span>{% endif %}</td></tr>{% endfor %}
+    {% if valuation.coef %}<tr><th>Рынок к кадастру в локации</th><td>×{{ valuation.coef.value }} <span class="muted small">— середина рынка ({{ valuation.coef.basis }}{% if valuation.coef.n %}, n={{ valuation.coef.n }}{% endif %}) к кадастровой стоимости участка; ориентир экспертов: Подмосковье ~×3, Сочи до ×100</span></td></tr>{% endif %}
+    {% if valuation.range %}<tr><th>Середина рынка ({{ valuation.range_source }})</th><td><strong>{{ valuation.range[0]|money }} – {{ valuation.range[1]|money }}</strong> за сотку · для {{ valuation.area_sotka }} сот.: {{ valuation.total_range[0]|money }} – {{ valuation.total_range[1]|money }}</td></tr>{% endif %}
+    {% if d.price_per_sotka %}<tr><th>Цена в объявлении</th><td>{{ d.price_per_sotka|money }} за сотку</td></tr>{% endif %}
+  </table>
+  {% if valuation.verdict %}<p><strong>Вердикт:</strong> {{ valuation.verdict }}. <span class="muted small">Уверенность: {{ valuation.confidence }}.</span></p>{% endif %}
+  {% set ads = valuation.ads %}
+  {% if ads and ads.n %}
+  <details><summary class="small">Объявления в локации ({{ ads.n }}){% if ads.locality %} · {{ ads.locality }}{% endif %}{% if ads.fetched_at %} · {{ ads.fetched_at|dt }}{% endif %}</summary>
+    <ul class="small">{% for a in ads.ads %}<li><a href="{{ a.url }}" target="_blank" rel="noopener">{{ a.title|truncate(90) }}</a> <span class="muted">{{ a.host }}{% if a.also %} (также {{ a.also|join(', ') }}){% endif %}</span> — {{ a.price_rub|money }}, {{ (a.area_m2 / 100)|round(1) }} сот. → {{ a.pps|money }}/сот.</li>{% endfor %}</ul>
+  </details>
+  {% elif ads and ads.error %}<p class="muted small">Поиск объявлений временно не ответил — нажмите «обновить объявления» позже.</p>
+  {% elif ads and ads.off_scale %}<p class="muted small">Сопоставимых по площади объявлений не нашлось; найденные ({{ ads.off_scale|length }}) в оценку не идут — площадь другого порядка: {% for a in ads.off_scale %}<a href="{{ a.url }}" target="_blank" rel="noopener">{{ a.host }}</a> — {{ (a.area_m2 / 100)|round(1) }} сот. за {{ a.price_rub|money }}{% if not loop.last %}; {% endif %}{% endfor %}.</p>
+  {% elif ads %}<p class="muted small">Поиск объявлений по этой локации результата не дал: либо их нет в индексе поисковика, либо провайдер поиска не ответил — нажмите «обновить объявления» позже.</p>{% endif %}
+  {% if ads and ads.n and ads.off_scale %}<p class="muted small">Не учтены, площадь другого порядка ({{ ads.off_scale|length }}): {% for a in ads.off_scale %}<a href="{{ a.url }}" target="_blank" rel="noopener">{{ a.host }}</a> — {{ (a.area_m2 / 100)|round(1) }} сот. за {{ a.price_rub|money }}{% if not loop.last %}; {% endif %}{% endfor %}.</p>{% endif %}
+  {% if not public %}<p class="muted small"><a href="{{ ads_url }}?refresh=1" hx-get="{{ ads_url }}?refresh=1" hx-target="#valuation" hx-swap="outerHTML">обновить объявления</a></p>{% endif %}
+  <p class="muted small">{{ valuation.disclaimer }}</p>
+  {% endif %}
+</article>

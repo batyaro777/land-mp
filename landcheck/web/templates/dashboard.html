@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="grid two">
+<article>
+  <hgroup>
+    <h2>Новая проверка подборки</h2>
+    <p>Вставьте кадастровые номера с ценой и площадью из объявлений или загрузите файл. До {{ 300 }} участков за запуск.</p>
+  </hgroup>
+  <form method="post" action="/checks" enctype="multipart/form-data">
+    <label for="numbers">Кадастровые номера <small class="muted">— одно обязательное поле: вставьте сюда</small></label>
+    <div class="mic-wrap">
+      <textarea id="numbers" name="numbers" rows="6" placeholder="50:09:0060202:101" required></textarea>
+      {% if voice_enabled %}<button type="button" class="mic outline sm" data-target="numbers" title="Продиктовать номера и цены, до 60 секунд">🎙 Голосом</button>{% endif %}
+      <small class="mic-status muted"></small>
+    </div>
+    <small class="muted">По одному участку в строке. Можно добавить цену, площадь и ссылку в любом порядке, например: <code>50:09:0060202:102; 1,2 млн; 8 сот; https://avito.ru/…</code>. Площадь без подписи — в сотках.</small>
+    <label>Название подборки <small class="muted">(необязательно: по умолчанию — первый номер и дата)</small>
+      <input name="title" placeholder="Истра, ИЖС, октябрь">
+    </label>
+    <label>Или файл CSV / XLSX
+      <input type="file" name="file" accept=".csv,.xlsx,.txt">
+      <small class="muted">Колонки: кадастровый номер, цена, площадь (единицы читаются из заголовка), ссылка.</small>
+    </label>
+    <label>Что покупатель хочет делать на участке
+      <select name="purpose">
+        {% for value, label in purposes %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+      </select>
+      <small class="muted">Проверим на трёх уровнях: категория земель, ВРИ и территориальная зона ПЗЗ.</small>
+    </label>
+    <div class="grid">
+      <label>Бюджет, ₽
+        <input name="budget" placeholder="3 000 000 или 3 млн">
+      </label>
+      <label>Площадь от, сот.<input name="min_area" placeholder="8"></label>
+      <label>Площадь до, сот.<input name="max_area" placeholder="15"></label>
+    </div>
+    <label for="query">Запрос словами <small class="muted">(необязательно, уточняет цель, бюджет и площадь; можно надиктовать)</small></label>
+    <div class="mic-wrap">
+      <input id="query" name="query" placeholder="Построить дом для семьи до 3 млн, 8–12 соток, Истра">
+      {% if voice_enabled %}<button type="button" class="mic outline sm" data-target="query" title="Надиктовать запрос, до 60 секунд">🎙 Голосом</button>{% endif %}
+      <small class="mic-status muted"></small>
+    </div>
+    <button type="submit">Проверить подборку</button>
+  </form>
+</article>
+<article>
+  <h2>Мои подборки</h2>
+  {% if not checks %}
+  <div class="onboarding">
+    <p><strong>Три шага до первой подборки</strong></p>
+    <ol>
+      <li>Вставьте слева кадастровые номера с ценой и площадью из объявлений или продиктуйте их кнопкой «Голосом». Можно один номер, можно триста.</li>
+      <li>Выберите, что покупатель хочет делать на участке: дом, дача, ферма, бизнес. От этого зависит вердикт.</li>
+      <li>Получите таблицу стоп / проверить / ок с причинами и источниками, откройте отчёт по участку (локация, рельеф, регион, документы), скачайте PDF с вашим логотипом или XLSX для клиента.</li>
+    </ol>
+    <p class="small muted">Без подборки: <a href="/single">проверить один участок</a>, <a href="/listing/new">разместить объявление</a> с проверкой права, <a href="/market">посмотреть базу</a>. Логотип и контакты для отчётов — в <a href="/profile">профиле</a>.</p>
+  </div>
+  {% endif %}
+  {% for c in checks %}
+  <div class="check-card">
+    <a href="/checks/{{ c.id }}"><strong>{{ c.title }}</strong></a>
+    <div class="muted small">{{ c.created_at|dt }} · цель: {{ (c.stats or {}).get('purpose') or '—' }} · участков: {{ c.total }}</div>
+    <div class="small">
+      {% if c.status == 'done' %}
+        {% set k = (c.stats or {}).get('counts') or {} %}
+        <span class="badge v-ok">ок {{ k.get('ок', 0) }}</span>
+        <span class="badge v-check">проверить {{ k.get('проверить', 0) }}</span>
+        <span class="badge v-stop">стоп {{ k.get('стоп', 0) }}</span>
+      {% elif c.status == 'error' %}<span class="badge v-stop">ошибка</span> <span class="muted">{{ (c.error or 'причина не записана')|truncate(90) }}</span> · <form method="post" action="/checks/{{ c.id }}/rerun" class="inline" style="display:inline"><button class="outline sm">повторить</button></form>
+      {% else %}<span class="badge">в работе {{ c.done }}/{{ c.total }}</span>{% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</article>
+</div>
+{% endblock %}

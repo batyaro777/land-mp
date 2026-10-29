@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ru" data-theme="light" data-asr-server="{{ '1' if asr_server else '0' }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ brand }}{% endblock %}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.0.6/css/pico.min.css">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js" defer></script>
+  <script src="/static/voice.js" defer></script>
+  {% block head %}{% endblock %}
+</head>
+<body>
+<header class="container no-print">
+  <nav>
+    <ul>
+      <li><a href="/" class="brand"><strong>{{ brand }}</strong></a></li>
+    </ul>
+    <ul>
+      {% if user %}
+      {% if user.is_admin %}
+      <li><a href="/admin"><strong>Обзор</strong></a></li>
+      <li><a href="/admin/users">Пользователи</a></li>
+      <li><a href="/admin/listings">Модерация</a></li>
+      <li><a href="/checks">Подборки</a></li>
+      <li><a href="/single">Один участок</a></li>
+      <li><a href="/watch">Слежение</a></li>
+      <li><a href="/search">Поиск</a></li>
+      <li><a href="/listings">Объявления</a></li>
+      <li><a href="/demand">Спрос</a></li>
+      {% elif user.role == 'seller' %}
+      <li><a href="/listings">Мои объявления</a></li>
+      <li><a href="/demand">Спрос</a></li>
+      <li><a href="/single">Проверить участок</a></li>
+      {% elif user.role == 'buyer' %}
+      <li><a href="/search">Поиск</a></li>
+      <li><a href="/saved">Сохранённое</a></li>
+      <li><a href="/watch">Слежение</a></li>
+      <li><a href="/single">Проверить участок</a></li>
+      {% else %}
+      <li><a href="/">Подборки</a></li>
+      <li><a href="/single">Один участок</a></li>
+      <li><a href="/watch">Слежение</a></li>
+      <li><a href="/search">Поиск</a></li>
+      <li><a href="/listings">Объявления</a></li>
+      <li><a href="/demand">Спрос</a></li>
+      {% endif %}
+      <li><a href="/notifications" title="Уведомления">🔔{% if unread %} <span class="badge v-check">{{ unread }}</span>{% endif %}</a></li>
+      <li><details class="dropdown">
+        <summary>{{ user.brand or user.name }} <small class="muted">· {{ user.role_label|lower }}</small></summary>
+        <ul dir="rtl">
+          <li><a href="/profile">Профиль и логотип</a></li>
+          <li><a href="/partner">Партнёрская ссылка</a></li>
+          <li><a href="/connections">Запросы контакта</a></li>
+          <li><a href="/notifications">Уведомления</a></li>
+          <li><form method="post" action="/logout"><button class="outline secondary">Выйти</button></form></li>
+        </ul>
+      </details></li>
+      <li><a href="/market">База участков</a></li>
+      {% else %}
+      <li><a href="/market">База участков</a></li>
+      <li><a href="/login">Войти</a></li>
+      {% endif %}
+    </ul>
+  </nav>
+</header>
+<main class="container">
+  {% block content %}{% endblock %}
+</main>
+<footer class="container">
+  <small class="muted">Данные: НСПД, nspd.gov.ru. Риск-флаги и ценовой ориентир справочно, не юридическое заключение и не отчёт об оценке. landcheck {{ version }}</small>
+</footer>
+</body>
+</html>
