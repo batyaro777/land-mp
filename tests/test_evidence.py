@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import time
+
 from landcheck import evidence
 from landcheck.lawlinks import law_links
 from tests.test_web import client, login  # noqa: F401 — фикстура клиента кабинета
@@ -412,3 +414,46 @@ def test_download_explains_unknown_transport_errors(monkeypatch):
         "не скачан: шлюз не получил ответ от сайта (обрыв SOCKS); "
         "шлюз не получил ответ от сайта (обрыв SOCKS) через шлюз"
     )
+
+
+def test_download_attempt_is_limited_by_wall_clock(monkeypatch):
+    import threading
+
+    import httpx
+
+    gate = threading.Event()
+
+    class HangingClient:
+        def __init__(self, *, proxy=None, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def stream(self, method, url):
+            gate.wait(5)  # «рукопожатие» с шлюзом, которое таймауты httpx не ограничивают
+            raise RuntimeError("never")
+
+    monkeypatch.setattr(httpx, "Client", HangingClient)
+    monkeypatch.setattr(evidence.ruproxy, "enabled", lambda: False)
+    monkeypatch.setattr(evidence, "ATTEMPT_DEADLINE_S", 0.2)
+    t0 = time.monotonic()
+    doc = evidence.fetch_document("https://slow.example.ru/x")
+    gate.set()
+    assert time.monotonic() - t0 < 3
+    assert doc["error"] == "не скачан: нет ответа за 0 с"
+
+
+def test_page_links_strip_file_size_from_anchor():
+    html = (
+        '<a href="/f/a.pdf"><span>55.19 КБ</span> Решение ГСС от 10.04.2025 № 44</a>'
+        '<a href="/f/b.pdf">Проект планировки (4.3 МБ)</a>'
+    )
+    links = evidence.page_links(html, "https://sochi.ru/x/")
+    assert [link["text"] for link in links] == [
+        "Решение ГСС от 10.04.2025 № 44",
+        "Проект планировки",
+    ]

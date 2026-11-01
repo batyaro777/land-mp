@@ -85,7 +85,7 @@
     {% for r in goal.rows %}
     <tr>
       <th>{{ r.title }}<br><span class="muted small">{{ r.value|truncate(90) }}</span></th>
-      <td><span class="badge mini v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[r.level] }}">{{ r.level }}</span> {{ r.text }}{% if r.rule_id == 'R11' and pzz_url and not p.territorial_zones %} — <a href="{{ pzz_url }}" target="_blank" rel="noopener">найти карту ПЗЗ муниципалитета</a>{% endif %}{% if r.source %}<div class="muted small">Источник: {{ r.source|lawlinks }}</div>{% endif %}</td>
+      <td><span class="badge mini v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[r.level] }}">{{ r.level }}</span> {{ r.text|lawlinks }}{% if r.rule_id == 'R11' and pzz_url and not p.territorial_zones %} — <a href="{{ pzz_url }}" target="_blank" rel="noopener">найти карту ПЗЗ муниципалитета</a>{% endif %}{% if r.source %}<div class="muted small">Источник: {{ r.source|lawlinks }}</div>{% endif %}</td>
     </tr>
     {% endfor %}
   </table>
@@ -110,7 +110,7 @@
     {% for n in g.code_notes %}<tr><th>Примечание о ВРИ</th><td class="small">{{ n }}</td></tr>{% endfor %}
   </table>
   <table class="facts goal-table">
-    {% for r in g.compare %}<tr><th>{{ r.field }}</th><td><span class="badge mini v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[r.level] }}">{{ r.level }}</span> {{ r.text }}</td></tr>{% endfor %}
+    {% for r in g.compare %}<tr><th>{{ r.field }}</th><td><span class="badge mini v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[r.level] }}">{{ r.level }}</span> {{ r.text|lawlinks }}</td></tr>{% endfor %}
   </table>
   {% else %}
   <p class="small">ГПЗУ — единственный документ, где администрация прямо пишет территориальную зону, основные и условно разрешённые ВРИ, отступы, этажность и все ЗОУИТ с реестровыми номерами. По нему строят и получают уведомление о строительстве.</p>
@@ -307,7 +307,7 @@
   <div class="grid two">
   {% for block in checklist %}
     <div><strong>{{ block.title }}</strong>
-      <ul class="checklist">{% for i in block['items'] %}<li>{{ i }}</li>{% endfor %}</ul>
+      <ul class="checklist">{% for i in block['items'] %}<li>{{ i|lawlinks }}</li>{% endfor %}</ul>
     </div>
   {% endfor %}
   </div>

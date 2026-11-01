@@ -481,22 +481,27 @@ def fetch_evidence(
     """Скачать документы администрации (кэш текста по адресу на неделю) и найти упоминания."""
     from landcheck import evidence
 
-    cache = ParcelCache(settings.cache_path, ttl_days=settings.admin_docs_ttl_days)
-
     def fetch(url: str) -> dict[str, Any]:
+        # кэш открывается на каждый документ: скачивание, не успевшее к бюджету, дописывает
+        # результат уже после окончания проверки (прод 01.11: «Cannot operate on a closed database»)
         key = evidence.doc_key(url)
-        if not refresh:
-            cached = cache.get_region(key)
-            if cached is not None and (not cached.get("error") or _fresh_failure(cached)):
-                return cached
+        cache = ParcelCache(settings.cache_path, ttl_days=settings.admin_docs_ttl_days)
+        try:
+            if not refresh:
+                cached = cache.get_region(key)
+                if cached is not None and (not cached.get("error") or _fresh_failure(cached)):
+                    return cached
+        finally:
+            cache.close()
         doc = evidence.fetch_document(url)
-        cache.put_region(key, doc)  # неудача тоже кэшируется, но коротко (_fresh_failure)
+        cache = ParcelCache(settings.cache_path, ttl_days=settings.admin_docs_ttl_days)
+        try:
+            cache.put_region(key, doc)  # неудача тоже кэшируется, но коротко (_fresh_failure)
+        finally:
+            cache.close()
         return doc
 
-    try:
-        return evidence.collect(parcel, admin_docs, locality, fetch=fetch)
-    finally:
-        cache.close()
+    return evidence.collect(parcel, admin_docs, locality, fetch=fetch)
 
 
 EVIDENCE_FAIL_TTL_H = 6  # недоступный сайт не ждём заново при каждой проверке

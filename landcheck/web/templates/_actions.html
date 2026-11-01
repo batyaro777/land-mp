@@ -5,16 +5,16 @@
   <p class="muted small">По каждому флагу «стоп» и «проверить»: что подтвердить, где взять, следующий шаг. Документы — одним списком внизу.</p>
   {% for s in plan.steps %}
   <div class="flag {{ 'stop' if s.level == 'стоп' else 'check' }}">
-    <span class="badge v-{{ 'stop' if s.level == 'стоп' else 'check' }}">{{ s.level }}</span> {{ s.message }}
+    <span class="badge v-{{ 'stop' if s.level == 'стоп' else 'check' }}">{{ s.level }}</span> {{ s.message|lawlinks }}
     <table class="facts actions">
       <thead><tr><th>Что подтвердить</th><th>Где взять</th><th>Следующий шаг</th></tr></thead>
-      <tbody>{% for a in s.actions %}<tr><td>{{ a.what }}</td><td>{{ a.where }}</td><td>{{ a.next }}</td></tr>{% endfor %}</tbody>
+      <tbody>{% for a in s.actions %}<tr><td>{{ a.what|lawlinks }}</td><td>{{ a.where|lawlinks }}</td><td>{{ a.next|lawlinks }}</td></tr>{% endfor %}</tbody>
     </table>
   </div>
   {% endfor %}
   {% if plan.documents %}
   <p><strong>Документы к запросу</strong></p>
-  <ul class="small">{% for d in plan.documents %}<li>{{ d.name }} <span class="muted">— {{ d.where }}</span></li>{% endfor %}</ul>
+  <ul class="small">{% for d in plan.documents %}<li>{{ d.name|lawlinks }} <span class="muted">— {{ d.where|lawlinks }}</span></li>{% endfor %}</ul>
   {% endif %}
 </article>
 {% endif %}

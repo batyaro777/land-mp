@@ -18,6 +18,7 @@ import re
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeout
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -38,6 +39,7 @@ MAX_QUOTES_PER_TERM = 3
 # не больше минуты скачивания и минуты разбора, вся проверка — 3 минуты, документы параллельно.
 TIMEOUT = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=10.0)
 DOWNLOAD_DEADLINE_S = 60.0
+ATTEMPT_DEADLINE_S = 45.0  # попытка целиком (рукопожатие с шлюзом не покрывается таймаутами httpx)
 PARSE_DEADLINE_S = 60.0
 BUDGET_S = 180.0
 WORKERS = 4
@@ -53,6 +55,10 @@ NESTED_HINT_RE = re.compile(
     r"межеван|планировк|постановлен|распоряжен|извещен|слушан|проект|решени|схем|аукцион|торг", re.I
 )
 _HREF_RE = re.compile(r"<a\s[^>]*?href\s*=\s*[\"']([^\"']+)[\"'][^>]*>(.*?)</a>", re.I | re.S)
+_SIZE_RE = re.compile(
+    r"^\s*[\d.,]+\s*(?:[КМГ]б|[КМГ]Б|[KMG]B|байт)\b[\s,;:—-]*|[\s(]*[\d.,]+\s*(?:[КМГ]б|[КМГ]Б|[KMG]B)\)?\s*$",
+    re.I,
+)
 _CHARSET_RE = re.compile(r"charset\s*=\s*[\"']?([\w-]+)", re.I)
 DOC_KEY_VERSION = "doc2"  # doc → doc2: до 01.11 HTML читался только как utf-8, кэш был битым
 UA = "Mozilla/5.0 (compatible; land-mp/1.0; +https://land-mp.dnai.engineering)"
@@ -174,6 +180,7 @@ def page_links(html: str, base_url: str) -> list[dict[str, str]]:
             continue
         seen.add(url)
         text = html_mod.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", anchor))).strip()
+        text = _SIZE_RE.sub("", text).strip()  # «55.19 КБ Решение …» → «Решение …»
         out.append({"url": url, "text": text[:200]})
         if len(out) >= MAX_LINKS_PER_PAGE:
             break
@@ -203,50 +210,68 @@ def _explain(exc: BaseException) -> str:
     return type(exc).__name__
 
 
-def _download(url: str) -> tuple[bytes, str, str, int]:
-    """(bytes, content_type, final_url, status). Напрямую, при блокировке — через RU-шлюз."""
+def _attempt(url: str, proxy: str | None) -> tuple[bytes, str, str, int]:
+    """Одна попытка скачать (напрямую или через шлюз)."""
     headers = {"User-Agent": UA, "Accept": "*/*"}
+    started = time.monotonic()
+    with httpx.Client(
+        proxy=proxy,
+        timeout=TIMEOUT,
+        follow_redirects=True,
+        headers=headers,
+        verify=ruproxy.verify_context() if proxy else True,
+    ) as client:
+        with client.stream("GET", url) as resp:
+            if resp.status_code in (403, 451) and proxy is None and ruproxy.enabled():
+                raise _Blocked(resp.status_code)
+            resp.raise_for_status()
+            buf = bytearray()
+            for chunk in resp.iter_bytes():
+                buf.extend(chunk)
+                if len(buf) > MAX_BYTES:
+                    raise ValueError("больше 25 МБ")
+                if time.monotonic() - started > DOWNLOAD_DEADLINE_S:
+                    raise TimeoutError("скачивание дольше минуты")
+            return bytes(buf), resp.headers.get("content-type", ""), str(resp.url), resp.status_code
+
+
+class _Blocked(Exception):
+    def __init__(self, status: int):
+        super().__init__(f"HTTP {status} напрямую")
+        self.status = status
+
+
+def _download(url: str) -> tuple[bytes, str, str, int]:
+    """(bytes, content_type, final_url, status). Напрямую, при блокировке или сетевом сбое — через
+    RU-шлюз. Каждая попытка ограничена по стенным часам: прод 01.11 — соединение через шлюз с
+    недоступным сайтом держало поток 145 с, таймауты httpx на рукопожатие SOCKS не действуют."""
     errors: list[str] = []
     attempts = [None] + ([ruproxy.proxy_url()] if ruproxy.enabled() else [])
     for proxy in attempts:
-        started = time.monotonic()
+        suffix = " через шлюз" if proxy else ""
+        pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="landcheck-download")
+        fut = pool.submit(_attempt, url, proxy)
         try:
-            with httpx.Client(
-                proxy=proxy,
-                timeout=TIMEOUT,
-                follow_redirects=True,
-                headers=headers,
-                verify=ruproxy.verify_context() if proxy else True,
-            ) as client:
-                with client.stream("GET", url) as resp:
-                    if resp.status_code in (403, 451) and proxy is None and len(attempts) > 1:
-                        errors.append(f"HTTP {resp.status_code} напрямую")
-                        continue
-                    resp.raise_for_status()
-                    buf = bytearray()
-                    for chunk in resp.iter_bytes():
-                        buf.extend(chunk)
-                        if len(buf) > MAX_BYTES:
-                            raise ValueError("больше 25 МБ")
-                        if time.monotonic() - started > DOWNLOAD_DEADLINE_S:
-                            raise TimeoutError("скачивание дольше минуты")
-                    return (
-                        bytes(buf),
-                        resp.headers.get("content-type", ""),
-                        str(resp.url),
-                        resp.status_code,
-                    )
+            return fut.result(timeout=ATTEMPT_DEADLINE_S)
+        except FuturesTimeout:
+            errors.append(f"нет ответа за {int(ATTEMPT_DEADLINE_S)} с{suffix}")
+            continue
+        except _Blocked as exc:
+            errors.append(str(exc))
+            continue
         except (
             TimeoutError,
             ValueError,
         ) as exc:  # медленный канал или большой файл — шлюз не поможет
-            errors.append(f"{exc}{' через шлюз' if proxy else ''}")
+            errors.append(f"{exc}{suffix}")
             break
         except httpx.HTTPStatusError:
             raise
         except Exception as exc:  # noqa: BLE001 — сетевые сбои, в т. ч. socksio «Malformed reply»
-            errors.append(f"{_explain(exc)}{' через шлюз' if proxy else ''}")
+            errors.append(f"{_explain(exc)}{suffix}")
             continue
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
     raise ConnectionError("; ".join(errors) or "не удалось скачать")
 
 
