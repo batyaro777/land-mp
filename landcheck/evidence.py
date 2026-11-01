@@ -268,7 +268,8 @@ def _download(url: str) -> tuple[bytes, str, str, int]:
         except httpx.HTTPStatusError:
             raise
         except Exception as exc:  # noqa: BLE001 — сетевые сбои, в т. ч. socksio «Malformed reply»
-            errors.append(f"{_explain(exc)}{suffix}")
+            why = _explain(exc)
+            errors.append(why if "шлюз" in why else f"{why}{suffix}")
             continue
         finally:
             pool.shutdown(wait=False, cancel_futures=True)

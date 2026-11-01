@@ -412,7 +412,7 @@ def test_download_explains_unknown_transport_errors(monkeypatch):
     assert calls == [None, "socks5h://gw:1080"]
     assert doc["error"] == (
         "не скачан: шлюз не получил ответ от сайта (обрыв SOCKS); "
-        "шлюз не получил ответ от сайта (обрыв SOCKS) через шлюз"
+        "шлюз не получил ответ от сайта (обрыв SOCKS)"  # без дубля «через шлюз»
     )
 
 
