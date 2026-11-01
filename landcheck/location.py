@@ -615,7 +615,7 @@ def summarize_location(
             osm,
             neighbors["total"],
         ),
-        "forest": forest_summary(nspd.get("neighbors") or []),
+        "forest": forest_summary(nspd.get("neighbors") or [], parcel_geojson),
         "errors": list(nspd.get("errors") or []),
         # Тексты исключений — в лог и в кэш, клиенту — одна фраза (зум 28.10, п. 1.10).
         "errors_public": (
@@ -741,18 +741,75 @@ def access_summary(
     return {"level": level, "text": text, "roads": roads[:5], "source": SRC_ACCESS}
 
 
-def forest_summary(neighbors: list[dict[str, Any]]) -> dict[str, Any] | None:
+def forest_overlap(
+    parcel_geojson: dict[str, Any] | None, forest_features: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    """Наложение контуров лесного фонда на участок по ЕГРН: площадь и доля (кейс Андрея, зум 28.10:
+    лесфонд и Росреестр «сделали наложение», по запросу лесничество границу скорректировало).
+    None — геометрий нет или пересечения нет."""
+    if not parcel_geojson:
+        return None
+    try:
+        parcel = shape(parcel_geojson)
+        if parcel.is_empty or parcel.area == 0:
+            return None
+        hits: list[tuple[str | None, float]] = []
+        for f in forest_features:
+            if not f.get("geometry"):
+                continue
+            inter = parcel.intersection(shape(f["geometry"]))
+            if inter.is_empty or inter.area <= 0:
+                continue
+            opts = (f.get("properties") or {}).get("options") or {}
+            hits.append((opts.get("cad_num"), inter.area / parcel.area))
+    except Exception:  # noqa: BLE001 — геометрия НСПД бывает битой
+        return None
+    if not hits:
+        return None
+    share = min(sum(x for _, x in hits), 1.0)
+    if share < 0.005:  # меньше 0,5 % — погрешность контуров, не наложение
+        return None
+    return {"share": round(share, 3), "cad_nums": [c for c, _ in hits if c]}
+
+
+def forest_summary(
+    neighbors: list[dict[str, Any]], parcel_geojson: dict[str, Any] | None = None
+) -> dict[str, Any] | None:
     """Смежность с землями лесного фонда (Андрей: участок граничит с лесфондом — 30 м от леса
     не строить; раньше было наложение, лесфонд границу скорректировал). None — лесфонда
-    в ближнем круге нет."""
+    в ближнем круге нет. Если контуры лесфонда по ЕГРН заходят на участок — это наложение
+    (ТЗ v3 п. 2.4), первым делом."""
     forest: list[tuple[float | None, str | None]] = []
+    forest_features: list[dict[str, Any]] = []
     for f in neighbors:
         opts = (f.get("properties") or {}).get("options") or {}
         cat = str(_get(opts, "land_record_category_type", default="") or "").lower()
         if "лесного фонда" in cat:
             forest.append((f.get("distance_m"), opts.get("cad_num")))
+            forest_features.append(f)
     if not forest:
         return None
+    overlap = forest_overlap(parcel_geojson, forest_features)
+    if overlap:
+        cads = ", ".join(overlap["cad_nums"][:3])
+        return {
+            "level": "check",
+            "adjacent": True,
+            "overlap": True,
+            "share": overlap["share"],
+            "count": len(overlap["cad_nums"]) or 1,
+            "cad_nums": overlap["cad_nums"],
+            "text": (
+                f"наложение земель лесного фонда на участок: контуры по ЕГРН пересекаются на "
+                f"{overlap['share']:.0%} площади"
+                + (f" (лесной участок {cads})" if cads else "")
+                + ". Запросить в лесничестве и Рослесинфорге сведения о границах; право на участок "
+                "возникло до 01.01.2016 — применима лесная амнистия (280-ФЗ), иначе границы "
+                "лесфонда уточняются по заявлению; до ответа лесничества сделку и стройку не вести"
+            ),
+            "source": SRC_FOREST,
+            "law": SRC_SP_4,
+        }
     known = [x for x in forest if x[0] is not None]
     adjacent = [x for x in known if x[0] <= FOREST_ADJ_M]
     if adjacent:

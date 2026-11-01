@@ -97,6 +97,8 @@ def parcel_from_payload(payload: dict[str, Any]) -> Parcel:
 
     zouit_raw = payload.get("zouit")
     tz_raw = payload.get("territorial_zones")
+    oopt_raw = payload.get("oopt")
+    fp_raw = payload.get("forest_park")
 
     parcel = Parcel(
         cad_num=_get(opts, "cad_num", default=cad_num),
@@ -121,6 +123,10 @@ def parcel_from_payload(payload: dict[str, Any]) -> Parcel:
         zouit=[_zone_hit(f) for f in (zouit_raw or [])],
         zouit_checked=zouit_raw is not None,
         territorial_zones=[_zone_hit(f) for f in (tz_raw or [])],
+        oopt=[_zone_hit(f) for f in (oopt_raw or [])],
+        oopt_checked=oopt_raw is not None,
+        forest_park=[_zone_hit(f) for f in (fp_raw or [])],
+        forest_park_checked=fp_raw is not None,
         territorial_zone_checked=tz_raw is not None,
         raw=payload,
     )

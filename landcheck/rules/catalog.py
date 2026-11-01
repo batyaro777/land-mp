@@ -391,6 +391,104 @@ def r10_zouit(ctx: RuleContext):
     )
 
 
+SRC_OOPT = (
+    "НСПД, слой «Особо охраняемые природные территории» (реестр границ), пересечение с контуром; "
+    "ст. 27 п. 4 и ст. 95 ЗК РФ, 33-ФЗ «Об ООПТ»: земли заповедников и нацпарков — федеральная "
+    "собственность, в частную не передаются; режим региональных ООПТ — по положению о территории"
+)
+SRC_FOREST_PARK = (
+    "НСПД, слой «Граница лесопарка»; ст. 62.1–62.5 7-ФЗ «Об охране окружающей среды»: в лесопарковом "
+    "зелёном поясе запрещено строительство вне перечня, перевод и изъятие земель ограничены"
+)
+OOPT_MIN_SHARE = 0.05  # меньше — считаем касанием границы, не вхождением
+
+
+def _overlap_share(parcel_geojson, features: list) -> float | None:
+    """Доля площади участка внутри объединения контуров (0–1); None — геометрии нет."""
+    try:
+        from shapely.geometry import shape
+        from shapely.ops import unary_union
+    except Exception:  # noqa: BLE001 — shapely опционален
+        return None
+    if not parcel_geojson:
+        return None
+    try:
+        parcel = shape(parcel_geojson)
+        geoms = [shape(f["geometry"]) for f in features if f.get("geometry")]
+        if not geoms or parcel.is_empty or parcel.area == 0:
+            return None
+        inter = parcel.intersection(unary_union(geoms))
+        return round(min(max(inter.area / parcel.area, 0.0), 1.0), 3)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+@rule("R22", "Особо охраняемая природная территория", "Участок в границах ООПТ по реестру границ")
+def r22_oopt(ctx: RuleContext):
+    """Скрытое обременение (зум 28.10, Влад): документы чистые, а участок вырезан из нацпарка —
+    сделку разворачивают. Категория в ЕГРН может быть любой, границу ООПТ видно только по слою."""
+    p = ctx.parcel
+    if not p.found or not p.oopt_checked or not p.oopt:
+        return None
+    share = _overlap_share(p.geometry, p.raw.get("oopt") or [])
+    names = "; ".join(z.describe(max_len=80) for z in p.oopt[:3])
+    details = {
+        "oopt": [{"reg_number": z.reg_number, "name": z.name, "kind": z.kind} for z in p.oopt],
+        "share": share,
+    }
+    protected_cat = category_class(p.category) == "protected"
+    if share is not None and share < OOPT_MIN_SHARE:
+        return Flag(
+            "R22",
+            Level.CHECK,
+            f"граница ООПТ ({names}) задевает участок на {share:.0%} площади: проверить, не "
+            "наложение ли это границ — запрос в дирекцию ООПТ или Минприроды региона",
+            SRC_OOPT,
+            details,
+        )
+    pct = f" ({share:.0%} площади)" if share is not None else ""
+    if protected_cat:
+        return Flag(
+            "R22",
+            Level.CHECK,
+            f"участок в границах ООПТ ({names}){pct}, категория — особо охраняемые территории: "
+            "оборот и использование ограничены режимом (ст. 27, 95 ЗК; положение об ООПТ)",
+            SRC_OOPT,
+            details,
+        )
+    return Flag(
+        "R22",
+        Level.STOP,
+        f"участок в границах ООПТ ({names}){pct}, при этом категория в ЕГРН — "
+        f"«{p.category or 'не указана'}»: земли заповедников и нацпарков — федеральная "
+        "собственность и в частную не передаются, образование и продажа такого участка "
+        "оспариваются (ст. 27 п. 4, ст. 95 ЗК; 33-ФЗ); до ответа дирекции ООПТ и выписки о "
+        "переходе прав сделку не вести",
+        SRC_OOPT,
+        details,
+    )
+
+
+@rule("R23", "Лесопарковый зелёный пояс", "Участок в границах лесопарка")
+def r23_forest_park(ctx: RuleContext):
+    p = ctx.parcel
+    if not p.found or not p.forest_park_checked or not p.forest_park:
+        return None
+    share = _overlap_share(p.geometry, p.raw.get("forest_park") or [])
+    if share is not None and share < OOPT_MIN_SHARE:
+        return None  # касание границы
+    pct = f" ({share:.0%} площади)" if share is not None else ""
+    names = "; ".join(z.describe(max_len=80) for z in p.forest_park[:2])
+    return Flag(
+        "R23",
+        Level.CHECK,
+        f"участок в границах лесопаркового зелёного пояса{pct}{(' — ' + names) if names else ''}: "
+        "строительство только из разрешённого перечня, сверить режим с лесничеством и ПЗЗ",
+        SRC_FOREST_PARK,
+        {"share": share, "zones": [z.describe(max_len=80) for z in p.forest_park]},
+    )
+
+
 @rule("R11", "Территориальная зона против цели", "Зона ПЗЗ: что здесь можно строить")
 def r11_territorial_zone(ctx: RuleContext):
     p = ctx.parcel

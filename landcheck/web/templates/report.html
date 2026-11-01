@@ -153,6 +153,8 @@
     <tr><th>Площадь по ЕГРН</th><td>{{ p.area_m2|sotka }} ({{ '%.0f'|format(p.area_m2 or 0) }} м²){% if p.specified_area_m2 is none and p.declared_area_m2 %} <span class="muted small">декларированная</span>{% endif %}</td></tr>
     {% if d.listing.declared_area_m2 %}<tr><th>Площадь в объявлении</th><td>{{ d.listing.declared_area_m2|sotka }}</td></tr>{% endif %}
     <tr><th>Границы в ЕГРН</th><td>{{ 'установлены' if p.has_borders else 'не установлены' }}</td></tr>
+    {% if p.oopt_checked %}<tr><th>ООПТ по реестру границ</th><td>{% if p.oopt %}<span class="badge mini v-stop">в границах</span> {% for z in p.oopt %}{{ z.describe }}{% if not loop.last %}; {% endif %}{% endfor %}{% else %}пересечений с границами ООПТ нет{% endif %}</td></tr>{% endif %}
+    {% if p.forest_park_checked and p.forest_park %}<tr><th>Лесопарковый зелёный пояс</th><td><span class="badge mini v-check">в границах</span> {% for z in p.forest_park %}{{ z.describe }}{% if not loop.last %}; {% endif %}{% endfor %}</td></tr>{% endif %}
     <tr><th>Кадастровая стоимость</th><td>{{ p.cadastral_cost_rub|money }}{% if p.cost_index_rub_m2 %} <span class="muted small">({{ p.cost_index_rub_m2|money }}/м²)</span>{% endif %}</td></tr>
     {% if d.listing.price_rub %}<tr><th>Цена в объявлении</th><td>{{ d.listing.price_rub|money }}{% if d.price_per_sotka %} <span class="muted small">({{ d.price_per_sotka|money }} за сотку)</span>{% endif %}</td></tr>{% endif %}
     <tr><th>Форма собственности</th><td>{{ p.ownership_type or 'в карточке не указана' }}</td></tr>

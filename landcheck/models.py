@@ -208,6 +208,11 @@ class Parcel:
     zouit_checked: bool = False
     territorial_zones: list[ZoneHit] = field(default_factory=list)
     territorial_zone_checked: bool = False
+    # скрытые обременения (ТЗ v3, п. 2.4): границы ООПТ и лесопарка, пересекающие контур
+    oopt: list[ZoneHit] = field(default_factory=list)
+    oopt_checked: bool = False
+    forest_park: list[ZoneHit] = field(default_factory=list)
+    forest_park_checked: bool = False
     raw: dict[str, Any] = field(default_factory=dict)
 
     @property

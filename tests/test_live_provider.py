@@ -119,7 +119,16 @@ def test_full_payload_and_normalization():
     assert payload["found"] and payload["provider"] == "nspd"
     assert payload["permission_types"] == ["Для индивидуального жилищного строительства (2.1)"]
     assert len(payload["zouit"]) == 1 and len(payload["territorial_zones"]) == 1
-    assert fake.calls == ["find", "tab", "contour:Иные ЗОУИТ", "contour:Территориальные зоны"]
+    # ТЗ v3 п. 2.4: после ЗОУИТ и терзон — границы ООПТ и лесопарка (скрытые обременения)
+    assert fake.calls == [
+        "find",
+        "tab",
+        "contour:Иные ЗОУИТ",
+        "contour:Территориальные зоны",
+        "contour:Особо охраняемые природные территории ",
+        "contour:Граница лесопарка",
+    ]
+    assert payload["oopt"] is not None and payload["forest_park"] is not None
     parcel = parcel_from_payload(payload)
     assert parcel.has_borders and parcel.zouit[0].reg_number == "50:09-6.1"
     assert category_class(parcel.category) == "settlement"

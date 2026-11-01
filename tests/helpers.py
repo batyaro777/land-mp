@@ -27,6 +27,8 @@ def make_payload(
     borders: bool = True,
     zouit: list[dict[str, Any]] | None = None,
     zouit_checked: bool = True,
+    oopt: list[dict[str, Any]] | None = None,  # None — слой ООПТ не проверялся
+    forest_park: list[dict[str, Any]] | None = None,
     tz: list[dict[str, Any]] | None = None,
     tz_checked: bool = True,
     fetched_at: datetime | None = None,
@@ -87,6 +89,8 @@ def make_payload(
         "permission_types": vri_tab,
         "zouit": (zouit or []) if zouit_checked else None,
         "territorial_zones": (tz or []) if tz_checked else None,
+        "oopt": oopt,
+        "forest_park": forest_park,
         "errors": errors or [],
         "_synthetic": True,
     }
@@ -113,5 +117,33 @@ def zone(
                 "name_by_doc": name,
                 "content_restrict_encumbrances": restrictions,
             },
+        },
+    }
+
+
+CORNER = {  # четверть площади SQUARE — для «касания» границы (доля < 5 % не получится; 25 %)
+    "type": "Polygon",
+    "coordinates": [
+        [[37.0, 55.0], [37.0005, 55.0], [37.0005, 55.0005], [37.0, 55.0005], [37.0, 55.0]]
+    ],
+}
+SLIVER = {  # полоска 1 % площади вдоль края — касание границы
+    "type": "Polygon",
+    "coordinates": [
+        [[37.0, 55.0], [37.00001, 55.0], [37.00001, 55.001], [37.0, 55.001], [37.0, 55.0]]
+    ],
+}
+
+
+def boundary(layer: str, reg: str, geometry: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Граница ООПТ / лесопарка как в НСПД: в options только реестровый номер границы."""
+    return {
+        "type": "Feature",
+        "id": 7,
+        "geometry": geometry or SQUARE,
+        "properties": {
+            "category": 472825,
+            "categoryName": layer,
+            "options": {"reg_numb_border": reg},
         },
     }

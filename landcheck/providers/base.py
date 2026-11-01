@@ -42,6 +42,8 @@ def empty_payload(cad_num: str, provider: str, *, found: bool = False) -> dict[s
         "landplot": None,
         "permission_types": None,
         "zouit": None,
+        "oopt": None,  # границы ООПТ, пересекающие контур; null = не проверяли
+        "forest_park": None,  # граница лесопарка (лесопарковый зелёный пояс)
         "territorial_zones": None,
         "errors": [],
     }

@@ -20,6 +20,9 @@ LANDPLOT_LAYER_ID = 36048  # Земельные участки из ЕГРН
 CONSTRUCTIONS_LAYER_ID = 36328  # Сооружения ЕГРН: сети, трубопроводы, дороги (зум 28.10, п. 1.6)
 PMT_LAYER_ID = 36473  # ЗУ, образуемые по проекту межевания территории
 AUCTION_LAYER_ID = 37299  # ЗУ, выставленные на аукцион
+# Скрытые обременения (зум 28.10, Влад: участок, вырезанный из нацпарка; ТЗ v3 п. 2.4)
+OOPT_LAYER_TITLE = "Особо охраняемые природные территории "  # пробел в конце — так в НСПД
+FOREST_PARK_LAYER_TITLE = "Граница лесопарка"
 
 
 class LiveNspdProvider:
@@ -127,6 +130,15 @@ class LiveNspdProvider:
             payload["territorial_zones"] = [h.model_dump(by_alias=True, mode="json") for h in hits]
         except Exception as e:  # noqa: BLE001
             payload["errors"].append(f"терзоны не проверены: {type(e).__name__}: {e}")
+        for key, title, label in (
+            ("oopt", OOPT_LAYER_TITLE, "ООПТ"),
+            ("forest_park", FOREST_PARK_LAYER_TITLE, "лесопарк"),
+        ):
+            try:
+                hits = nspd.search_in_contour(contour, NspdFeature.by_title(title)) or []
+                payload[key] = [h.model_dump(by_alias=True, mode="json") for h in hits]
+            except Exception as e:  # noqa: BLE001
+                payload["errors"].append(f"{label} не проверен: {type(e).__name__}: {e}")
         return payload
 
     # --- окружение участка (модуль «Локация», по запросу из отчёта) ------------------------

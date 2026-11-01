@@ -101,6 +101,10 @@ def result_to_dict(r: CheckResult) -> dict[str, Any]:
             "zouit_geometries": _zone_geometries(p),
             "territorial_zones": [_zone(z) for z in p.territorial_zones],
             "territorial_zone_checked": p.territorial_zone_checked,
+            "oopt": [_zone(z) for z in p.oopt],
+            "oopt_checked": p.oopt_checked,
+            "forest_park": [_zone(z) for z in p.forest_park],
+            "forest_park_checked": p.forest_park_checked,
             "errors": list(p.raw.get("errors") or []),
             "from_stale_cache": bool(p.raw.get("from_stale_cache")),
         },
@@ -229,6 +233,10 @@ def result_from_dict(d: dict[str, Any]) -> CheckResult:
         zouit_checked=bool(pd.get("zouit_checked")),
         territorial_zones=zones(pd.get("territorial_zones") or []),
         territorial_zone_checked=bool(pd.get("territorial_zone_checked")),
+        oopt=zones(pd.get("oopt") or []),
+        oopt_checked=bool(pd.get("oopt_checked")),
+        forest_park=zones(pd.get("forest_park") or []),
+        forest_park_checked=bool(pd.get("forest_park_checked")),
         raw={"errors": pd.get("errors") or []},
     )
     duplicates = [
