@@ -1054,6 +1054,7 @@ def report_location(request: Request, user: UserDep, check_id: int, cad_num: str
             gpzu=data.get("gpzu"),
             auctions=auctions,
             auctions_url=f"/checks/{check.id}/items/{cad_num}/auctions",
+            calc_url=f"/checks/{check.id}/items/{cad_num}/torgi-calc",
             public=False,
             location_url=f"/checks/{check.id}/items/{cad_num}/location",
             region=data.get("region"),
@@ -1101,7 +1102,67 @@ def report_auctions(request: Request, user: UserDep, check_id: int, cad_num: str
             "_auctions.html",
             auctions=auctions,
             auctions_url=f"/checks/{check.id}/items/{cad_num}/auctions",
+            calc_url=f"/checks/{check.id}/items/{cad_num}/torgi-calc",
             user=user,
+        )
+
+
+# --- калькулятор входа в торги (ТЗ v3, п. 9 этап 4 / п. 13.7) --------------------------------
+def _torgi_calc_page(request: Request, user: User, raw: dict[str, Any], **ctx: Any) -> HTMLResponse:
+    from landcheck import torgi_calc
+
+    if not user.is_admin:
+        raise HTTPException(404)
+    result = torgi_calc.compute(raw)
+    return render(request, "torgi_calc.html", calc=result, raw=raw, user=user, **ctx)
+
+
+@router.get("/tools/torgi-calc", response_class=HTMLResponse)
+def torgi_calc_tool(request: Request, user: UserDep):
+    """Калькулятор входа в торги без привязки к участку (внутренний режим)."""
+    raw = dict(request.query_params)
+    return _torgi_calc_page(request, user, raw, title="Калькулятор входа в торги", parcel=None)
+
+
+@router.get("/checks/{check_id}/items/{cad_num}/torgi-calc", response_class=HTMLResponse)
+def report_torgi_calc(request: Request, user: UserDep, check_id: int, cad_num: str):
+    """Калькулятор для участка: площадь из ЕГРН, сценарии продажи — из нашего ориентира стоимости.
+
+    Параметры запроса (start, step, area, smin…) перекрывают подстановку — так ссылки из блока
+    «Торги рядом» приносят старт и площадь лота.
+    """
+    from landcheck import torgi_calc
+
+    if not user.is_admin:
+        raise HTTPException(404)
+    with session() as db:
+        check = _own_check(db, user, check_id)
+        item = db.scalar(
+            select(CheckItem).where(CheckItem.check_id == check.id, CheckItem.cad_num == cad_num)
+        )
+        if item is None:
+            raise HTTPException(404)
+        data = dict(item.data)
+        parcel = data.get("parcel") or {}
+        raw = dict(request.query_params)
+        raw.setdefault("cad", cad_num)
+        if not raw.get("area") and parcel.get("area_m2"):
+            raw["area"] = f"{parcel['area_m2']:.0f}"
+        if not any(raw.get(k) for k in ("smin", "smid", "smax")):
+            median = (check.stats or {}).get("median_price_per_sotka")
+            valuation = _valuation_for(data, _corridor_for(data), median)
+            for k, v in torgi_calc.defaults_from_valuation(valuation).items():
+                raw[k] = str(v)
+            raw["_from_valuation"] = "1" if raw.get("smid") else ""
+        report_url = f"/checks/{check.id}/items/{cad_num}"
+        return _torgi_calc_page(
+            request,
+            user,
+            raw,
+            title=f"Калькулятор входа в торги — {cad_num}",
+            parcel=parcel,
+            report_url=report_url,
+            check=check,
         )
 
 

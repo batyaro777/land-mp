@@ -18,7 +18,7 @@
     {% endif %}
     {% if au['items'] %}
     <table class="facts">
-      <tr><th>Лот</th><th>Сделка · ВРИ</th><th class="num">Площадь</th><th class="num">Старт</th><th class="num">Итог</th><th class="num">₽/м²</th><th>Дата</th></tr>
+      <tr><th>Лот</th><th>Сделка · ВРИ</th><th class="num">Площадь</th><th class="num">Старт</th><th class="num">Итог</th><th class="num">₽/м²</th><th>Дата</th>{% if calc_url is defined %}<th></th>{% endif %}</tr>
       {% for i in au['items'] %}
       <tr><td><a href="{{ i.url }}" target="_blank" rel="noopener"><code>{{ i.cad_num }}</code></a></td>
         <td class="small">{{ i.kind }}{% if i.vri %} · {{ i.vri|truncate(40) }}{% endif %}</td>
@@ -26,10 +26,11 @@
         <td class="num">{% if i.price_start %}{{ i.price_start|money }}{% else %}—{% endif %}</td>
         <td class="num">{% if i.price_fin %}{{ i.price_fin|money }}{% else %}—{% endif %}</td>
         <td class="num">{{ i.rub_m2 or '—' }}</td>
-        <td class="small">{{ i.date or '—' }}</td></tr>
+        <td class="small">{{ i.date or '—' }}</td>
+        {% if calc_url is defined %}<td class="small no-print"><a href="{{ calc_url }}?start={{ i.price_start|int if i.price_start else '' }}&amp;area={{ i.area_m2|int if i.area_m2 else '' }}&amp;kind={{ i.kind }}&amp;lot_url={{ i.url|urlencode }}" title="Калькулятор входа в торги по этому лоту">расчёт</a></td>{% endif %}</tr>
       {% endfor %}
     </table>
     {% endif %}
-    <p class="muted small">{{ au.source }}{% if au.sample_note %}; {{ au.sample_note }}{% endif %}. Аренда — годовая плата, не выкуп; «итог к старту» — во сколько раз цена победителя выше начальной (у аренды старт — минимальная годовая плата, поэтому рост бывает кратным). Данные на {{ au.as_of[:10] }}; <a href="{{ au.search_url }}" target="_blank" rel="noopener">реестр torgi.gov.ru</a> · <a href="{{ auctions_url }}?refresh=1" hx-get="{{ auctions_url }}?refresh=1" hx-target="closest details" hx-swap="outerHTML">обновить</a>. Это ориентир ликвидности и цен государственной земли, а не оценка участка (ТЗ v3, п. 9).</p>
+    <p class="muted small">{{ au.source }}{% if au.sample_note %}; {{ au.sample_note }}{% endif %}. Аренда — годовая плата, не выкуп; «итог к старту» — во сколько раз цена победителя выше начальной (у аренды старт — минимальная годовая плата, поэтому рост бывает кратным). Данные на {{ au.as_of[:10] }}; <a href="{{ au.search_url }}" target="_blank" rel="noopener">реестр torgi.gov.ru</a> · <a href="{{ auctions_url }}?refresh=1" hx-get="{{ auctions_url }}?refresh=1" hx-target="closest details" hx-swap="outerHTML">обновить</a>{% if calc_url is defined %} · <a href="{{ calc_url }}">калькулятор входа в торги</a>{% endif %}. Это ориентир ликвидности и цен государственной земли, а не оценка участка (ТЗ v3, п. 9).</p>
     {% endif %}
   </details>
