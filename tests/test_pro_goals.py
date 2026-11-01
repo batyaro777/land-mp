@@ -126,6 +126,13 @@ def test_goal_summary_plan_and_checklist_for_professional():
     )
     cl = checklist_for(private, Purpose.INVEST)
     assert any(b["title"] == "Экономика перепродажи" for b in cl["blocks"])
+    # и у муниципального участка тоже (приёмка 00a6150: блок терялся на раннем return)
+    public_item = result_to_dict(
+        CheckResult(listing=Listing(cad_num="x"), parcel=parcel_from_payload(payload), flags=[])
+    )
+    cl = checklist_for(public_item, Purpose.INVEST)
+    assert cl["title"] == "Чек-лист перед оформлением участка"
+    assert any(b["title"] == "Экономика перепродажи" for b in cl["blocks"])
     assert not any(
         b["title"] == "Экономика перепродажи"
         for b in checklist_for(private, Purpose.IZHS)["blocks"]

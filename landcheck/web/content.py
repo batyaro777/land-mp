@@ -114,6 +114,17 @@ CHECKLIST_SITE_PRODUCTION: dict[str, Any] = {
 PRICE_DISCLAIMER = "Справочно. Не является отчётом об оценке."
 
 
+_INVEST_BLOCK = {
+    "title": "Экономика перепродажи",
+    "items": [
+        "Срок владения продавца и свой: продажа раньше 5 лет — НДФЛ 13 % с разницы "
+        "(ст. 217.1 НК РФ); у публичного участка отсчёт — с регистрации своего права",
+        "Сельхозземля: извещение региона о продаже, ответ до 30 дней (ст. 8 101-ФЗ)",
+        "Ликвидность локации: торги рядом за год, объявления и срок их экспозиции",
+    ],
+}
+
+
 def checklist_for(item: dict[str, Any], purpose: Purpose) -> dict[str, Any]:
     """Чек-лист под форму собственности и цель: для муниципального участка под КФХ «нотариальное
     согласие супруга» и «взносы СНТ» не нужны (зум 28.10, п. 1.12)."""
@@ -132,20 +143,12 @@ def checklist_for(item: dict[str, Any], purpose: Purpose) -> dict[str, Any]:
             }
         )
         blocks.append(site)
+        if purpose is Purpose.INVEST:
+            blocks.append(_INVEST_BLOCK)
         return {"title": "Чек-лист перед оформлением участка", "blocks": blocks}
     blocks = [dict(b) for b in CHECKLIST]
     if purpose is Purpose.INVEST:
-        blocks.append(
-            {
-                "title": "Экономика перепродажи",
-                "items": [
-                    "Срок владения продавца и свой: продажа раньше 5 лет — НДФЛ 13 % с разницы "
-                    "(ст. 217.1 НК РФ)",
-                    "Сельхозземля: извещение региона о продаже, ответ до 30 дней (ст. 8 101-ФЗ)",
-                    "Ликвидность локации: торги рядом за год, объявления и срок их экспозиции",
-                ],
-            }
-        )
+        blocks.append(_INVEST_BLOCK)
     if purpose in (Purpose.FARMING, Purpose.INDUSTRY, Purpose.COMMERCE):
         blocks[0] = {
             "title": blocks[0]["title"],
