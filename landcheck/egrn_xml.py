@@ -63,6 +63,19 @@ def parse_xml_extract(raw: bytes) -> Extract | None:
     )
     _rights(root, ex)
     _restrictions(root, ex)
+    # происхождение участка (ТЗ v3, п. 2.4.4): из каких участков образован, дата присвоения номера
+    for asc in root.findall(".//ascendant_cad_numbers//cad_number") or root.findall(
+        ".//ascendant_cad_number//cad_number"
+    ):
+        val = (asc.text or "").strip()
+        if val and CAD_RE.search(val):
+            ex.ascendants.append(re.sub(r"\s+", "", CAD_RE.search(val).group(0)))
+    assigned = _text(root, ".//common_data/date_created") or _text(
+        root, ".//land_record//record_info/registration_date"
+    )
+    if assigned:
+        dt = _parse_dt(assigned)
+        ex.assigned_date = dt.strftime("%d.%m.%Y") if dt else None
     issued = _text(root, ".//date_formation") or _text(root, ".//details_statement//date")
     if issued:
         dt = _parse_dt(issued)

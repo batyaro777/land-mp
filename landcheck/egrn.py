@@ -67,6 +67,14 @@ _ISSUED_RE = re.compile(
     re.I,
 )
 _NONE_RE = re.compile(r"не\s+зарегистрирован|отсутству|данные\s+отсутствуют|нет", re.I)
+_ASSIGNED_RE = re.compile(
+    r"Дата\s+присвоения\s+кадастрового\s+номера\s*:?\s*(\d{2}\.\d{2}\.\d{4})", re.I
+)
+_ASCENDANTS_RE = re.compile(
+    r"(?:из\s+которых\s+образован\s+объект\s+недвижимости|исходных\s+объектов\s+недвижимости)"
+    r"\s*:?\s*([0-9:\s,;]+?)(?:\n|$|[А-Яа-я])",
+    re.I,
+)
 
 
 @dataclass
@@ -88,6 +96,9 @@ class Extract:
     right_number: str | None = None
     issued_at: str | None = None  # ISO 8601, когда известно время формирования (XML)
     source: str = "text"  # text (PDF/скан) | xml
+    # происхождение участка (ТЗ v3, п. 2.4.4): дата присвоения номера и исходные участки
+    assigned_date: str | None = None  # dd.mm.yyyy
+    ascendants: list[str] = field(default_factory=list)
 
     @property
     def filled(self) -> int:
@@ -104,6 +115,14 @@ def parse_extract(text: str) -> Extract:
     t = text.replace("\xa0", " ").replace(" ", " ")
     t = re.sub(r"[ \t]+", " ", t)
     ex.is_extract = bool(_EXTRACT_RE.search(t))
+    m = _ASSIGNED_RE.search(t)
+    if m:
+        ex.assigned_date = m.group(1)
+    m = _ASCENDANTS_RE.search(t)
+    if m:
+        ex.ascendants = [
+            re.sub(r"\s+", "", c) for c in CAD_RE.findall(m.group(1).replace(" ", ""))
+        ] or [re.sub(r"\s+", "", c) for c in CAD_RE.findall(m.group(1))]
     m = re.search(r"Кадастровый\s+номер\s*:?\s*(" + CAD_RE.pattern + ")", t, re.I)
     cad = m.group(1) if m else (CAD_RE.search(t).group(0) if CAD_RE.search(t) else None)
     ex.cad_num = re.sub(r"\s+", "", cad) if cad else None

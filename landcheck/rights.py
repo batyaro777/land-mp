@@ -130,6 +130,9 @@ class Rights:
     ownership_type: str | None = None  # форма собственности по НСПД
     parsed: bool = True  # из текста удалось что-то прочитать
     notes: list[str] = field(default_factory=list)
+    # происхождение участка из выписки (ТЗ v3, п. 2.4.4):
+    # {"ascendants": [...], "assigned": "dd.mm.yyyy"}
+    origin: dict[str, Any] | None = None
 
     @property
     def source_label(self) -> str:
@@ -279,6 +282,8 @@ def from_extract(ex: egrn.Extract) -> Rights:
         elif enc:
             r.restrictions.append(Entry(kind="other", label=enc[:80]))
     r.parsed = ex.is_extract or bool(ex.right_kind)
+    if ex.ascendants or ex.assigned_date:
+        r.origin = {"ascendants": list(ex.ascendants), "assigned": ex.assigned_date}
     return r
 
 
@@ -315,6 +320,10 @@ def summarize(
             "headline": "сведений о правах нет",
         }
     best = max(pool, key=lambda s: SOURCE_RANK.get(s.source, -1))
+    origin = next(
+        (s.origin for s in sorted(pool, key=lambda s: -SOURCE_RANK.get(s.source, -1)) if s.origin),
+        None,
+    )
     restrictions = list(best.restrictions)
     severe = [e for e in restrictions if e.kind in SEVERE]
     leases = [e for e in restrictions if e.kind == "lease"] + [
@@ -410,6 +419,7 @@ def summarize(
         "ownership_type": best.ownership_type or (parcel or {}).get("ownership_type"),
         "notes": best.notes,
         "badge": BADGES[status],
+        "origin": origin,
     }
 
 
@@ -426,6 +436,60 @@ SRC_RIGHTS = "выписка ЕГРН / ЛК Росреестра, раздел 
 SRC_ZK = (
     "ст. 39.11, 39.15, 39.18 ЗК РФ (торги, предварительное согласование); ст. 22 ЗК РФ (аренда)"
 )
+
+
+ORIGIN_FRESH_YEARS = 5
+SRC_ORIGIN = (
+    "выписка ЕГРН: «кадастровые номера объектов, из которых образован объект», «дата присвоения "
+    "кадастрового номера»; зум 28.10: участок с чистыми документами, образованный на землях "
+    "нацпарка, и сельхозка, переведённая в ИЖС «по кривой схеме», — сделки разворачивают"
+)
+
+
+def origin_flag(summary: dict[str, Any]) -> dict[str, Any] | None:
+    """Флаг R24 «Происхождение участка»: образован из других участков. Молодой участок (номер
+    присвоен меньше ORIGIN_FRESH_YEARS лет назад) — «проверить» историю образования, старый —
+    факт."""
+    origin = summary.get("origin") or {}
+    asc = origin.get("ascendants") or []
+    if not asc:
+        return None
+    assigned = origin.get("assigned")
+    years = None
+    if assigned:
+        try:
+            d = datetime.strptime(assigned, "%d.%m.%Y").replace(tzinfo=UTC)
+            years = (datetime.now(UTC) - d).days / 365.25
+        except ValueError:
+            years = None
+    listed = ", ".join(asc[:3]) + (f" и ещё {len(asc) - 3}" if len(asc) > 3 else "")
+    when = f", номер присвоен {assigned}" if assigned else ""
+    if years is not None and years < ORIGIN_FRESH_YEARS:
+        return {
+            "rule_id": "R24",
+            "level": Level.CHECK.value,
+            "message": (
+                f"участок образован из {listed}{when} (меньше {ORIGIN_FRESH_YEARS} лет): "
+                "проверить историю образования — категория, собственник и статус исходного "
+                "участка, основание (решение администрации, проект межевания, перевод категории); "
+                "образование на землях ООПТ или лесфонда и «кривой» перевод сельхозки "
+                "разворачивают сделку"
+            ),
+            "source": SRC_ORIGIN,
+            "details": {"ascendants": asc, "assigned": assigned, "years": round(years, 1)},
+        }
+    return {
+        "rule_id": "R24",
+        "level": Level.OK.value,
+        "message": f"участок образован из {listed}{when}: история образования длинная, "
+        "исходный участок — по ссылке в НСПД при желании",
+        "source": SRC_ORIGIN,
+        "details": {
+            "ascendants": asc,
+            "assigned": assigned,
+            "years": round(years, 1) if years else None,
+        },
+    }
 
 
 def rights_flag(summary: dict[str, Any]) -> dict[str, Any] | None:
@@ -475,11 +539,14 @@ def apply_to_item(
     # R12 («публичная собственность: свободен или в аренде — НСПД не показывает») — вопрос,
     # на который выписка или справка ЛК уже ответили: иначе клиент видит «свободен» и
     # «нужна выписка» рядом (Клавдий, приёмка 5e0c558). Остаётся R18 с фактом.
-    drop = {"R18"} | ({"R12"} if summary.get("source") != "nspd" else set())
+    drop = {"R18", "R24"} | ({"R12"} if summary.get("source") != "nspd" else set())
     flags = [f for f in data.get("flags") or [] if f.get("rule_id") not in drop]
     flag = rights_flag(summary)
     if flag:
         flags.append(flag)
+    oflag = origin_flag(summary)
+    if oflag:
+        flags.append(oflag)
     data["flags"] = flags
     data["verdict"] = verdict_of(flags)
     return data

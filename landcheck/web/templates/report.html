@@ -54,6 +54,7 @@
     {% endfor %}
     <tr><th>Ограничения и обременения</th><td>{% if rights.restrictions %}{% for e in rights.restrictions %}<span class="{% if e.kind in ('arrest','ban') %}err{% endif %}">{{ e.label|ucfirst }}</span>{% if e.number %} № {{ e.number }}{% endif %}{% if e.date %} от {{ e.date }}{% endif %}{% if e.term %}, {{ e.term }}{% endif %}{% if e.holder %} — {{ e.holder }}{% endif %}{% if not loop.last %}; {% endif %}{% endfor %}{% elif rights.restrictions_known %}не зарегистрированы (на дату сведений){% else %}в НСПД не показываются — нужна выписка ЕГРН или справка из ЛК Росреестра{% endif %}</td></tr>
     {% if rights.claims %}<tr><th>Правопритязания</th><td class="err">{{ rights.claims }}</td></tr>{% endif %}
+    {% if rights.origin %}<tr><th>Образование участка</th><td>{% if rights.origin.ascendants %}из {{ rights.origin.ascendants|join(', ') }}{% endif %}{% if rights.origin.assigned %}{% if rights.origin.ascendants %}; {% endif %}номер присвоен {{ rights.origin.assigned }}{% endif %}</td></tr>{% endif %}
     <tr><th>Форма собственности по НСПД</th><td>{{ rights.ownership_type or 'не указана' }}</td></tr>
     <tr><th>Источник</th><td class="small muted">{{ rights.source_label }}{% if rights.as_of %}, сведения на {{ rights.as_of }}{% endif %}</td></tr>
   </table>
