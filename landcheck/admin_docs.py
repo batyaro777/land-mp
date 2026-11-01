@@ -209,6 +209,15 @@ def is_about(text: str, name_stems: set[str]) -> bool:
     return any(st in t or translit(st) in t for st in name_stems)
 
 
+GISOGD_HOST_HINTS = ("gisogd", "isogd", "admkrai", "admobl", "fgistp", "gov.ru", "gosuslugi.ru")
+
+
+def is_regional_portal(host: str) -> bool:
+    """Для ГИСОГД/ФГИС ТП подходит только региональный или федеральный хост — сайт чужого
+    района с упоминанием края в сниппете не нужен (приёмка 238915c: adm-belorechensk.ru у Сочи)."""
+    return any(h in host for h in GISOGD_HOST_HINTS)
+
+
 def is_law_article(title: str) -> bool:
     """Общие статьи кодексов на Консультанте/Гаранте — не документы этого муниципалитета."""
     return bool(_LAW_ARTICLE_RE.search(title or ""))
@@ -327,9 +336,8 @@ def discover(
             trusted = any(host == h or host.endswith("." + h) for h in known)
             about_muni = is_about(text, muni_stems)
             about_region = is_about(text, region_stems)
-            if not trusted and (
-                is_law_article(title) or not (about_muni or (kind == "gisogd" and about_region))
-            ):
+            regional_ok = kind == "gisogd" and about_region and is_regional_portal(host)
+            if not trusted and (is_law_article(title) or not (about_muni or regional_ok)):
                 dropped += 1
                 continue
             k = classify(title, snippet, kind)

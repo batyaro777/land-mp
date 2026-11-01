@@ -42,7 +42,12 @@ def fake_search(query: str, *, max_results: int = 8, **_):
                 "title": "ГИСОГД Калужской области",
                 "url": "https://gisogd.admoblkaluga.ru/",
                 "snippet": "градостроительная информационная система",
-            }
+            },
+            {  # чужой район с упоминанием региона — для ГИСОГД не подходит
+                "title": "Администрация Перемышльского района",
+                "url": "https://adm-peremyshl.ru/gisogd",
+                "snippet": "Калужской области, ГИСОГД",
+            },
         ]
         return {"results": hits, "engine": "fake", "error": None}
     if "козельск" not in q:
@@ -123,13 +128,17 @@ def test_discover_groups_official_docs_by_kind():
     assert "pmt" in docs and docs["pmt"][0]["url"] == PMT_URL
     assert "pzz" in docs and docs["pzz"][0]["host"] == "base.garant.ru"
     assert "npa" in docs and "207" in docs["npa"][0]["title"]
-    assert "gisogd" in docs
+    assert "gisogd" in docs and len(docs["gisogd"]) == 1
+    assert docs["gisogd"][0]["host"] == "gisogd.admoblkaluga.ru"
+    assert admin_docs.is_regional_portal("arch.admoblkaluga.ru")
+    assert admin_docs.is_regional_portal("admkrai.krasnodar.ru")
+    assert not admin_docs.is_regional_portal("adm-belorechensk.ru")
     urls = [d["url"] for v in docs.values() for d in v]
     assert len(urls) == len(set(urls)) and not any("avito" in u or "forum" in u for u in urls)
     assert not any(
         "gorod.lv" in u or "gisogd.mos" in u or "r25" in u or "consultant" in u for u in urls
     )
-    assert found["total"] == len(urls) == 4 and found["dropped"] >= 3
+    assert found["total"] == len(urls) == 4 and found["dropped"] >= 4
     # хост из реестра муниципалитета проходит и без упоминания названия в тексте
     plain = {
         "results": [
