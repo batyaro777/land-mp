@@ -40,9 +40,10 @@ SCHEMA_VERSION = 1
 MONTHS = 12
 PAGE_SIZE = 10  # сервер молча режет size до 10
 # Страниц поиска на каждый статус. Поиск по тексту отдаёт и соседние районы, свои лоты
-# размазаны по страницам: при 8 страницах 40:10 терял единственную продажу района (Клавдий,
-# прод 01.11), 15 страниц закрывают состоявшиеся Калуги целиком; дальше — пометка «занижены».
-MAX_PAGES = 15
+# размазаны по страницам: при 8 страницах 40:10 терял единственную продажу, при 15 —
+# состоявшиеся (145 по тексту) собраны целиком, а не состоявшиеся (255) обрезаны (Клавдий,
+# прод 01.11). 30 страниц = 300 лотов на статус; что обрезано — названо в пометке.
+MAX_PAGES = 30
 MAX_CARDS = 12  # карточек состоявшихся лотов (итоговая цена только в карточке)
 # torgi.gov.ru режет частые запросы: после 3 подряд — 503, с паузой 6 с проходят все
 # (Клавдий, прод 01.11). Пауза общая на процесс, повтор на 503 с нарастающей выдержкой.
@@ -274,6 +275,7 @@ def empty_result(cad_num: str, error: str | None = None) -> dict[str, Any]:
         "rent": _stats([]),
         "items": [],
         "complete": True,
+        "truncated": [],
         "sample_note": None,
         "search_url": SEARCH_URL,
         "source": SOURCE,
@@ -330,6 +332,15 @@ def nearby_auctions(
         result["failed_total"] = len(failed)
         result["active_total"] = len(active)
         result["complete"] = done1 and done2 and done3
+        result["truncated"] = [
+            name
+            for name, done in (
+                ("состоявшиеся", done1),
+                ("не состоявшиеся", done2),
+                ("идущие", done3),
+            )
+            if not done
+        ]
         items: list[dict[str, Any]] = []
         for hit in succeed[:MAX_CARDS]:  # поиск уже отсортирован: новые первыми
             try:
@@ -363,7 +374,8 @@ def nearby_auctions(
         )
     if not result["complete"]:
         notes.append(
-            f"просмотрено по {MAX_PAGES * PAGE_SIZE} лотов на статус — счётчики по району занижены"
+            f"{', '.join(result['truncated'])}: просмотрено {MAX_PAGES * PAGE_SIZE} последних "
+            "лотов поиска — счётчик по району занижен"
         )
     result["sample_note"] = "; ".join(notes) or None
     result["requests"] = api.requests

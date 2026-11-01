@@ -119,6 +119,7 @@ def test_nearby_auctions_stats_and_district_filter():
         6,
     )
     assert a["liquidity"] == 0.6 and a["complete"] is True and a["requests"] == 6
+    assert a["truncated"] == []
     assert a["retries"] == 0
     # карточки тянем только для лотов своего района: 3 из 4
     cards = [s for s in seen if "/lotcards/" in s["path"] and not s["path"].endswith("search")]
@@ -157,7 +158,11 @@ def test_nearby_auctions_marks_truncated_pages():
     client = httpx.Client(transport=httpx.MockTransport(handler))
     a = torgi.nearby_auctions("40:13:120101:22", client=client, now=NOW, interval=0)
     assert a["complete"] is False and a["succeed_total"] == torgi.MAX_PAGES
-    assert "счётчики по району занижены" in a["sample_note"]
+    assert a["truncated"] == ["состоявшиеся", "не состоявшиеся", "идущие"]
+    assert (
+        "идущие: просмотрено 300 последних лотов поиска — счётчик по району занижен"
+        in (a["sample_note"])
+    )
     assert a["requests"] == torgi.MAX_PAGES * 3 + min(torgi.MAX_PAGES, torgi.MAX_CARDS)
 
 
