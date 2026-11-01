@@ -95,10 +95,12 @@ def test_doc_watch_baseline_then_notifies_on_new_mention(client, monkeypatch):  
 
     def fad(parcel, locality, refresh=False):
         calls.append("admin")
+        assert refresh is True  # перечитка минует кэш
         return {"municipality": "тест"}
 
     def fev(parcel, admin_docs, locality, refresh=False):
         calls.append("evidence")
+        assert refresh is True
         return current[0]
 
     current = [_evidence(False)]

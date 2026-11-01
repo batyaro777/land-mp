@@ -300,8 +300,10 @@ def run_doc_watches(
             continue
         try:
             locality = resolve_locality(parcel.get("address"), parcel.get("geometry"))
-            admin_docs = fetch_admin_docs(parcel, locality)
-            ev = fetch_evidence(parcel, admin_docs, locality)
+            # перечитка — всегда заново, минуя недельный кэш автопоиска и текстов документов
+            # (прод 01.11: без refresh обход брал документы из кэша за 27 мс и ничего не узнавал)
+            admin_docs = fetch_admin_docs(parcel, locality, refresh=True)
+            ev = fetch_evidence(parcel, admin_docs, locality, refresh=True)
         except Exception as exc:  # noqa: BLE001 — один участок не должен ронять обход
             log.warning("doc watch %s failed: %s", cad_num, exc)
             result["errors"].append(f"{cad_num}: {type(exc).__name__}")
