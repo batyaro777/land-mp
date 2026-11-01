@@ -212,6 +212,7 @@ def test_combined_goal_rules_and_summary():
     assert goal["combined"] and goal["use"] == "izhs" and goal["question"] == "Как получить"
     assert [r["rule_id"] for r in goal["rows"]] == ["R21", "R04", "R05", "R11"]
     assert goal["level"] == "стоп" and "под «построить жилой дом" in goal["activity"]
+    assert goal["text"].startswith("Путь открыт, но под это использование")  # стоп — по земле
     # у муниципалитета под КФХ — та же сельхозка подходит
     _, flags = run_use(payload, Purpose.MUNICIPAL, Purpose.FARMING)
     assert "R04" not in flags and "R05" not in flags and flags["R21"].level is Level.CHECK
@@ -240,6 +241,8 @@ def test_combined_goal_web_form(client):  # noqa: F811
     report = client.get(r.headers["location"] + "/items/50:09:0060202:101").text
     assert "Как получить: купить или арендовать на торгах" in report
     assert "Вид разрешённого использования" in report and "Форма собственности и путь" in report
+    page = client.get(r.headers["location"]).text  # страница подборки: цель вместе с использованием
+    assert "под «построить жилой дом для постоянного проживания»" in page
     # «use» без цели профессионала игнорируется
     r = client.post(
         "/checks", data={"numbers": "50:09:0060202:101", "purpose": "izhs", "use": "snt"}

@@ -3,7 +3,7 @@
 {% block content %}
 <hgroup>
   <h2>{{ check.title }}</h2>
-  <p>Цель: {{ purpose.activity if purpose.value != 'any' else 'только проверка данных' }}
+  <p>Цель: {{ purpose.activity if purpose.value != 'any' else 'только проверка данных' }}{% if use is defined and use and use.value != 'any' %} — под «{{ use.activity|lcfirst }}»{% endif %}
   {% if check.request.budget_rub %} · бюджет до {{ check.request.budget_rub|money }}{% endif %}
   {% if check.request.min_area_m2 or check.request.max_area_m2 %} · площадь {{ check.request.min_area_m2|sotka if check.request.min_area_m2 else '' }}{% if check.request.max_area_m2 %} – {{ check.request.max_area_m2|sotka }}{% endif %}{% endif %}
   · {{ check.created_at|dt }}</p>

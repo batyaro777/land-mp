@@ -582,6 +582,7 @@ def check_page(
             verdict=verdict,
             sort=sort,
             purpose=purpose,
+            use=use,
             goals=goals,
             prices=prices,
             counts=(check.stats or {}).get("counts") or {},

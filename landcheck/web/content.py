@@ -341,8 +341,23 @@ def goal_summary(
             }
         )
     activity = purpose.activity
+    text = (_PRO_OVERALL_TEXT if pro else _OVERALL_TEXT)[worst]
     if combined:
         activity = f"{purpose.activity} — под «{use.activity[0].lower() + use.activity[1:]}»"
+        path = next((Level(r["level"]) for r in rows if r["rule_id"] == "R21"), Level.OK)
+        land = max(
+            (Level(r["level"]) for r in rows if r["rule_id"] != "R21"), key=lambda lv: lv.rank
+        )
+        if path is Level.STOP:
+            text = _PRO_OVERALL_TEXT[Level.STOP]
+        elif land is Level.STOP:
+            text = "Путь открыт, но под это использование участок не годится без смены назначения"
+        elif worst is Level.CHECK:
+            text = (
+                "Есть что уточнить до заявки или торгов: путь — по выписке, использование — по ПЗЗ"
+            )
+        else:
+            text = "Путь понятен, использование допустимо: категория, ВРИ и зона не мешают"
     return {
         "activity": activity,
         "use": use.value if combined else None,
@@ -350,7 +365,7 @@ def goal_summary(
         "professional": pro,
         "combined": combined,
         "level": worst.value,
-        "text": (_PRO_OVERALL_TEXT if pro else _OVERALL_TEXT)[worst],
+        "text": text,
         "rows": rows,
         "short": " · ".join(f"{r['title'].split()[0].lower()}: {r['level']}" for r in rows),
     }
