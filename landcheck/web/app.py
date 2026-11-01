@@ -90,6 +90,9 @@ templates.env.filters["sotka"] = fmt_sotka
 templates.env.filters["dt"] = fmt_date
 templates.env.filters["day"] = fmt_day
 templates.env.filters["ucfirst"] = lambda s: (s[:1].upper() + s[1:]) if s else s
+from landcheck.lawlinks import law_links  # noqa: E402
+
+templates.env.filters["lawlinks"] = law_links
 templates.env.filters["lcfirst"] = lambda s: (s[:1].lower() + s[1:]) if s else s
 
 
@@ -751,7 +754,36 @@ def report_admin_docs(
             "_admin_docs.html",
             admin_docs=docs,
             admin_docs_url=f"/checks/{check.id}/items/{cad_num}/admin-docs",
+            evidence=data.get("evidence"),
+            evidence_url=f"/checks/{check.id}/items/{cad_num}/evidence",
             plans=(data["location"].get("plans") or []) if data.get("location") else None,
+            user=user,
+        )
+
+
+@router.get("/checks/{check_id}/items/{cad_num}/evidence", response_class=HTMLResponse)
+def report_evidence(request: Request, user: UserDep, check_id: int, cad_num: str, refresh: int = 0):
+    """Первоисточники до страницы (ТЗ v3, п. 2.5, этап 2): документы администрации скачиваются
+    в фоне, блок опрашивает, пока идёт проверка; упоминание участка/квартала → флаг R25."""
+    with session() as db:
+        check = _own_check(db, user, check_id)
+        item = db.scalar(
+            select(CheckItem).where(CheckItem.check_id == check.id, CheckItem.cad_num == cad_num)
+        )
+        if item is None:
+            raise HTTPException(404)
+        data = dict(item.data)
+        ev = data.get("evidence")
+        stale = bool(ev and ev.get("pending") and jobs.evidence_stale(ev))
+        if ev is None or refresh or stale:
+            ev = jobs.evidence_pending(cad_num)
+            _merge_item_data(db, item, evidence=ev)
+            jobs.start_evidence(item.id, cad_num, refresh=bool(refresh))
+        return render(
+            request,
+            "_evidence.html",
+            evidence=ev,
+            evidence_url=f"/checks/{check.id}/items/{cad_num}/evidence",
             user=user,
         )
 
@@ -907,6 +939,8 @@ def _report_ctx(check: Check, item: CheckItem, public: bool) -> dict[str, Any]:
         "ads_url": f"/checks/{check.id}/items/{item.cad_num}/ads",
         "admin_docs": data.get("admin_docs"),
         "admin_docs_url": f"/checks/{check.id}/items/{item.cad_num}/admin-docs",
+        "evidence": data.get("evidence"),
+        "evidence_url": f"/checks/{check.id}/items/{item.cad_num}/evidence",
         "logo_url": logo_url(check.user_id),
         **_loc_extras(loc, region),
         "public": public,

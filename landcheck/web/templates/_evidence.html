@@ -1,0 +1,34 @@
+{# Первоисточники до страницы (ТЗ v3, п. 2.5, этап 2): упоминания участка в документах администрации #}
+{% set ev = evidence %}
+<div id="evidence-slot"{% if ev.pending %} hx-get="{{ evidence_url }}" hx-trigger="every 20s" hx-swap="outerHTML"{% endif %}>
+  <p class="small" style="margin-top:.6rem"><strong>Упоминания участка в документах администрации</strong>
+  {% if ev.pending %}<span class="muted">— скачиваю документы и ищу номер участка, квартал и населённый пункт…</span></p>
+  <p class="muted small" aria-busy="true">Обычно 1–3 минуты: проверяются ссылки реестра и найденные страницы (PDF до 25 МБ). Блок обновится сам.</p>
+  {% elif ev.error %}<span class="muted">— {{ ev.error }}</span></p>
+  <p class="muted small"><a href="{{ evidence_url }}?refresh=1" hx-get="{{ evidence_url }}?refresh=1" hx-target="#evidence-slot" hx-swap="outerHTML">Повторить</a>.</p>
+  {% else %}
+  {% set with_hits = ev.docs|selectattr('mentions')|list %}
+  <span class="muted">— проверено документов: {{ ev.checked }}, прочитано: {{ ev.fetched_ok }}, упоминаний: {{ ev.hits }}</span></p>
+  {% if with_hits %}
+  <ul class="small">
+    {% for d in with_hits %}
+    <li>{% if d.strong %}<span class="badge mini v-check">проверить</span> {% endif %}<a href="{{ d.final_url }}" target="_blank" rel="noopener">{{ d.title|truncate(110) }}</a> <span class="muted">({{ d.kind }}{% if d.is_pdf %}, PDF, {{ d.pages }} стр.{% endif %})</span>
+      <ul>
+      {% for m in d.mentions %}
+      <li><a href="{{ m.url }}" target="_blank" rel="noopener">{% if m.page %}стр. {{ m.page }}{% else %}страница{% endif %}</a> · {{ m.term_label }} «{{ m.term }}»: <q class="small">{{ m.quote|truncate(260) }}</q></li>
+      {% endfor %}
+      </ul></li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted small">В прочитанных документах{% if ev.terms %} ни {% for t in ev.terms %}{{ t.term_label if t.term_label is defined else t.label }} «{{ t.value }}»{% if not loop.last %}, ни {% endif %}{% endfor %}{% endif %} не упомянуты. Это не доказывает отсутствие проекта: страницы разделов часто ведут на вложенные файлы, которые надо открыть руками.</p>
+  {% endif %}
+  {% set failed = ev.docs|rejectattr('mentions')|list %}
+  {% if failed %}
+  <details><summary class="small muted">Проверенные документы без упоминаний или без текста ({{ failed|length }})</summary>
+    <ul class="small muted">{% for d in failed %}<li><a href="{{ d.final_url }}" target="_blank" rel="noopener">{{ d.title|truncate(100) }}</a> — {% if d.error %}{{ d.error }}{% else %}{{ d.kind }}{% if d.is_pdf %}, PDF, {{ d.pages }} стр.{% else %}, страница прочитана{% endif %}{% endif %}</li>{% endfor %}</ul>
+  </details>
+  {% endif %}
+  <p class="muted small">{{ ev.note }} Проверено {{ ev.checked_at[:16]|replace('T', ' ') }} UTC · <a href="{{ evidence_url }}?refresh=1" hx-get="{{ evidence_url }}?refresh=1" hx-target="#evidence-slot" hx-swap="outerHTML">перечитать документы</a>.</p>
+  {% endif %}
+</div>

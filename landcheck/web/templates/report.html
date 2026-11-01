@@ -85,7 +85,7 @@
     {% for r in goal.rows %}
     <tr>
       <th>{{ r.title }}<br><span class="muted small">{{ r.value|truncate(90) }}</span></th>
-      <td><span class="badge mini v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[r.level] }}">{{ r.level }}</span> {{ r.text }}{% if r.rule_id == 'R11' and pzz_url and not p.territorial_zones %} — <a href="{{ pzz_url }}" target="_blank" rel="noopener">найти карту ПЗЗ муниципалитета</a>{% endif %}{% if r.source %}<div class="muted small">Источник: {{ r.source }}</div>{% endif %}</td>
+      <td><span class="badge mini v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[r.level] }}">{{ r.level }}</span> {{ r.text }}{% if r.rule_id == 'R11' and pzz_url and not p.territorial_zones %} — <a href="{{ pzz_url }}" target="_blank" rel="noopener">найти карту ПЗЗ муниципалитета</a>{% endif %}{% if r.source %}<div class="muted small">Источник: {{ r.source|lawlinks }}</div>{% endif %}</td>
     </tr>
     {% endfor %}
   </table>
@@ -140,7 +140,7 @@
 {% else %}
 <p class="err">Участок с таким номером в НСПД не найден.</p>
 {% endif %}
-{% for f in d.flags %}<p>{{ f.message }} <span class="muted small">— {{ f.source }}</span></p>{% endfor %}</article>
+{% for f in d.flags %}<p>{{ f.message }} <span class="muted small">— {{ f.source|lawlinks }}</span></p>{% endfor %}</article>
 {% else %}
 
 <div class="grid two">
@@ -179,12 +179,12 @@
   <h4>Риск-флаги</h4>
   {% for level, cls in [('стоп','stop'),('проверить','check')] %}
     {% for f in by_level[level] %}
-    <div class="flag {{ cls }}"><span class="badge v-{{ cls }}">{{ level }}</span> {{ f.message }}<div class="muted small">Источник: {{ f.source }}</div></div>
+    <div class="flag {{ cls }}"><span class="badge v-{{ cls }}">{{ level }}</span> {{ f.message }}<div class="muted small">Источник: {{ f.source|lawlinks }}</div></div>
     {% endfor %}
   {% endfor %}
   {% if by_level['ок'] %}
   <details><summary class="small">Справочно ({{ by_level['ок']|length }})</summary>
-    {% for f in by_level['ок'] %}<div class="flag ok">{{ f.message }}<div class="muted small">Источник: {{ f.source }}</div></div>{% endfor %}
+    {% for f in by_level['ок'] %}<div class="flag ok">{{ f.message }}<div class="muted small">Источник: {{ f.source|lawlinks }}</div></div>{% endfor %}
   </details>
   {% endif %}
   {% if not d.flags %}<p class="muted">Замечаний нет.</p>{% endif %}

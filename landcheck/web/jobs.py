@@ -470,6 +470,108 @@ def fetch_admin_docs(
     return admin_docs.summary(parcel, locality, discovered=found)
 
 
+# --- первоисточники до страницы (ТЗ v3, п. 2.5, этап 2) -----------------------------------------
+def fetch_evidence(
+    parcel: dict[str, Any],
+    admin_docs: dict[str, Any] | None,
+    locality: str | None,
+    *,
+    refresh: bool = False,
+) -> dict[str, Any]:
+    """Скачать документы администрации (кэш текста по адресу на неделю) и найти упоминания."""
+    from landcheck import evidence
+
+    cache = ParcelCache(settings.cache_path, ttl_days=settings.admin_docs_ttl_days)
+
+    def fetch(url: str) -> dict[str, Any]:
+        key = evidence.doc_key(url)
+        if not refresh:
+            cached = cache.get_region(key)
+            if cached is not None:
+                return cached
+        doc = evidence.fetch_document(url)
+        if doc.get("pages") or not doc.get("error"):
+            cache.put_region(key, doc)
+        return doc
+
+    try:
+        return evidence.collect(parcel, admin_docs, locality, fetch=fetch)
+    finally:
+        cache.close()
+
+
+_evidence_running: set[int] = set()
+EVIDENCE_STALE_MIN = 20
+
+
+def start_evidence(item_id: int, cad_num: str, *, refresh: bool = False) -> bool:
+    with _lock:
+        if item_id in _evidence_running:
+            return False
+        _evidence_running.add(item_id)
+    executor().submit(_evidence_job, item_id, cad_num, refresh)
+    return True
+
+
+def _evidence_job(item_id: int, cad_num: str, refresh: bool) -> None:
+    from landcheck import evidence, rights
+    from landcheck.region import resolve_locality
+
+    try:
+        with session() as db:
+            item = db.get(CheckItem, item_id)
+            data = dict(item.data or {}) if item is not None else {}
+        parcel = data.get("parcel") or {}
+        locality = resolve_locality(parcel.get("address"), parcel.get("geometry"))
+        admin_docs = data.get("admin_docs")
+        if admin_docs is None:
+            admin_docs = fetch_admin_docs(parcel, locality, refresh=refresh)
+        result = fetch_evidence(parcel, admin_docs, locality, refresh=refresh)
+    except Exception as exc:  # noqa: BLE001 — фон не должен падать молча
+        log.warning("evidence %s: %s", cad_num, exc)
+        result = {
+            "docs": [],
+            "hits": 0,
+            "strong": 0,
+            "checked": 0,
+            "fetched_ok": 0,
+            "terms": [],
+            "error": f"сбой проверки документов: {type(exc).__name__}",
+            "checked_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        }
+        admin_docs = None
+    try:
+        with session() as db:
+            item = db.get(CheckItem, item_id)
+            if item is not None:
+                data = {**(item.data or {}), "evidence": result}
+                if admin_docs is not None and data.get("admin_docs") is None:
+                    data["admin_docs"] = admin_docs
+                flags = [f for f in data.get("flags") or [] if f.get("rule_id") != "R25"]
+                flag = evidence.r25_flag(result)
+                if flag:
+                    flags.append(flag)
+                data["flags"] = flags
+                data["verdict"] = rights.verdict_of(flags)
+                item.data = data
+                db.commit()
+    finally:
+        with _lock:
+            _evidence_running.discard(item_id)
+
+
+def evidence_pending(cad_num: str) -> dict[str, Any]:
+    return {"pending": True, "started_at": datetime.now(UTC).isoformat(timespec="seconds")}
+
+
+def evidence_stale(ev: dict[str, Any]) -> bool:
+    try:
+        started = datetime.fromisoformat(ev.get("started_at") or "")
+    except ValueError:
+        return True
+    return (datetime.now(UTC) - started).total_seconds() > EVIDENCE_STALE_MIN * 60
+
+
 _auctions_running: set[int] = set()
 AUCTIONS_STALE_MIN = 15  # «собираем» старше этого — считаем задачу потерянной и запускаем снова
 
