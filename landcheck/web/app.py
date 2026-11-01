@@ -2824,7 +2824,15 @@ AdminDep = Annotated[User, Depends(require_admin)]
 
 # --- слежение за участками (R9) -----------------------------------------------------------
 @router.get("/watch", response_class=HTMLResponse)
-def watch_page(request: Request, user: UserDep, ran: int = 0, checked: int = 0, changed: int = 0):
+def watch_page(
+    request: Request,
+    user: UserDep,
+    ran: int = 0,
+    checked: int = 0,
+    changed: int = 0,
+    docs: int = 0,
+    docs_new: int = 0,
+):
     from landcheck.web.watch import latest_item, watches_of
 
     with session() as db:
@@ -2847,18 +2855,26 @@ def watch_page(request: Request, user: UserDep, ran: int = 0, checked: int = 0, 
         ran=ran,
         checked=checked,
         changed=changed,
+        docs=docs,
+        docs_new=docs_new,
         hours=settings.watch_hours,
+        docs_hours=settings.watch_docs_hours,
     )
 
 
 @router.post("/watch/run")
 def watch_run(admin: AdminDep):
     """Перепроверить все участки под слежением сейчас (админ, для QA)."""
-    from landcheck.web.watch import run_watches
+    from landcheck.web.watch import run_doc_watches, run_watches
 
     res = run_watches(max_age_h=0)
+    docs = (
+        run_doc_watches(max_age_h=0) if settings.watch_docs_hours > 0 else {"checked": 0, "new": 0}
+    )
     return RedirectResponse(
-        f"/watch?ran=1&checked={res['checked']}&changed={res['changed']}", status_code=303
+        f"/watch?ran=1&checked={res['checked']}&changed={res['changed']}"
+        f"&docs={docs['checked']}&docs_new={docs['new']}",
+        status_code=303,
     )
 
 

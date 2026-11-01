@@ -2,14 +2,14 @@
 {% block title %}Слежение за участками{% endblock %}
 {% block content %}
 <h2>Слежение за участками</h2>
-<p class="muted small">Раз в {{ hours|int }} ч участки перепроверяются в НСПД. Изменения статуса, границ, категории, ВРИ, площади, кадастровой стоимости, собственности, ЗОУИТ и терзоны приходят уведомлением (сайт, Telegram, почта). Включить слежение — кнопка «Следить за изменениями» в отчёте участка.</p>
-{% if ran %}<p class="small">Проверено: {{ checked }}, с изменениями: {{ changed }}.</p>{% endif %}
+<p class="muted small">Раз в {{ hours|int }} ч участки перепроверяются в НСПД. Изменения статуса, границ, категории, ВРИ, площади, кадастровой стоимости, собственности, ЗОУИТ и терзоны приходят уведомлением (сайт, Telegram, почта). Включить слежение — кнопка «Следить за изменениями» в отчёте участка.{% if docs_hours and docs_hours > 0 %} Раз в {{ (docs_hours / 24)|int }} дн. перечитываются документы администрации по территории участка (проекты межевания, постановления, извещения): новое упоминание участка или квартала — уведомление со ссылкой на страницу документа.{% endif %}</p>
+{% if ran %}<p class="small">Проверено: {{ checked }}, с изменениями: {{ changed }}{% if docs_hours and docs_hours > 0 %}; документов администрации перечитано: {{ docs }}, новых упоминаний: {{ docs_new }}{% endif %}.</p>{% endif %}
 {% if user.is_admin %}<form method="post" action="/watch/run" class="no-print"><button class="outline sm">Перепроверить все сейчас</button></form>{% endif %}
 {% if not rows %}
 <p class="muted">Пока ни одного участка под слежением.</p>
 {% else %}
 <table>
-  <thead><tr><th>Участок</th><th>С какого времени</th><th>Проверен</th><th>Изменения</th><th></th></tr></thead>
+  <thead><tr><th>Участок</th><th>С какого времени</th><th>Проверен</th><th>Изменения</th><th>Документы администрации</th><th></th></tr></thead>
   <tbody>
   {% for r in rows %}
   <tr id="{{ r.w.cad_num }}">
@@ -17,6 +17,7 @@
     <td class="small">{{ r.w.created_at|dt }}</td>
     <td class="small">{{ r.w.checked_at|dt if r.w.checked_at else '—' }}</td>
     <td class="small">{% if r.w.last_diff %}<strong>{{ r.w.changed_at|dt }}</strong><ul class="small">{% for c in r.w.last_diff %}<li>{{ c.field }}: {{ c.old }} → {{ c.new }}</li>{% endfor %}</ul>{% else %}<span class="muted">нет</span>{% endif %}</td>
+    <td class="small">{% set d = r.w.docs %}{% if d %}проверено {{ r.w.docs_checked_at|dt if r.w.docs_checked_at else '' }}: документов {{ d.checked }}, упоминаний участка/квартала {{ d.strong|length }}{% if d.new %}<ul class="small">{% for n in d.new %}<li><span class="badge mini v-check">новое</span> <a href="{{ n.url }}" target="_blank" rel="noopener">{{ n.title|truncate(80) }}</a>{% if n.where %} ({{ n.where }}){% endif %}{% if n.quote %}: <q>{{ n.quote|truncate(160) }}</q>{% endif %}</li>{% endfor %}</ul>{% endif %}{% else %}<span class="muted">ещё не читались</span>{% endif %}</td>
     <td><form method="post" action="/watch/{{ r.w.cad_num }}"><input type="hidden" name="back" value="/watch"><button class="outline sm secondary">Перестать следить</button></form></td>
   </tr>
   {% endfor %}

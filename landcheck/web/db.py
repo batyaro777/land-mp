@@ -277,6 +277,9 @@ class Watch(Base):
     checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_diff: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    # Документы администрации по участку (ТЗ v3, п. 2.5, этап 3): снимок упоминаний и новые
+    docs: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    docs_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Favorite(Base):
@@ -325,6 +328,7 @@ _NEW_COLUMNS: dict[str, dict[str, str]] = {
         "api_key": "VARCHAR(64)",
     },
     "invites": {"role": "VARCHAR(16)"},
+    "watches": {"docs": "JSON", "docs_checked_at": "DATETIME"},
     "listings": {
         "status": "VARCHAR(16) NOT NULL DEFAULT 'draft'",
         "published": "BOOLEAN NOT NULL DEFAULT 0",

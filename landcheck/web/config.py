@@ -50,6 +50,11 @@ class Settings:
     watch_hours: float = field(
         default_factory=lambda: float(os.environ.get("LANDCHECK_WATCH_HOURS", "24"))
     )
+    # Слежение за документами администрации по участку (ТЗ v3, п. 2.5, этап 3): период
+    # перечитки в часах (по умолчанию неделя), 0 — выключено
+    watch_docs_hours: float = field(
+        default_factory=lambda: float(os.environ.get("LANDCHECK_WATCH_DOCS_HOURS", "168"))
+    )
     debug: bool = field(default_factory=lambda: os.environ.get("LANDCHECK_DEBUG", "") == "1")
     # RU-шлюз (ТЗ v3, п. 9): SOCKS5 на российский сервер для torgi.gov.ru и набор
     # сертификатов с корнем Минцифры. Пусто — слой торгов честно пишет «не настроен».

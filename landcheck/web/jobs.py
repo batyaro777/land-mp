@@ -108,12 +108,17 @@ def _history_for(db, check: Check, cad_num: str, verdict: str, had_history: bool
 
 
 def run_watches_safe() -> None:
-    from landcheck.web.watch import run_watches
+    from landcheck.web.watch import run_doc_watches, run_watches
 
     try:
         run_watches(max_age_h=settings.watch_hours)
     except Exception:  # noqa: BLE001 — фоновый обход не должен падать
         log.exception("watch run failed")
+    if settings.watch_docs_hours > 0:
+        try:
+            run_doc_watches(max_age_h=settings.watch_docs_hours)
+        except Exception:  # noqa: BLE001
+            log.exception("doc watch run failed")
 
 
 def start_watch_loop(*, first_delay_s: float = 300.0) -> threading.Thread | None:

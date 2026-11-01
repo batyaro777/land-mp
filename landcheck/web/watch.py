@@ -1,6 +1,10 @@
 """Мониторинг участка (R9): снимок ключевых полей ЕГРН/ЗОУИТ по сохранённому номеру и
 уведомление при изменениях (статус, границы, категория/ВРИ, площадь, стоимость, зоны).
-Перепроверка — раз в `settings.watch_hours` через живой НСПД, один запрос на номер."""
+Перепроверка — раз в `settings.watch_hours` через живой НСПД, один запрос на номер.
+
+Этап 3 п. 2.5 ТЗ v3: раз в `settings.watch_docs_hours` перечитываются документы администрации
+по участку («первоисточники»); новое упоминание участка или квартала в проекте межевания,
+постановлении, извещении — уведомление со ссылкой на страницу документа."""
 
 from __future__ import annotations
 
@@ -10,6 +14,7 @@ from typing import Any
 
 from sqlalchemy import select
 
+from landcheck import evidence
 from landcheck.models import Listing, Request
 from landcheck.pipeline import check_batch
 from landcheck.web.db import Check, CheckItem, Watch, session
@@ -201,4 +206,128 @@ def run_watches(
         if close:
             close()
     log.info("watch run: %s", result)
+    return result
+
+
+# --- документы администрации по участку (ТЗ v3, п. 2.5, этап 3) ---------------------------------
+def docs_snapshot(ev: dict[str, Any] | None) -> dict[str, Any]:
+    """Снимок «первоисточников»: упоминания участка/квартала в документах администрации
+    по ссылке на страницу — сравнивать между перечитками."""
+    ev = ev or {}
+    strong: dict[str, dict[str, Any]] = {}
+    for d in ev.get("docs") or []:
+        if d.get("kind") not in evidence.STRONG_KINDS:
+            continue
+        for m in d.get("mentions") or []:
+            if m.get("term_kind") not in ("cad", "quarter"):
+                continue
+            key = m.get("url") or d.get("final_url") or d.get("url") or ""
+            if not key or key in strong:
+                continue
+            where = m.get("label") or (f"стр. {m['page']}" if m.get("page") else None)
+            strong[key] = {
+                "title": (d.get("title") or key)[:120],
+                "kind": d.get("kind"),
+                "where": where,
+                "term": m.get("term"),
+                "quote": (m.get("quote") or "")[:300],
+            }
+    return {
+        "strong": strong,
+        "hits": ev.get("hits", 0),
+        "checked": ev.get("checked", 0),
+        "fetched_ok": ev.get("fetched_ok", 0),
+        "checked_at": ev.get("checked_at"),
+    }
+
+
+def docs_diff(old: dict[str, Any] | None, new: dict[str, Any]) -> list[dict[str, Any]]:
+    """Новые упоминания: ссылки на страницы, которых не было в прошлом снимке."""
+    seen = set(((old or {}).get("strong") or {}).keys())
+    return [{"url": k, **v} for k, v in (new.get("strong") or {}).items() if k not in seen]
+
+
+def docs_text(cad_num: str, added: list[dict[str, Any]]) -> str:
+    parts = []
+    for a in added[:3]:
+        where = f" ({a['where']})" if a.get("where") else ""
+        quote = f": «{a['quote'][:160]}»" if a.get("quote") else ""
+        parts.append(f"«{a['title']}»{where}{quote} — {a['url']}")
+    more = f" и ещё {len(added) - 3}" if len(added) > 3 else ""
+    return (
+        f"Участок {cad_num} упомянут в новом документе администрации{more}: "
+        + "; ".join(parts)
+        + ". Откройте первоисточник и прочитайте пункт: проект межевания, извещение или "
+        "постановление может означать распределение, резервирование или изъятие."
+    )
+
+
+def latest_item_any(db, cad_num: str) -> CheckItem | None:
+    return db.scalar(
+        select(CheckItem).where(CheckItem.cad_num == cad_num).order_by(CheckItem.id.desc()).limit(1)
+    )
+
+
+def run_doc_watches(
+    *,
+    max_age_h: float = 168,
+    now: datetime | None = None,
+    fetch_admin_docs=None,
+    fetch_evidence=None,
+) -> dict[str, Any]:
+    """Перечитать документы администрации по участкам под слежением, которые не читались дольше
+    max_age_h; первая перечитка — базовый снимок без уведомлений, дальше — уведомление о каждом
+    новом упоминании участка или квартала."""
+    from landcheck.region import resolve_locality
+    from landcheck.web import jobs
+
+    fetch_admin_docs = fetch_admin_docs or jobs.fetch_admin_docs
+    fetch_evidence = fetch_evidence or jobs.fetch_evidence
+    now = now or datetime.now(UTC)
+    with session() as db:
+        groups: dict[str, list[int]] = {}
+        for w in db.scalars(select(Watch).order_by(Watch.id)):
+            checked = _aware(w.docs_checked_at)
+            if checked is None or now - checked >= timedelta(hours=max_age_h):
+                groups.setdefault(w.cad_num, []).append(w.id)
+    result: dict[str, Any] = {"checked": 0, "new": 0, "errors": []}
+    for cad_num, ids in groups.items():
+        with session() as db:
+            item = latest_item_any(db, cad_num)
+            parcel = dict((item.data or {}).get("parcel") or {}) if item else {}
+        if not parcel:
+            result["errors"].append(f"{cad_num}: нет данных участка")
+            continue
+        try:
+            locality = resolve_locality(parcel.get("address"), parcel.get("geometry"))
+            admin_docs = fetch_admin_docs(parcel, locality)
+            ev = fetch_evidence(parcel, admin_docs, locality)
+        except Exception as exc:  # noqa: BLE001 — один участок не должен ронять обход
+            log.warning("doc watch %s failed: %s", cad_num, exc)
+            result["errors"].append(f"{cad_num}: {type(exc).__name__}")
+            continue
+        new = docs_snapshot(ev)
+        with session() as db:
+            for wid in ids:
+                w = db.get(Watch, wid)
+                if w is None:
+                    continue
+                old = w.docs or {}
+                added = docs_diff(old, new) if old.get("checked_at") else []
+                w.docs = {
+                    **new,
+                    "new": added,
+                    "new_at": now.isoformat() if added else old.get("new_at"),
+                }
+                w.docs_checked_at = now
+                result["checked"] += 1
+                if added:
+                    result["new"] += len(added)
+                    mine = latest_item(db, w.user_id, cad_num)
+                    url = (
+                        f"/checks/{mine.check_id}/items/{cad_num}" if mine else f"/watch#{cad_num}"
+                    )
+                    notify(db, w.user_id, "watch-docs", docs_text(cad_num, added), url=url)
+            db.commit()
+    log.info("doc watch run: %s", result)
     return result
