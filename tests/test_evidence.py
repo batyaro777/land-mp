@@ -586,3 +586,22 @@ def test_docx_and_zip_attachments_are_read(monkeypatch):
     flag = evidence.r25_flag(ev)
     assert flag and "файл Приложение 1.docx" in flag["message"]
     assert evidence.page_links('<a href="/a.docx">Приложение</a><a href="/b.zip">Архив</a>', NPA)
+
+
+def test_hosting_blocked_hosts_are_skipped_with_plain_reason(monkeypatch):
+    import httpx
+
+    calls: list[str] = []
+
+    class NeverClient:
+        def __init__(self, **kw):
+            calls.append("client")
+
+    monkeypatch.setattr(httpx, "Client", NeverClient)
+    doc = evidence.fetch_document("https://kozelskij-r40.gosweb.gosuslugi.ru/dokumenty/")
+    assert calls == [] and doc["error"].startswith("не скачан: сайт закрыт для серверов хостинга")
+    assert evidence.is_unreachable("https://do.gosuslugi.ru/x") and not evidence.is_unreachable(
+        "https://kozelsk-adm.ru/x"
+    )
+    monkeypatch.setenv("LANDCHECK_UNREACHABLE_HOSTS", "")  # отключение списка через окружение
+    assert not evidence.is_unreachable("https://do.gosuslugi.ru/x")

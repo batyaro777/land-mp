@@ -60,6 +60,10 @@ _SIZE_RE = re.compile(
     re.I,
 )
 _CHARSET_RE = re.compile(r"charset\s*=\s*[\"']?([\w-]+)", re.I)
+# Хосты, закрытые для дата-центров (диагностика Клавдия 01.11: с RUVDS и из NL SYN-таймаут, трасса
+# глохнет в сети Ростелекома перед подсетью «Электронного правительства»): не тратим 45 с,
+# честно говорим, что нужен ручной просмотр. Переопределяется LANDCHECK_UNREACHABLE_HOSTS.
+UNREACHABLE_HOSTS = ("gosweb.gosuslugi.ru", "do.gosuslugi.ru", "www.gosuslugi.ru", "gosuslugi.ru")
 DOC_KEY_VERSION = "doc2"  # doc → doc2: до 01.11 HTML читался только как utf-8, кэш был битым
 UA = "Mozilla/5.0 (compatible; land-mp/1.0; +https://land-mp.dnai.engineering)"
 # документы, где упоминание участка — обременение или занятость (для флага R25)
@@ -325,10 +329,29 @@ class _Blocked(Exception):
         self.status = status
 
 
+def unreachable_hosts() -> tuple[str, ...]:
+    import os
+
+    raw = os.environ.get("LANDCHECK_UNREACHABLE_HOSTS")
+    if raw is None:
+        return UNREACHABLE_HOSTS
+    return tuple(h.strip().lower() for h in raw.split(",") if h.strip())
+
+
+def is_unreachable(url: str) -> bool:
+    host = (urlparse(url).hostname or "").lower()
+    return any(host == h or host.endswith("." + h) for h in unreachable_hosts())
+
+
 def _download(url: str) -> tuple[bytes, str, str, int]:
     """(bytes, content_type, final_url, status). Напрямую, при блокировке или сетевом сбое — через
     RU-шлюз. Каждая попытка ограничена по стенным часам: прод 01.11 — соединение через шлюз с
     недоступным сайтом держало поток 145 с, таймауты httpx на рукопожатие SOCKS не действуют."""
+    if is_unreachable(url):
+        raise ConnectionError(
+            "сайт закрыт для серверов хостинга (портал госуслуг не отвечает ни напрямую, ни через "
+            "RU-шлюз) — откройте ссылку вручную"
+        )
     errors: list[str] = []
     attempts = [None] + ([ruproxy.proxy_url()] if ruproxy.enabled() else [])
     for proxy in attempts:
