@@ -622,3 +622,38 @@ def test_hosting_blocked_hosts_are_skipped_with_plain_reason(monkeypatch):
     )
     monkeypatch.setenv("LANDCHECK_UNREACHABLE_HOSTS", "")  # отключение списка через окружение
     assert not evidence.is_unreachable("https://do.gosuslugi.ru/x")
+
+
+def test_hosting_blocked_hosts_use_residential_proxy_when_configured(monkeypatch):
+    import httpx
+
+    calls: list[str | None] = []
+
+    class FakeClient:
+        def __init__(self, *, proxy=None, **kw):
+            calls.append(proxy)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def stream(self, method, url):
+            raise httpx.ConnectTimeout("t", request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    monkeypatch.setattr(evidence.ruproxy, "enabled", lambda: True)
+    monkeypatch.setattr(evidence.ruproxy, "proxy_url", lambda: "socks5h://gw:1080")
+    monkeypatch.setattr(evidence.ruproxy, "verify_context", lambda: True)
+    monkeypatch.setenv("LANDCHECK_RU_RESIDENTIAL_PROXY", "http://u:p@res.example:823")
+    doc = evidence.fetch_document("https://kozelskij-r40.gosweb.gosuslugi.ru/dokumenty/")
+    assert calls == [
+        "http://u:p@res.example:823"
+    ]  # ни напрямую, ни через шлюз — только резидентный
+    assert (
+        doc["error"] == "не скачан: сайт не отвечает (таймаут соединения) через резидентный прокси"
+    )
+    calls.clear()
+    evidence.fetch_document("https://kozelsk-adm.ru/x")  # обычный сайт — прежняя цепочка
+    assert calls == [None, "socks5h://gw:1080"]

@@ -358,19 +358,35 @@ def is_unreachable(url: str) -> bool:
     return any(host == h or host.endswith("." + h) for h in unreachable_hosts())
 
 
+def residential_proxy() -> str | None:
+    """Резидентный/мобильный российский прокси только для сайтов, закрытых для хостингов
+    (gosweb.gosuslugi.ru): `LANDCHECK_RU_RESIDENTIAL_PROXY=http://user:pass@host:port`."""
+    import os
+
+    return os.environ.get("LANDCHECK_RU_RESIDENTIAL_PROXY") or None
+
+
 def _download(url: str) -> tuple[bytes, str, str, int]:
     """(bytes, content_type, final_url, status). Напрямую, при блокировке или сетевом сбое — через
     RU-шлюз. Каждая попытка ограничена по стенным часам: прод 01.11 — соединение через шлюз с
     недоступным сайтом держало поток 145 с, таймауты httpx на рукопожатие SOCKS не действуют."""
-    if is_unreachable(url):
-        raise ConnectionError(
-            "сайт закрыт для серверов хостинга (портал госуслуг не отвечает ни напрямую, ни через "
-            "RU-шлюз) — откройте ссылку вручную"
-        )
     errors: list[str] = []
-    attempts = [None] + ([ruproxy.proxy_url()] if ruproxy.enabled() else [])
+    if is_unreachable(url):
+        residential = residential_proxy()
+        if not residential:
+            raise ConnectionError(
+                "сайт закрыт для серверов хостинга (портал госуслуг не отвечает ни напрямую, ни "
+                "через RU-шлюз) — откройте ссылку вручную"
+            )
+        attempts: list[str | None] = [residential]
+    else:
+        attempts = [None] + ([ruproxy.proxy_url()] if ruproxy.enabled() else [])
     for proxy in attempts:
-        suffix = " через шлюз" if proxy else ""
+        suffix = (
+            " через резидентный прокси"
+            if proxy and proxy == residential_proxy() and is_unreachable(url)
+            else (" через шлюз" if proxy else "")
+        )
         pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="landcheck-download")
         fut = pool.submit(_attempt, url, proxy)
         try:
