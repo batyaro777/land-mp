@@ -3,7 +3,7 @@
 {% block content %}
 {% set inp = calc.inputs %}{% set lim = calc.limits %}
 <h2>Калькулятор входа в торги <span class="badge mini">внутренний режим</span></h2>
-<p class="muted small">{% if parcel %}Участок <code>{{ inp.cad_num }}</code>{% if parcel.address %} — {{ parcel.address }}{% endif %}{% if report_url %} · <a href="{{ report_url }}">к отчёту</a>{% endif %}. {% endif %}Считаем до аукциона, на каком шаге сделка перестаёт укладываться в целевую доходность. Предельная цена покупки по сценарию: P = ((S − E)·(1 − t) − r·E) / (r + 1 − t), где S — цена продажи, E — доп. расходы, t — налог с прибыли, r — целевой ROI (ТЗ v3, п. 13.7). Пример: S = 120 000, E = 0, t = 0, r = 40 % → P = 85 714.</p>
+<p class="muted small">{% if parcel %}Участок <code>{{ inp.cad_num }}</code>{% if parcel.address %} — {{ parcel.address }}{% endif %}{% if report_url %} · <a href="{{ report_url }}">к отчёту</a>{% endif %}. {% endif %}Считаем до аукциона, на каком шаге сделка перестаёт укладываться в целевую доходность. Предельная цена покупки по сценарию: P = ((S − E)·(1 − t) − r·E) / (r + 1 − t), где S — цена продажи, E — доп. расходы, t — налог с прибыли, r — целевой ROI (ТЗ v3, п. 13.7). Пример: S = {{ 120000|money }}, E = 0, t = 0, r = 40 % → P = {{ 85714|money }}.</p>
 {% if raw.lot_url %}<p class="small">Лот: <a href="{{ raw.lot_url }}" target="_blank" rel="noopener">{{ raw.lot_url }}</a>{% if inp.kind == 'аренда' %} — <strong>аренда</strong>: «старт» и шаг — годовая арендная плата; сценарии продажи — ожидаемая цена переуступки права, расходы — платежи до сделки{% endif %}.</p>{% endif %}
 <form method="get" class="grid no-print">
   <input type="hidden" name="cad" value="{{ raw.cad or '' }}">
@@ -24,7 +24,7 @@
     <label>Аренда в месяц, ₽ (если сдавать) <input name="rent" inputmode="decimal" value="{{ raw.rent or '' }}"></label>
   </fieldset>
   <fieldset>
-    <legend>Цена продажи по сценариям{% if raw._from_valuation %} <span class="muted small">(подставлено из нашего ориентира стоимости)</span>{% endif %}</legend>
+    <legend>Цена продажи по сценариям{% if raw._note %} <span class="muted small">(подставлено {{ raw._note }})</span>{% endif %}</legend>
     <label>MIN, ₽ <input name="smin" inputmode="decimal" value="{{ raw.smin or '' }}"></label>
     <label>MEDIUM, ₽ <input name="smid" inputmode="decimal" value="{{ raw.smid or '' }}"></label>
     <label>MAX, ₽ <input name="smax" inputmode="decimal" value="{{ raw.smax or '' }}"></label>

@@ -22,6 +22,11 @@ DEFAULT_ROI = 0.40  # «royal 40 %» Андрея
 DEFAULT_TAX = 0.13  # НДФЛ с прибыли физлица; для ИП/самозанятого подставить своё
 MAX_STEPS = 40
 SCENARIOS = (("min", "MIN"), ("mid", "MEDIUM"), ("max", "MAX"))
+NBSP = "\u202f"  # как fmt_money в веб-слое: 85\u202f714 ₽
+
+
+def rub(v: float) -> str:
+    return f"{v:,.0f} ₽".replace(",", NBSP)
 
 
 def limit_price(sale: float, extra: float, tax: float, roi: float) -> float | None:
@@ -148,23 +153,69 @@ def _verdict(inp: dict[str, Any], limits: dict[str, float | None], last_ok: int 
         return "задайте начальную цену лота"
     if safe < inp["price_start"]:
         return (
-            f"уже начальная цена выше безопасного ориентира {round(safe):,} ₽ — "
-            "при целевом ROI входить не стоит".replace(",", " ")
+            f"уже начальная цена выше безопасного ориентира {rub(safe)} — "
+            "при целевом ROI входить не стоит"
         )
     if last_ok is None:
         return "ни один шаг не укладывается в ориентир"
     return (
-        f"безопасный ориентир {round(safe):,} ₽ — выходить из торгов после шага {last_ok} "
-        f"(цена {round(inp['price_start'] + last_ok * inp['step']):,} ₽)"
-    ).replace(",", " ")
+        f"безопасный ориентир {rub(safe)} — выходить из торгов после шага {last_ok} "
+        f"(цена {rub(inp['price_start'] + last_ok * inp['step'])})"
+    )
 
 
-def defaults_from_valuation(valuation: dict[str, Any] | None) -> dict[str, float]:
-    """Сценарии MIN/MEDIUM/MAX из нашего ориентира стоимости (диапазон за весь участок)."""
-    if not valuation:
-        return {}
-    rng = valuation.get("total_range")
-    if not rng or rng[0] is None or rng[1] is None:
-        return {}
-    lo, hi = float(rng[0]), float(rng[1])
-    return {"smin": round(lo), "smid": round((lo + hi) / 2), "smax": round(hi)}
+def defaults_from_valuation(
+    valuation: dict[str, Any] | None,
+    *,
+    auctions: dict[str, Any] | None = None,
+    area_m2: float | None = None,
+) -> dict[str, Any]:
+    """Сценарии MIN/MEDIUM/MAX по умолчанию — из наших ориентиров, по убыванию надёжности.
+
+    1) рыночный диапазон ориентира стоимости за весь участок (нижняя / середина / верхняя);
+    2) итоги состоявшихся торгов продажи в кадастровом районе за год (25 % / медиана / 75 % ₽/м²
+       × площадь) — самый близкий ориентир для входа в торги;
+    3) единственный рыночный якорь (медиана подборки, объявления) → только MEDIUM;
+    4) кадастровая стоимость → только MIN (государственная оценка, обычно ниже рынка).
+    Ключ ``_note`` — откуда взято, для пометки в форме. Пустой dict — подставить нечего.
+    """
+    v = valuation or {}
+    rng = v.get("total_range")
+    if rng and rng[0] is not None and rng[1] is not None:
+        lo, hi = float(rng[0]), float(rng[1])
+        return {
+            "smin": round(lo),
+            "smid": round((lo + hi) / 2),
+            "smax": round(hi),
+            "_note": "из рыночного диапазона ориентира стоимости отчёта",
+        }
+    sale = (auctions or {}).get("sale") or {}
+    if area_m2 and sale.get("with_price") and sale.get("median_rub_m2"):
+        p25 = sale.get("p25_rub_m2") or sale["median_rub_m2"]
+        p75 = sale.get("p75_rub_m2") or sale["median_rub_m2"]
+        return {
+            "smin": round(p25 * area_m2),
+            "smid": round(sale["median_rub_m2"] * area_m2),
+            "smax": round(p75 * area_m2),
+            "_note": (
+                f"из итогов торгов продажи в районе за год ({sale['with_price']} лот."
+                f", {p25:g} / {sale['median_rub_m2']:g} / {p75:g} ₽/м² × площадь)"
+            ),
+        }
+    area_sotka = v.get("area_sotka")
+    market = v.get("market_anchors") or []
+    if area_sotka and market and market[-1].get("pps"):
+        a = market[-1]
+        return {
+            "smid": round(a["pps"] * area_sotka),
+            "_note": f"MEDIUM — «{a['label']}» × площадь; MIN и MAX задайте сами",
+        }
+    cadastral = v.get("cadastral_anchors") or []
+    if area_sotka and cadastral and cadastral[0].get("pps"):
+        return {
+            "smin": round(cadastral[0]["pps"] * area_sotka),
+            "_note": (
+                "MIN — кадастровая стоимость участка (обычно ниже рынка); MEDIUM и MAX задайте сами"
+            ),
+        }
+    return {}

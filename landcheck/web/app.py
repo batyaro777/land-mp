@@ -1151,9 +1151,14 @@ def report_torgi_calc(request: Request, user: UserDep, check_id: int, cad_num: s
         if not any(raw.get(k) for k in ("smin", "smid", "smax")):
             median = (check.stats or {}).get("median_price_per_sotka")
             valuation = _valuation_for(data, _corridor_for(data), median)
-            for k, v in torgi_calc.defaults_from_valuation(valuation).items():
+            auctions = data.get("auctions") or {}
+            defaults = torgi_calc.defaults_from_valuation(
+                valuation,
+                auctions=None if auctions.get("pending") or auctions.get("error") else auctions,
+                area_m2=parcel.get("area_m2"),
+            )
+            for k, v in defaults.items():
                 raw[k] = str(v)
-            raw["_from_valuation"] = "1" if raw.get("smid") else ""
         report_url = f"/checks/{check.id}/items/{cad_num}"
         return _torgi_calc_page(
             request,

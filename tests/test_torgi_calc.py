@@ -44,7 +44,7 @@ def test_compute_scenarios_safe_benchmark_and_steps():
     assert r["last_safe_step"] == 23 and rows[23]["price"] == 84_000 and rows[23]["within_safe"]
     assert not rows[24]["within_safe"] and rows[24]["status"] == "только MEDIUM, MAX"
     assert rows[24]["scenarios"]["min"]["roi"] == round((120_000 - 86_000) / 86_000, 3)
-    assert "после шага 23" in r["verdict"] and "84 000" in r["verdict"]
+    assert "после шага 23" in r["verdict"] and fmt_money(84_000) in r["verdict"]
 
 
 def test_compute_rent_payback_tax_and_verdicts():
@@ -60,11 +60,32 @@ def test_compute_rent_payback_tax_and_verdicts():
     assert torgi_calc.compute({})["verdict"] == "задайте хотя бы один сценарий цены продажи"
 
 
-def test_defaults_from_valuation():
-    assert torgi_calc.defaults_from_valuation(None) == {}
-    assert torgi_calc.defaults_from_valuation({"total_range": None}) == {}
-    v = torgi_calc.defaults_from_valuation({"total_range": (1_000_000.4, 1_500_000.0)})
-    assert v == {"smin": 1_000_000, "smid": 1_250_000, "smax": 1_500_000}
+def test_defaults_from_valuation_chain():
+    d = torgi_calc.defaults_from_valuation
+    assert d(None) == {}
+    assert d({"total_range": None}) == {}
+    v = d({"total_range": (1_000_000.4, 1_500_000.0)})
+    assert v["smin"] == 1_000_000 and v["smid"] == 1_250_000 and v["smax"] == 1_500_000
+    assert "рыночного диапазона" in v["_note"]
+    # нет рынка → итоги торгов продажи в районе (p25 / медиана / p75 × площадь)
+    au = {
+        "sale": {"with_price": 2, "median_rub_m2": 300.0, "p25_rub_m2": 250.0, "p75_rub_m2": 350.0}
+    }
+    v = d({"total_range": None}, auctions=au, area_m2=1000)
+    assert (v["smin"], v["smid"], v["smax"]) == (250_000, 300_000, 350_000)
+    assert "итогов торгов" in v["_note"] and "250 / 300 / 350" in v["_note"]
+    assert d(None, auctions={"sale": {"with_price": 0}}, area_m2=1000) == {}
+    # единственный рыночный якорь → только MEDIUM
+    val = {
+        "area_sotka": 10.0,
+        "market_anchors": [{"label": "медиана вашей подборки", "pps": 120_000}],
+        "cadastral_anchors": [{"label": "кадастровая стоимость участка", "pps": 30_000}],
+    }
+    v = d(val)
+    assert v == {"smid": 1_200_000, "_note": v["_note"]} and "медиана вашей подборки" in v["_note"]
+    # только кадастр → MIN
+    v = d({"area_sotka": 10.0, "cadastral_anchors": [{"label": "кадастровая", "pps": 30_000}]})
+    assert v["smin"] == 300_000 and "smid" not in v and "кадастровая" in v["_note"]
 
 
 def test_torgi_calc_pages_admin_only(client, fixtures_dir: Path):  # noqa: F811

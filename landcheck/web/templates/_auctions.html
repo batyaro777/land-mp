@@ -27,7 +27,7 @@
         <td class="num">{% if i.price_fin %}{{ i.price_fin|money }}{% else %}—{% endif %}</td>
         <td class="num">{{ i.rub_m2 or '—' }}</td>
         <td class="small">{{ i.date or '—' }}</td>
-        {% if calc_url is defined %}<td class="small no-print"><a href="{{ calc_url }}?start={{ i.price_start|int if i.price_start else '' }}&amp;area={{ i.area_m2|int if i.area_m2 else '' }}&amp;kind={{ i.kind }}&amp;lot_url={{ i.url|urlencode }}" title="Калькулятор входа в торги по этому лоту">расчёт</a></td>{% endif %}</tr>
+        {% if calc_url is defined %}<td class="small no-print"><a href="{{ calc_url }}?start={{ i.price_start|int if i.price_start else '' }}{% if i.area_m2 %}&amp;area={{ i.area_m2|int }}{% endif %}&amp;kind={{ i.kind }}&amp;lot_url={{ i.url|urlencode }}" title="Калькулятор входа в торги по этому лоту">расчёт</a></td>{% endif %}</tr>
       {% endfor %}
     </table>
     {% endif %}
