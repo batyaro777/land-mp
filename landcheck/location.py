@@ -261,12 +261,39 @@ def summarize_plans(
         dist = _feature_distance(f, parcel_geojson)
         if dist is not None and (d["min_distance_m"] is None or dist < d["min_distance_m"]):
             d["min_distance_m"] = dist
+        # Участок внутри образуемого по ПМТ контура — «занят проектом межевания» (Андрей, зум
+        # 28.10, 00:15–00:21): в ЕГРН свободен, а администрация его уже распределила.
+        if _covers(parcel_geojson, f.get("geometry")):
+            d["covers_parcel"] = True
+            cad = opts.get("cad_num") or opts.get("cad_number")
+            if cad:
+                d.setdefault("covering_parcels", []).append(str(cad))
     out = []
     for d in docs.values():
         d["uses"] = sorted(d["uses"].items(), key=lambda kv: -kv[1])
+        d.setdefault("covers_parcel", False)
         out.append(d)
-    out.sort(key=lambda d: (d["min_distance_m"] is None, d["min_distance_m"] or 0))
+    out.sort(
+        key=lambda d: (
+            not d["covers_parcel"],
+            d["min_distance_m"] is None,
+            d["min_distance_m"] or 0,
+        )
+    )
     return out
+
+
+def _covers(parcel_geojson: dict[str, Any] | None, other: dict[str, Any] | None) -> bool:
+    """Контур другого объекта накрывает заметную часть участка (> 10 % площади)."""
+    if not parcel_geojson or not other:
+        return False
+    try:
+        parcel = shape(parcel_geojson)
+        if parcel.is_empty or parcel.area == 0:
+            return False
+        return parcel.intersection(shape(other)).area / parcel.area > 0.1
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _to_float(v: Any) -> float | None:

@@ -439,6 +439,33 @@ def fetch_parcel_lot(cad_num: str, *, refresh: bool = False) -> dict[str, Any]:
     return result
 
 
+def fetch_admin_docs(
+    parcel: dict[str, Any], locality: str | None, *, refresh: bool = False
+) -> dict[str, Any]:
+    """Блок «Документы администрации» (ТЗ v3, п. 2.5): автопоиск по муниципалитету кэшируется
+    на неделю (кэш «regions»), сводка собирается заново — ссылки реестра могут обновиться."""
+    from landcheck import admin_docs
+
+    muni = admin_docs.municipality_for(parcel, locality)
+    if not muni["name"]:
+        return admin_docs.summary(
+            parcel,
+            locality,
+            discovered={"docs": {}, "total": 0, "engine": None, "errors": [], "checked_at": None},
+        )
+    key = f"admin:{muni['name'].lower()}"
+    cache = ParcelCache(settings.cache_path, ttl_days=settings.admin_docs_ttl_days)
+    try:
+        found = None if refresh else cache.get_region(key)
+        if found is None:
+            found = admin_docs.discover(muni["name"], muni["region"])
+            if found.get("total") or not found.get("errors"):
+                cache.put_region(key, found)
+    finally:
+        cache.close()
+    return admin_docs.summary(parcel, locality, discovered=found)
+
+
 _auctions_running: set[int] = set()
 AUCTIONS_STALE_MIN = 15  # «собираем» старше этого — считаем задачу потерянной и запускаем снова
 

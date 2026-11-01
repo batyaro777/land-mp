@@ -206,6 +206,17 @@
 </article>
 {% endif %}
 
+{% if p.found and not public %}
+{% if admin_docs %}
+{% include "_admin_docs.html" %}
+{% else %}
+<div id="admin-docs-slot" hx-get="{{ admin_docs_url }}" hx-trigger="load delay:4s" hx-swap="outerHTML">
+  <article><h4>Документы администрации по территории участка</h4>
+  <p class="muted small" aria-busy="true">Определяю муниципалитет и ищу проекты межевания, ПЗЗ, генплан и постановления на официальных сайтах…</p></article>
+</div>
+{% endif %}
+{% endif %}
+
 {% if p.found and pzz %}
 <article class="pzz">
   <h4>Где смотреть ПЗЗ и что стоит подключение сетей</h4>

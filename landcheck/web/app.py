@@ -724,6 +724,38 @@ def _valuation_for(data, corridor, median_batch):
     return valuation(data, corridor=corridor, ads=data.get("market_ads"), median_batch=median_batch)
 
 
+@router.get("/checks/{check_id}/items/{cad_num}/admin-docs", response_class=HTMLResponse)
+def report_admin_docs(
+    request: Request, user: UserDep, check_id: int, cad_num: str, refresh: int = 0
+):
+    """Блок «Документы администрации по территории участка» (ТЗ v3, п. 2.5; HTMX, всем
+    пользователям): муниципалитет, ссылки реестра, автопоиск официальных документов, чек-лист."""
+    from landcheck.region import resolve_locality
+
+    with session() as db:
+        check = _own_check(db, user, check_id)
+        item = db.scalar(
+            select(CheckItem).where(CheckItem.check_id == check.id, CheckItem.cad_num == cad_num)
+        )
+        if item is None:
+            raise HTTPException(404)
+        data = dict(item.data)
+        parcel = data.get("parcel") or {}
+        docs = data.get("admin_docs")
+        if docs is None or refresh:
+            locality = resolve_locality(parcel.get("address"), parcel.get("geometry"))
+            docs = jobs.fetch_admin_docs(parcel, locality, refresh=bool(refresh))
+            data = _merge_item_data(db, item, admin_docs=docs)
+        return render(
+            request,
+            "_admin_docs.html",
+            admin_docs=docs,
+            admin_docs_url=f"/checks/{check.id}/items/{cad_num}/admin-docs",
+            plans=((data.get("location") or {}).get("plans") or []),
+            user=user,
+        )
+
+
 @router.get("/checks/{check_id}/items/{cad_num}/ads", response_class=HTMLResponse)
 def report_ads(request: Request, user: UserDep, check_id: int, cad_num: str, refresh: int = 0):
     """Блок «Оценка стоимости» с объявлениями в локации (HTMX): поиск, кэш в item.data."""
@@ -873,6 +905,8 @@ def _report_ctx(check: Check, item: CheckItem, public: bool) -> dict[str, Any]:
         "corridor": (corridor := _corridor_for(data)),
         "valuation": _valuation_for(data, corridor, median),
         "ads_url": f"/checks/{check.id}/items/{item.cad_num}/ads",
+        "admin_docs": data.get("admin_docs"),
+        "admin_docs_url": f"/checks/{check.id}/items/{item.cad_num}/admin-docs",
         "logo_url": logo_url(check.user_id),
         **_loc_extras(loc, region),
         "public": public,

@@ -125,7 +125,7 @@
     {% if loc.plans %}
     <ul class="loc-list">
       {% for d in loc.plans %}
-      <li>{{ d.document|truncate(140) }}{% if d.issuer %} <span class="muted small">({{ d.issuer }})</span>{% endif %}
+      <li>{% if d.covers_parcel %}<span class="badge mini v-check">участок входит в проект межевания</span> {% endif %}{{ d.document|truncate(140) }}{% if d.issuer %} <span class="muted small">({{ d.issuer }})</span>{% endif %}{% if d.covers_parcel %}<div class="small">Контур образуемого по проекту участка{% if d.covering_parcels %} ({{ d.covering_parcels|join(', ') }}){% endif %} накрывает этот участок: администрация уже распределила землю (многодетным, ветеранам, под аукцион) — в ЕГРН это не видно. Найти документ и приложения на сайте администрации (блок «Документы администрации»).</div>{% endif %}
         <div class="small">{{ d.parcels }} уч.{% if d.area_m2 %}, {{ (d.area_m2 / 10000)|round(1) }} га{% endif %}{% if d.min_distance_m is not none %}, {% if d.min_distance_m == 0 %}вплотную{% else %}в {{ d.min_distance_m }} м{% endif %}{% endif %}:
           {% for use, n in d.uses %}{{ use|lower|truncate(50) }}{% if n > 1 %} ×{{ n }}{% endif %}{% if not loop.last %}; {% endif %}{% endfor %}</div></li>
       {% endfor %}

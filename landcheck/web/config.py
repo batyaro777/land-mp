@@ -62,6 +62,10 @@ class Settings:
     torgi_ttl_days: float = field(
         default_factory=lambda: float(os.environ.get("LANDCHECK_TORGI_TTL_DAYS", "1"))
     )
+    # Документы администрации (ТЗ v3, п. 2.5): кэш автопоиска по муниципалитету
+    admin_docs_ttl_days: float = field(
+        default_factory=lambda: float(os.environ.get("LANDCHECK_ADMIN_DOCS_TTL_DAYS", "7"))
+    )
     # Модуль «Регион»: Gemini с поиском Google. Без ключа блок честно говорит, что выключен.
     gemini_api_key: str | None = field(
         default_factory=lambda: (
