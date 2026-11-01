@@ -552,6 +552,7 @@ def test_fetch_document_falls_back_to_ocr_for_scans(monkeypatch):
     )
     doc = evidence.fetch_document("https://adm.example.ru/scan.pdf")
     assert doc["is_pdf"] and doc["ocr"] and doc["error"] is None and doc["pages"][0]["n"] == 1
+    assert doc["page_count"] == 1  # всего страниц в документе, не только с текстом
     terms = evidence.terms_for(PARCEL, None)
     found = evidence.find_mentions(doc, terms)
     assert found and found[0]["term_kind"] == "cad" and found[0]["page"] == 1

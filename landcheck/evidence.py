@@ -204,6 +204,21 @@ def _zip_pages(raw: bytes) -> tuple[list[dict[str, Any]], str | None, int]:
 
 def _pdf_pages(raw: bytes) -> tuple[list[dict[str, Any]], str | None]:
     """Страницы с текстом и пометка, если прочитаны не все (лимит страниц или времени)."""
+    pages, partial, _ = pdf_text_pages(raw)
+    return pages, partial
+
+
+def pdf_page_count(raw: bytes) -> int:
+    from pypdf import PdfReader
+
+    try:
+        return len(PdfReader(io.BytesIO(raw)).pages)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def pdf_text_pages(raw: bytes) -> tuple[list[dict[str, Any]], str | None, int]:
+    """Страницы с текстом, пометка о неполном чтении и общее число страниц документа."""
     from pypdf import PdfReader
 
     reader = PdfReader(io.BytesIO(raw))
@@ -225,7 +240,7 @@ def _pdf_pages(raw: bytes) -> tuple[list[dict[str, Any]], str | None]:
     else:
         if total > MAX_PAGES:
             partial = f"прочитаны первые {MAX_PAGES} из {total} страниц"
-    return pages, partial
+    return pages, partial, total
 
 
 def _html_title(html: str) -> str | None:
@@ -393,6 +408,7 @@ def fetch_document(url: str) -> dict[str, Any]:
         "is_pdf": False,
         "format": None,
         "ocr": False,
+        "page_count": None,
         "pages": [],
         "partial": None,
         "error": None,
@@ -412,7 +428,7 @@ def fetch_document(url: str) -> dict[str, Any]:
         out["format"] = fmt
         if fmt == "pdf":
             out["is_pdf"] = True
-            out["pages"], out["partial"] = _pdf_pages(raw)
+            out["pages"], out["partial"], out["page_count"] = pdf_text_pages(raw)
             if not out["pages"] and ocr.available():
                 out["pages"], out["partial"] = ocr.pdf_ocr_pages(raw)
                 out["ocr"] = bool(out["pages"])
@@ -562,6 +578,7 @@ def collect(
             "format": doc.get("format"),
             "ocr": doc.get("ocr", False),
             "pages": len(doc.get("pages") or []),
+            "page_count": doc.get("page_count"),
             "partial": doc.get("partial"),
             "via": cand.get("via"),
             "error": doc.get("error"),
