@@ -260,12 +260,15 @@ ZONE_MATRIX: dict[Purpose, dict[str, tuple[Level, str]]] = {
         "rec": (_STOP, "зона рекреации: производство не допускается"),
     },
     Purpose.ANY: {},
+    Purpose.MUNICIPAL: {},
+    Purpose.AUCTION: {},
+    Purpose.INVEST: {},
 }
 
 
 def zone_verdict(purpose: Purpose, cls: str | None) -> tuple[Level, str] | None:
     """Уровень и пояснение для класса зоны при заданной цели. None — цель без требований."""
-    if purpose is Purpose.ANY:
+    if purpose is Purpose.ANY or purpose.professional:
         return None
     if cls is None:
         return (

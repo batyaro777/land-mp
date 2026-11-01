@@ -657,6 +657,32 @@ def test_auctions_block_admin_only(client, fixtures_dir: Path, monkeypatch):  # 
         return canned
 
     monkeypatch.setattr(jobs, "fetch_auctions", fake_fetch)
+    own_lot = {
+        "cad_num": "50:09:0060202:101",
+        "found": True,
+        "months": 24,
+        "error": None,
+        "lot": {
+            "id": "L_9",
+            "url": "https://torgi.gov.ru/new/public/lots/lot/L_9",
+            "status": "APPLICATIONS_SUBMISSION",
+            "status_ru": "приём заявок",
+            "form": "EA",
+            "notice_3918": False,
+            "kind": "продажа",
+            "price_start": 800_000,
+            "price_step": 24_000,
+            "deposit": 160_000,
+            "price_fin": None,
+            "area_m2": 1000.0,
+            "bidd_end": "2026-11-15",
+            "auction_start": "2026-11-18",
+            "published": "2026-10-20",
+            "vri": "Для ИЖС",
+            "address": "Московская обл.",
+        },
+    }
+    monkeypatch.setattr(jobs, "fetch_parcel_lot", lambda cad, refresh=False: own_lot)
     # фоновая задача — синхронно, чтобы тест не гонялся с потоком
     monkeypatch.setattr(
         jobs,
@@ -684,6 +710,12 @@ def test_auctions_block_admin_only(client, fixtures_dir: Path, monkeypatch):  # 
     from landcheck.web.serialize import fmt_money
 
     assert "50:09:0060202:77" in block and fmt_money(1_200_000) in block and "×1.4" in block
+    assert (
+        "Этот участок на torgi.gov.ru" in block
+        and "лот L_9" in block
+        and "заявки до 2026-11-15" in block
+    )
+    assert "/torgi-calc?start=800000&amp;step=24000&amp;area=1000&amp;kind=продажа" in block
     assert len(calls) == 1
     block = client.get(base + "/location").text  # повторно — из item.data, без новой задачи
     assert "кадастровый район 50:09" in block and len(calls) == 1

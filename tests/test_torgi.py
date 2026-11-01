@@ -248,3 +248,43 @@ def test_ruproxy_client_without_env(monkeypatch, tmp_path):
     with pytest.raises(httpx.ConnectError):
         with ruproxy.client(timeout=1) as c:
             c.get("https://torgi.gov.ru/")
+
+
+def test_parcel_lot_found_and_not_found():
+    seen: list[dict] = []
+    own = _card(
+        "777_1", "40:13:120101:22", start=250_000, fin=None, status="APPLICATIONS_SUBMISSION"
+    )
+    own.update(priceStep=7_500, deposit=50_000, biddEndTime="2026-11-20T10:00:00Z")
+    other = _card("778_1", "40:13:120101:23", status="SUCCEED")
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = urlparse(str(req.url))
+        q = {k: v[0] for k, v in parse_qs(url.query).items()}
+        seen.append({"path": url.path, **q})
+        if url.path.endswith("/lotcards/search"):
+            assert q["text"] == "40:13:120101:22" and "biddForm" not in q
+            assert q["lotStatus"].startswith("PUBLISHED,") and "CANCELED" in q["lotStatus"]
+            # поиск по номеру нечёткий — вернулся и соседний участок, берём только свой
+            return httpx.Response(200, json=_page([other, own], 2))
+        assert url.path.endswith("/lotcards/777_1")
+        return httpx.Response(200, json={**own, "priceStep": 7_500})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    r = torgi.parcel_lot("40:13:120101:22", client=client, now=NOW, interval=0)
+    assert r["found"] and r["error"] is None and r["requests"] == 2
+    lot = r["lot"]
+    assert lot["id"] == "777_1" and lot["status_ru"] == "приём заявок" and lot["kind"] == "продажа"
+    assert (lot["price_start"], lot["price_step"], lot["deposit"]) == (250_000, 7_500, 50_000)
+    assert lot["bidd_end"] == "2026-11-20" and not lot["notice_3918"] and lot["area_m2"] == 1000.0
+    assert lot["url"].endswith("/777_1")
+
+    empty = httpx.Client(
+        transport=httpx.MockTransport(lambda req: httpx.Response(200, json=_page([], 0)))
+    )
+    r = torgi.parcel_lot("40:13:120101:22", client=empty, now=NOW, interval=0)
+    assert not r["found"] and r["lot"] is None and r["error"] is None
+    down = httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(503)))
+    r = torgi.parcel_lot("40:13:120101:22", client=down, now=NOW, interval=0, sleep=lambda s: None)
+    assert not r["found"] and r["error"] and "недоступен" in r["error"]
+    assert torgi.parcel_lot("нет-номера", client=empty)["error"] == "кадастровый номер без региона"

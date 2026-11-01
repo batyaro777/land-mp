@@ -144,7 +144,7 @@ def r04_category(ctx: RuleContext):
 @rule("R05", "ВРИ против цели", "Вид разрешённого использования не соответствует цели")
 def r05_vri(ctx: RuleContext):
     p = ctx.parcel
-    if not p.found or ctx.request.purpose is Purpose.ANY:
+    if not p.found or ctx.request.purpose is Purpose.ANY or ctx.request.purpose.professional:
         return None
     purpose = ctx.request.purpose
     label = purpose.label
@@ -410,7 +410,7 @@ def r11_territorial_zone(ctx: RuleContext):
         "zones": [z.describe() for z, _ in zones],
         "classes": [cls for _, cls in zones],
     }
-    if purpose is Purpose.ANY:
+    if purpose is Purpose.ANY or purpose.professional:
         return Flag("R11", Level.OK, f"территориальная зона по НСПД: {names}", SRC_NSPD_TZ, details)
     # Участок может лежать в нескольких зонах: берём худшую для цели, пояснения — по каждой.
     worst = Level.OK
@@ -460,6 +460,123 @@ def r12_ownership(ctx: RuleContext):
         Level.CHECK,
         f"форма собственности «{p.ownership_type}»: проверить по выписке",
         SRC_NSPD,
+    )
+
+
+SRC_ZK_PROVISION = (
+    "гл. V.1 ЗК РФ: предоставление публичных участков — торги (ст. 39.11–39.12), без торгов "
+    "(ст. 39.3, 39.6), предварительное согласование (ст. 39.15), извещение для ИЖС/ЛПХ/КФХ (ст. 39.18)"
+)
+SRC_ZK_LEASE = (
+    "ст. 22 ЗК РФ: арендатор публичного участка передаёт права по договору третьему лицу "
+    "(договор свыше 5 лет — с уведомлением, до 5 лет — с согласия арендодателя)"
+)
+SRC_NK_217 = (
+    "ст. 217.1 НК РФ: минимальный срок владения 5 лет (3 года — отдельные случаи), "
+    "иначе НДФЛ с дохода"
+)
+_PUBLIC_OWN = ("публичн", "государств", "муниципальн", "не разграничен", "федеральн")
+
+
+@rule("R21", "Путь получения участка", "Как цель профессионала соотносится с формой собственности")
+def r21_acquisition(ctx: RuleContext):
+    """Цели «оформить у муниципалитета», «торги / переуступка», «инвестиция» (ТЗ v3, п. 1.12):
+    форма собственности в НСПД определяет путь. НСПД не показывает действующую аренду —
+    поэтому для публичного участка всегда «проверить» по выписке."""
+    p = ctx.parcel
+    purpose = ctx.request.purpose
+    if not p.found or not purpose.professional:
+        return None
+    o = (p.ownership_type or "").lower()
+    public = any(k in o for k in _PUBLIC_OWN)
+    private = "частн" in o
+    details = {"purpose": purpose.value, "ownership": p.ownership_type}
+    if purpose is Purpose.MUNICIPAL:
+        if private:
+            return Flag(
+                "R21",
+                Level.STOP,
+                "участок в частной собственности: у муниципалитета его не получить — только "
+                "сделка с собственником; для оформления «с нуля» искать неразграниченные земли рядом",
+                SRC_NSPD,
+                details,
+            )
+        if public:
+            return Flag(
+                "R21",
+                Level.CHECK,
+                f"собственность «{p.ownership_type}»: путь — заявление о предварительном "
+                "согласовании (ст. 39.15 ЗК) или без торгов по ст. 39.18 ЗК для ИЖС/ЛПХ/КФХ "
+                "(извещение 30 дней; есть другие заявки — аукцион); сельхозземля в аренду КФХ без "
+                "торгов — ст. 10 п. 8 101-ФЗ. Сначала выписка: участок может быть уже в аренде",
+                SRC_ZK_PROVISION,
+                details,
+            )
+        return Flag(
+            "R21",
+            Level.CHECK,
+            "форма собственности в НСПД не указана: по выписке ЕГРН; если правообладатель — "
+            "публичное образование или права не зарегистрированы, путь — ст. 39.15 / 39.18 ЗК",
+            SRC_NSPD,
+            details,
+        )
+    if purpose is Purpose.AUCTION:
+        if private:
+            return Flag(
+                "R21",
+                Level.CHECK,
+                "участок в частной собственности: на торги попадает только при банкротстве или "
+                "исполнительном производстве (127-ФЗ, 229-ФЗ) — искать на ЕФРСБ и torgi.gov.ru "
+                "в разделе реализации имущества; иначе — прямая сделка с собственником",
+                SRC_NSPD,
+                details,
+            )
+        if public:
+            return Flag(
+                "R21",
+                Level.CHECK,
+                f"собственность «{p.ownership_type}»: продажа или аренда только через аукцион "
+                "(ст. 39.11–39.12 ЗК), извещение на torgi.gov.ru; право аренды с торгов можно "
+                "переуступить: договор свыше 5 лет — уведомив арендодателя, до 5 лет — с его "
+                "согласия (ст. 22 ЗК). По выписке проверить, не сдан ли участок уже",
+                SRC_ZK_LEASE,
+                details,
+            )
+        return Flag(
+            "R21",
+            Level.CHECK,
+            "форма собственности в НСПД не указана: искать извещение по кадастровому номеру на "
+            "torgi.gov.ru и смотреть правообладателя по выписке ЕГРН",
+            SRC_NSPD,
+            details,
+        )
+    # INVEST
+    if public:
+        return Flag(
+            "R21",
+            Level.CHECK,
+            f"собственность «{p.ownership_type}»: сначала оформить право (торги ст. 39.11 или "
+            "ст. 39.18 ЗК), перепродажа — только после регистрации; право аренды переуступается "
+            "(ст. 22 ЗК) — это и есть сделка «вход на торгах → выход переуступкой»",
+            SRC_ZK_PROVISION,
+            details,
+        )
+    if private:
+        return Flag(
+            "R21",
+            Level.OK,
+            "частная собственность: обычная купля-продажа; при перепродаже раньше 5 лет владения — "
+            "НДФЛ 13 % с разницы (ст. 217.1 НК), заложить в расчёт доходности",
+            SRC_NK_217,
+            details,
+        )
+    return Flag(
+        "R21",
+        Level.CHECK,
+        "форма собственности в НСПД не указана: собственника и обременения смотреть по выписке "
+        "ЕГРН до расчёта сделки",
+        SRC_NSPD,
+        details,
     )
 
 

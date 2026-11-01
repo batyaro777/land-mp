@@ -131,20 +131,21 @@ class TorgiClient:
         statuses: str,
         pub_from: str,
         page: int = 0,
-        form: str = "EA",
+        form: str | None = "EA",
     ) -> dict[str, Any]:
         params = {
             "catCode": "2",
             "subjRF": region,
             "text": text,
             "lotStatus": statuses,
-            "biddForm": form,
             "pubFrom": pub_from,
             "byFirstVersion": "true",
             "size": str(PAGE_SIZE),
             "page": str(page),
             "sort": "firstVersionPublicationDate,desc",
         }
+        if form:
+            params["biddForm"] = form
         return self._get(f"{API}/lotcards/search", params)
 
     def lot(self, lot_id: str) -> dict[str, Any]:
@@ -382,6 +383,94 @@ def nearby_auctions(
     result["retries"] = api.retries
     result["liquidity_text"] = liquidity_text(result)
     return result
+
+
+# --- лот самого участка (ТЗ v3, п. 1.12: цели «торги», «инвестиция», «у муниципалитета») -----
+ALL_STATUSES = "PUBLISHED,APPLICATIONS_SUBMISSION,DETERMINING_WINNER,SUCCEED,FAILED,CANCELED"
+STATUS_RU = {
+    "PUBLISHED": "опубликован",
+    "APPLICATIONS_SUBMISSION": "приём заявок",
+    "DETERMINING_WINNER": "определение победителя",
+    "SUCCEED": "состоялся",
+    "FAILED": "не состоялся",
+    "CANCELED": "отменён",
+}
+LOT_MONTHS = 24
+
+
+def _num(v: Any) -> float | None:
+    return float(v) if isinstance(v, int | float) else None
+
+
+def parcel_lot(
+    cad_num: str,
+    *,
+    client: httpx.Client | None = None,
+    now: datetime | None = None,
+    interval: float = REQUEST_INTERVAL_S,
+    sleep=time.sleep,
+) -> dict[str, Any]:
+    """Извещения torgi.gov.ru по самому участку за два года: аукцион (EA) или извещение о
+    предоставлении по ст. 39.18 ЗК (IPS). Два запроса через общий троттлинг; ошибки — в
+    результате, исключений наружу нет."""
+    now = now or datetime.now(UTC)
+    region = region_of(cad_num)
+    out: dict[str, Any] = {
+        "cad_num": cad_num,
+        "found": False,
+        "lot": None,
+        "months": LOT_MONTHS,
+        "as_of": now.isoformat(timespec="seconds"),
+        "search_url": SEARCH_URL,
+        "error": None,
+    }
+    if region is None:
+        out["error"] = "кадастровый номер без региона"
+        return out
+    pub_from = (now - timedelta(days=LOT_MONTHS * 30)).date().isoformat()
+    api = TorgiClient(client, interval=interval, sleep=sleep)
+    try:
+        page = api.search(
+            region=region, text=cad_num, statuses=ALL_STATUSES, pub_from=pub_from, form=None
+        )
+        cards = [c for c in page.get("content") or [] if cad_num_of(c) == cad_num]
+        if not cards:
+            return out
+        card = cards[0]  # сортировка по дате публикации, свежее первым
+        try:
+            card = {**card, **api.lot(card.get("id"))}
+        except Exception as exc:  # noqa: BLE001 — карточка не критична: есть данные поиска
+            log.info("torgi lot %s: %s", card.get("id"), exc)
+        form = _code(card.get("biddForm"))
+        status = card.get("lotStatus")
+        out["found"] = True
+        out["lot"] = {
+            "id": card.get("id"),
+            "url": LOT_URL.format(lot_id=card.get("id")),
+            "status": status,
+            "status_ru": STATUS_RU.get(status or "", status or "—"),
+            "form": form,
+            "notice_3918": form == "IPS",
+            "kind": "аренда" if card.get("typeTransaction") == "rent" else "продажа",
+            "price_start": _num(card.get("priceMin")),
+            "price_step": _num(card.get("priceStep")),
+            "deposit": _num(card.get("deposit")),
+            "price_fin": _num(card.get("priceFin")),
+            "area_m2": area_of(card),
+            "bidd_end": (card.get("biddEndTime") or "")[:10] or None,
+            "auction_start": (card.get("auctionStartDate") or "")[:10] or None,
+            "published": (card.get("noticeFirstVersionPublicationDate") or "")[:10] or None,
+            "vri": vri_of(card),
+            "address": card.get("estateAddress"),
+        }
+    except Exception as exc:  # noqa: BLE001
+        log.warning("torgi parcel_lot %s: %s", cad_num, exc)
+        out["error"] = f"torgi.gov.ru недоступен: {type(exc).__name__}"
+    finally:
+        out["requests"] = api.requests
+        if client is None:
+            api.close()
+    return out
 
 
 def liquidity_text(a: dict[str, Any]) -> str:

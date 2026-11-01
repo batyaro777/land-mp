@@ -23,6 +23,11 @@ class Purpose(StrEnum):
     COMMERCE = "commerce"  # торговля, услуги, офисы
     INDUSTRY = "industry"  # производство, склады
     MULTIFAMILY = "multifamily"  # многоквартирный дом, таунхаусы
+    # цели профессионала (ТЗ v3, п. 1.12, 8–9): важен путь получения и экономика, а не вид
+    # использования — правила по категории/ВРИ/зоне для них нейтральны, работает R21
+    MUNICIPAL = "municipal"  # оформить у муниципалитета: без торгов, предварительное согласование
+    AUCTION = "auction"  # купить или арендовать на торгах, переуступка права аренды
+    INVEST = "invest"  # инвестиция под перепродажу
     ANY = "any"  # цель не задана — только проверка данных
 
     @property
@@ -40,6 +45,11 @@ class Purpose(StrEnum):
         """Цель предполагает жильё — для жилья действуют санитарные и зональные запреты."""
         return self in (Purpose.IZHS, Purpose.LPH, Purpose.SNT, Purpose.MULTIFAMILY)
 
+    @property
+    def professional(self) -> bool:
+        """Цель профессионала: путь получения участка и экономика, вид использования не задан."""
+        return self in (Purpose.MUNICIPAL, Purpose.AUCTION, Purpose.INVEST)
+
 
 PURPOSE_LABELS: dict[Purpose, str] = {
     Purpose.IZHS: "Жилой дом (ИЖС)",
@@ -50,6 +60,9 @@ PURPOSE_LABELS: dict[Purpose, str] = {
     Purpose.COMMERCE: "Торговля, услуги, офис",
     Purpose.INDUSTRY: "Производство, склад",
     Purpose.MULTIFAMILY: "Многоквартирный дом",
+    Purpose.MUNICIPAL: "Оформить у муниципалитета",
+    Purpose.AUCTION: "Торги, переуступка аренды",
+    Purpose.INVEST: "Инвестиция под перепродажу",
     Purpose.ANY: "Без цели",
 }
 
@@ -62,6 +75,11 @@ PURPOSE_ACTIVITY: dict[Purpose, str] = {
     Purpose.COMMERCE: "Магазин, кафе, офис, услуги",
     Purpose.INDUSTRY: "Производство, склад, завод",
     Purpose.MULTIFAMILY: "Построить многоквартирный дом или таунхаусы",
+    Purpose.MUNICIPAL: (
+        "Получить участок у муниципалитета: без торгов, предварительное согласование, аренда"
+    ),
+    Purpose.AUCTION: "Купить или арендовать на торгах, переуступить право аренды",
+    Purpose.INVEST: "Купить для перепродажи: ликвидность, цена входа и выхода",
     Purpose.ANY: "Только проверить данные участка",
 }
 

@@ -420,6 +420,25 @@ def fetch_auctions(cad_num: str, *, refresh: bool = False) -> dict[str, Any]:
     return result
 
 
+def fetch_parcel_lot(cad_num: str, *, refresh: bool = False) -> dict[str, Any]:
+    """Лот самого участка на torgi.gov.ru (кэш на сутки → RU-шлюз, 2 запроса)."""
+    from landcheck import torgi
+
+    key = f"torgi-lot:{cad_num}"
+    cache = ParcelCache(settings.cache_path, ttl_days=settings.torgi_ttl_days)
+    try:
+        if not refresh:
+            cached = cache.get_region(key)
+            if cached is not None and not cached.get("error"):
+                return cached
+        result = torgi.parcel_lot(cad_num)
+        if not result.get("error"):
+            cache.put_region(key, result)
+    finally:
+        cache.close()
+    return result
+
+
 _auctions_running: set[int] = set()
 AUCTIONS_STALE_MIN = 15  # «собираем» старше этого — считаем задачу потерянной и запускаем снова
 
@@ -443,6 +462,12 @@ def _auctions_job(item_id: int, cad_num: str, refresh: bool) -> None:
         from landcheck import torgi
 
         result = torgi.empty_result(cad_num, f"сбой сбора торгов: {type(exc).__name__}")
+    try:
+        own_lot = fetch_parcel_lot(cad_num, refresh=refresh)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("parcel lot %s: %s", cad_num, exc)
+        own_lot = {"cad_num": cad_num, "found": False, "lot": None, "error": type(exc).__name__}
+    result = {**result, "own_lot": own_lot}
     try:
         with session() as db:
             item = db.get(CheckItem, item_id)

@@ -134,6 +134,18 @@ def checklist_for(item: dict[str, Any], purpose: Purpose) -> dict[str, Any]:
         blocks.append(site)
         return {"title": "Чек-лист перед оформлением участка", "blocks": blocks}
     blocks = [dict(b) for b in CHECKLIST]
+    if purpose is Purpose.INVEST:
+        blocks.append(
+            {
+                "title": "Экономика перепродажи",
+                "items": [
+                    "Срок владения продавца и свой: продажа раньше 5 лет — НДФЛ 13 % с разницы "
+                    "(ст. 217.1 НК РФ)",
+                    "Сельхозземля: извещение региона о продаже, ответ до 30 дней (ст. 8 101-ФЗ)",
+                    "Ликвидность локации: торги рядом за год, объявления и срок их экспозиции",
+                ],
+            }
+        )
     if purpose in (Purpose.FARMING, Purpose.INDUSTRY, Purpose.COMMERCE):
         blocks[0] = {
             "title": blocks[0]["title"],
@@ -253,6 +265,21 @@ _OVERALL_TEXT = {
     Level.CHECK: "Возможно с оговорками: есть что уточнить до сделки",
     Level.STOP: "Нельзя без смены назначения: один из уровней запрещает цель",
 }
+# цели профессионала (п. 1.12): вместо «можно ли здесь» — «как получить»: путь по форме
+# собственности (R21) и ограничения оборота по категории (R04); ВРИ и зона не оцениваются
+_PRO_ROWS: tuple[tuple[str, str], ...] = (
+    ("R21", "Форма собственности и путь"),
+    ("R04", "Категория земель и оборот"),
+)
+_PRO_OK_TEXT = {
+    "R21": "путь получения понятен",
+    "R04": "категория оборот не ограничивает",
+}
+_PRO_OVERALL_TEXT = {
+    Level.OK: "Путь понятен: собственность и категория цели не мешают",
+    Level.CHECK: "Есть что уточнить до заявки или торгов: выписка ЕГРН, аренда, извещение",
+    Level.STOP: "Этим путём участок не получить",
+}
 
 
 def goal_summary(item: dict[str, Any], purpose: Purpose) -> dict[str, Any] | None:
@@ -263,8 +290,12 @@ def goal_summary(item: dict[str, Any], purpose: Purpose) -> dict[str, Any] | Non
     flags = {f["rule_id"]: f for f in item.get("flags") or []}
     rows: list[dict[str, Any]] = []
     worst = Level.OK
-    for rule_id, title in _GOAL_ROWS:
-        if rule_id == "R04":
+    pro = purpose.professional
+    goal_rows, ok_text = (_PRO_ROWS, _PRO_OK_TEXT) if pro else (_GOAL_ROWS, _GOAL_OK_TEXT)
+    for rule_id, title in goal_rows:
+        if rule_id == "R21":
+            value = parcel.get("ownership_type") or "в НСПД не указана"
+        elif rule_id == "R04":
             value = parcel.get("category")
         elif rule_id == "R05":
             value = parcel.get("permitted_use") or " | ".join(parcel.get("permitted_use_tab") or [])
@@ -278,7 +309,7 @@ def goal_summary(item: dict[str, Any], purpose: Purpose) -> dict[str, Any] | Non
         elif rule_id == "R11" and not parcel.get("territorial_zone_checked"):
             level, text, source = Level.CHECK, "зона не проверялась: у участка нет контура", None
         else:
-            level, text, source = Level.OK, _GOAL_OK_TEXT[rule_id], None
+            level, text, source = Level.OK, ok_text[rule_id], None
         if level.rank > worst.rank:
             worst = level
         rows.append(
@@ -293,8 +324,10 @@ def goal_summary(item: dict[str, Any], purpose: Purpose) -> dict[str, Any] | Non
         )
     return {
         "activity": purpose.activity,
+        "question": "Как получить" if pro else "Можно ли здесь",
+        "professional": pro,
         "level": worst.value,
-        "text": _OVERALL_TEXT[worst],
+        "text": (_PRO_OVERALL_TEXT if pro else _OVERALL_TEXT)[worst],
         "rows": rows,
         "short": " · ".join(f"{r['title'].split()[0].lower()}: {r['level']}" for r in rows),
     }
