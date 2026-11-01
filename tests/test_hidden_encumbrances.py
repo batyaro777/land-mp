@@ -87,6 +87,24 @@ def test_oopt_touch_and_protected_category_are_check():
     assert "R22" not in run(make_payload("x", oopt=[]))[1]
 
 
+def test_oopt_boundary_touching_is_fact_not_risk():
+    # участок лесфонда на краю парка (приёмка dedb1b8): общая граница, площадь пересечения 0
+    touching = {
+        "type": "Polygon",
+        "coordinates": [
+            [[37.001, 55.0], [37.002, 55.0], [37.002, 55.001], [37.001, 55.001], [37.001, 55.0]]
+        ],
+    }
+    _, flags = run(
+        make_payload(
+            "40:10:000000:1822", category=AGRI, oopt=[boundary(OOPT, "40:00-9.6", touching)]
+        )
+    )
+    f = flags["R22"]
+    assert f.level is Level.OK and "проходит по границе участка" in f.message
+    assert f.details["share"] == 0.0
+
+
 def test_forest_park_check_and_touch():
     _, flags = run(make_payload("x", forest_park=[boundary(PARK, "fp-1")]))
     assert flags["R23"].level is Level.CHECK and "лесопаркового" in flags["R23"].message

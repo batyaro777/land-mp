@@ -446,6 +446,17 @@ def r22_oopt(ctx: RuleContext):
         "share": share,
     }
     cls = category_class(p.category)
+    if share is not None and share == 0:
+        # НСПД отдаёт границу, которая лишь проходит по границе участка (приёмка на «Угре»):
+        # участок вне ООПТ — факт о соседстве, не риск
+        return Flag(
+            "R22",
+            Level.OK,
+            f"граница ООПТ ({names}) проходит по границе участка, внутрь не заходит: участок вне "
+            "ООПТ; при стройке у границы учесть охранную зону ООПТ, если она установлена положением",
+            SRC_OOPT,
+            details,
+        )
     if share is not None and share < OOPT_MIN_SHARE:
         return Flag(
             "R22",

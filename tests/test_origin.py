@@ -78,3 +78,32 @@ def test_apply_to_item_adds_r24_and_drops_duplicates():
     out2 = rights.apply_to_item(out, r, Purpose.IZHS)  # повторное применение не дублирует
     assert [f["rule_id"] for f in out2["flags"]].count("R24") == 1
     assert out2["rights"]["origin"]["ascendants"] == ["50:09:0060202:1", "50:09:0060202:2"]
+
+
+def test_lk_pasted_text_origin_and_r24():
+    # текст из формы «Права и ограничения» (разбирается как страница ЛК) — приёмка dedb1b8
+    text = (
+        "Кадастровый номер: 40:10:160500:1\n"
+        "Дата присвоения кадастрового номера: 15.03.2024\n"
+        "Кадастровые номера объектов недвижимости, из которых образован объект недвижимости: "
+        "40:10:160500:3, 40:10:160500:4\n"
+        "Сведения о зарегистрированных правах\n"
+        "Вид, номер и дата государственной регистрации права: Собственность, "
+        "№ 40:10:160500:1-40/001/2024-1 от 20.03.2024\n"
+        "Ограничение прав и обременение объекта недвижимости: не зарегистрировано\n"
+    )
+    r = rights.parse_lk_text(text)
+    assert r.parsed and r.origin == {
+        "ascendants": ["40:10:160500:3", "40:10:160500:4"],
+        "assigned": "15.03.2024",
+    }
+    data = {
+        "parcel": {"ownership_type": "Муниципальная", "found": True},
+        "flags": [],
+        "verdict": "ок",
+    }
+    out = rights.apply_to_item(data, r, Purpose.IZHS)
+    r24 = next(f for f in out["flags"] if f["rule_id"] == "R24")
+    assert r24["level"] == "проверить" and "15.03.2024" in r24["message"]
+    assert out["rights"]["origin"]["ascendants"] == ["40:10:160500:3", "40:10:160500:4"]
+    assert egrn.parse_origin("ничего нет") == (None, [])

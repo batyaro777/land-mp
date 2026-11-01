@@ -247,6 +247,9 @@ def parse_lk_text(text: str) -> Rights:
     r.parsed = bool(section or entries)
     if not r.parsed:
         r.notes.append("в тексте не нашёл раздела о правах: вставьте страницу целиком")
+    assigned, ascendants = egrn.parse_origin(t)
+    if assigned or ascendants:
+        r.origin = {"ascendants": ascendants, "assigned": assigned}
     return r
 
 

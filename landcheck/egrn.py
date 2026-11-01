@@ -107,6 +107,23 @@ class Extract:
         )
 
 
+def parse_origin(text: str) -> tuple[str | None, list[str]]:
+    """Происхождение участка из любого текста выписки/ЛК: дата присвоения номера и исходные
+    участки («из которых образован объект недвижимости»). (None, []) — не найдено."""
+    t = (text or "").replace("\xa0", " ")
+    assigned = None
+    m = _ASSIGNED_RE.search(t)
+    if m:
+        assigned = m.group(1)
+    ascendants: list[str] = []
+    m = _ASCENDANTS_RE.search(t)
+    if m:
+        ascendants = [re.sub(r"\s+", "", c) for c in CAD_RE.findall(m.group(1).replace(" ", ""))]
+        if not ascendants:
+            ascendants = [re.sub(r"\s+", "", c) for c in CAD_RE.findall(m.group(1))]
+    return assigned, ascendants
+
+
 def parse_extract(text: str) -> Extract:
     """Регулярки по печатной форме выписки (Госуслуги/Росреестр, формы 2019–2026)."""
     ex = Extract()
@@ -115,14 +132,7 @@ def parse_extract(text: str) -> Extract:
     t = text.replace("\xa0", " ").replace(" ", " ")
     t = re.sub(r"[ \t]+", " ", t)
     ex.is_extract = bool(_EXTRACT_RE.search(t))
-    m = _ASSIGNED_RE.search(t)
-    if m:
-        ex.assigned_date = m.group(1)
-    m = _ASCENDANTS_RE.search(t)
-    if m:
-        ex.ascendants = [
-            re.sub(r"\s+", "", c) for c in CAD_RE.findall(m.group(1).replace(" ", ""))
-        ] or [re.sub(r"\s+", "", c) for c in CAD_RE.findall(m.group(1))]
+    ex.assigned_date, ex.ascendants = parse_origin(t)
     m = re.search(r"Кадастровый\s+номер\s*:?\s*(" + CAD_RE.pattern + ")", t, re.I)
     cad = m.group(1) if m else (CAD_RE.search(t).group(0) if CAD_RE.search(t) else None)
     ex.cad_num = re.sub(r"\s+", "", cad) if cad else None
