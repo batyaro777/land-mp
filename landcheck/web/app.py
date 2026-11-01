@@ -1042,6 +1042,11 @@ def report_location(request: Request, user: UserDep, check_id: int, cad_num: str
             )
         elif data.get("terrain") is None and parcel.get("geometry"):
             data = _merge_item_data(db, item, terrain=_terrain_for(parcel.get("geometry"), loc))
+        # Торги рядом (ТЗ v3, п. 9) — внутренний режим: только админу, через RU-шлюз.
+        auctions = data.get("auctions")
+        if user.is_admin and (auctions is None or refresh):
+            auctions = jobs.fetch_auctions(cad_num, refresh=bool(refresh))
+            data = _merge_item_data(db, item, auctions=auctions)
         return render(
             request,
             "_location.html",
@@ -1049,6 +1054,7 @@ def report_location(request: Request, user: UserDep, check_id: int, cad_num: str
             terrain=data.get("terrain"),
             rights=data.get("rights"),
             gpzu=data.get("gpzu"),
+            auctions=auctions,
             public=False,
             location_url=f"/checks/{check.id}/items/{cad_num}/location",
             region=data.get("region"),

@@ -51,6 +51,17 @@ class Settings:
         default_factory=lambda: float(os.environ.get("LANDCHECK_WATCH_HOURS", "24"))
     )
     debug: bool = field(default_factory=lambda: os.environ.get("LANDCHECK_DEBUG", "") == "1")
+    # RU-шлюз (ТЗ v3, п. 9): SOCKS5 на российский сервер для torgi.gov.ru и набор
+    # сертификатов с корнем Минцифры. Пусто — слой торгов честно пишет «не настроен».
+    ru_proxy: str | None = field(
+        default_factory=lambda: os.environ.get("LANDCHECK_RU_PROXY") or None
+    )
+    ru_ca_bundle: str | None = field(
+        default_factory=lambda: os.environ.get("LANDCHECK_RU_CA_BUNDLE") or None
+    )
+    torgi_ttl_days: float = field(
+        default_factory=lambda: float(os.environ.get("LANDCHECK_TORGI_TTL_DAYS", "1"))
+    )
     # Модуль «Регион»: Gemini с поиском Google. Без ключа блок честно говорит, что выключен.
     gemini_api_key: str | None = field(
         default_factory=lambda: (

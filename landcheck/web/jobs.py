@@ -375,3 +375,26 @@ def fetch_region(
         return result
     finally:
         cache.close()
+
+
+def fetch_auctions(cad_num: str, *, refresh: bool = False) -> dict[str, Any]:
+    """Сводка торгов torgi.gov.ru по кадастровому району (ТЗ v3, п. 9): кэш на сутки → RU-шлюз.
+    Ошибки внутри результата (`error`), наружу исключений нет."""
+    from landcheck import torgi
+
+    district = torgi.district_of(cad_num)
+    if district is None:
+        return torgi.empty_result(cad_num, "кадастровый номер без района — торги не ищем")
+    key = f"torgi:{district}:{torgi.MONTHS}"
+    cache = ParcelCache(settings.cache_path, ttl_days=settings.torgi_ttl_days)
+    try:
+        if not refresh:
+            cached = cache.get_region(key)
+            if cached is not None and not cached.get("error"):
+                return cached
+        result = torgi.nearby_auctions(cad_num)
+        if not result.get("error"):
+            cache.put_region(key, result)
+        return result
+    finally:
+        cache.close()

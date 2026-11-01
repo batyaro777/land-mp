@@ -7,5 +7,7 @@ services:
     env_file: .env
     volumes:
       - landcheck-data:/data
+      # Сертификаты с корнем Минцифры для torgi.gov.ru через RU-шлюз (ТЗ v3, п. 9)
+      - /etc/ssl/ru-gateway:/etc/ssl/ru-gateway:ro
 volumes:
   landcheck-data:

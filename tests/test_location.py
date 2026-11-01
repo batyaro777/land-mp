@@ -601,3 +601,79 @@ def test_access_without_osm_is_undetermined_and_water_zone_is_not_wide():
         "Округ санитарной (горно-санитарной) охраны курорта",
         "Граница округа санитарной охраны лечебного климата курорта федерального значения Сочи",
     )
+
+
+# --- торги рядом (ТЗ v3, п. 9): блок только админу, данные из job с кэшем ------------------
+def test_auctions_block_admin_only(client, fixtures_dir: Path, monkeypatch):  # noqa: F811
+    from sqlalchemy import update
+
+    from landcheck import torgi
+    from landcheck.web import jobs
+    from landcheck.web.db import User, session
+
+    (fixtures_dir / "50_09_0060202_101.location.json").write_text(
+        json.dumps(raw_sample(), ensure_ascii=False), encoding="utf-8"
+    )
+    canned = torgi.empty_result("50:09:0060202:101")
+    canned.update(
+        succeed_total=3,
+        failed_total=1,
+        active_total=1,
+        ea_total=5,
+        liquidity=0.75,
+        sale={
+            "count": 2,
+            "with_price": 2,
+            "median_rub_m2": 1200.0,
+            "p25_rub_m2": 1100.0,
+            "p75_rub_m2": 1300.0,
+            "median_uplift": 0.4,
+        },
+        items=[
+            {
+                "id": "X_1",
+                "url": "https://torgi.gov.ru/new/public/lots/lot/X_1",
+                "cad_num": "50:09:0060202:77",
+                "kind": "продажа",
+                "status": "SUCCEED",
+                "area_m2": 1000.0,
+                "price_start": 900_000,
+                "price_fin": 1_200_000,
+                "rub_m2": 1200.0,
+                "uplift": 0.33,
+                "date": "2026-10-20",
+                "address": "Московская обл.",
+                "vri": "Для ИЖС",
+                "category": None,
+                "form": "EA",
+            }
+        ],
+    )
+    canned["liquidity_text"] = torgi.liquidity_text(canned)
+    calls: list[tuple[str, bool]] = []
+
+    def fake_fetch(cad_num: str, *, refresh: bool = False):
+        calls.append((cad_num, refresh))
+        return canned
+
+    monkeypatch.setattr(jobs, "fetch_auctions", fake_fetch)
+    login(client)
+    r = client.post(
+        "/checks", data={"numbers": "50:09:0060202:101; 2 500 000; 10 сот", "purpose": "izhs"}
+    )
+    url = r.headers["location"] + "/items/50:09:0060202:101/location"
+    block = client.get(url).text
+    assert "Торги рядом за год" not in block and calls == []  # обычный пользователь не видит
+    with session() as db:
+        db.execute(update(User).values(is_admin=True))
+        db.commit()
+    block = client.get(url).text
+    assert "Торги рядом за год" in block and "кадастровый район 50:09" in block
+    assert "состоялись 3 из 4 завершённых (75 %)" in block and "спрос есть" in block
+    from landcheck.web.serialize import fmt_money
+
+    assert "50:09:0060202:77" in block and fmt_money(1_200_000) in block and "+40 %" in block
+    assert calls == [("50:09:0060202:101", False)]
+    client.get(url)  # второй заход — из item.data, job не дёргаем
+    assert len(calls) == 1
+    (fixtures_dir / "50_09_0060202_101.location.json").unlink()
