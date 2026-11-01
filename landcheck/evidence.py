@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import hashlib
+import html as html_mod
 import io
 import logging
 import re
@@ -19,7 +20,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -40,6 +41,20 @@ DOWNLOAD_DEADLINE_S = 60.0
 PARSE_DEADLINE_S = 60.0
 BUDGET_S = 180.0
 WORKERS = 4
+# Страницы разделов администрации («Проекты планировок», «Документы») обычно ведут на вложенные
+# PDF — их читаем второй волной, по подсказкам в тексте ссылки (прод 01.11: на индексных страницах
+# упоминаний 0, сами проекты лежат файлами).
+NESTED_KINDS = ("registry", "pmt", "npa", "notice", "hearings")
+MAX_LINKS_PER_PAGE = 40
+MAX_NESTED_PER_PAGE = 5
+MAX_NESTED = 10
+NESTED_MIN_BUDGET_S = 30.0
+NESTED_HINT_RE = re.compile(
+    r"межеван|планировк|постановлен|распоряжен|извещен|слушан|проект|решени|схем|аукцион|торг", re.I
+)
+_HREF_RE = re.compile(r"<a\s[^>]*?href\s*=\s*[\"']([^\"']+)[\"'][^>]*>(.*?)</a>", re.I | re.S)
+_CHARSET_RE = re.compile(r"charset\s*=\s*[\"']?([\w-]+)", re.I)
+DOC_KEY_VERSION = "doc2"  # doc → doc2: до 01.11 HTML читался только как utf-8, кэш был битым
 UA = "Mozilla/5.0 (compatible; land-mp/1.0; +https://land-mp.dnai.engineering)"
 # документы, где упоминание участка — обременение или занятость (для флага R25)
 STRONG_KINDS = ("pmt", "npa", "notice", "registry", "hearings")
@@ -52,7 +67,7 @@ LOCALITY_RE = re.compile(
 
 
 def doc_key(url: str) -> str:
-    return "doc:" + hashlib.sha1(url.encode("utf-8")).hexdigest()
+    return f"{DOC_KEY_VERSION}:" + hashlib.sha1(url.encode("utf-8")).hexdigest()
 
 
 def quarter_of(cad_num: str | None) -> str | None:
@@ -124,7 +139,65 @@ def _html_title(html: str) -> str | None:
     if not m:
         return None
     title = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", m.group(1))).strip()
-    return title[:160] or None
+    return html_mod.unescape(title)[:160] or None
+
+
+def decode_html(raw: bytes, content_type: str) -> str:
+    """Кодировка из заголовка или <meta>, иначе utf-8, иначе windows-1251 (base.garant.ru,
+    старые сайты администраций)."""
+    declared: list[str] = []
+    m = _CHARSET_RE.search(content_type or "")
+    if m:
+        declared.append(m.group(1))
+    m = _CHARSET_RE.search(raw[:4096].decode("ascii", errors="ignore"))
+    if m:
+        declared.append(m.group(1))
+    for enc in [*declared, "utf-8", "cp1251"]:
+        try:
+            return raw.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
+def page_links(html: str, base_url: str) -> list[dict[str, str]]:
+    """Ссылки на PDF со страницы (адрес и текст ссылки) — кандидаты второй волны."""
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for href, anchor in _HREF_RE.findall(html):
+        href = html_mod.unescape(href.strip())
+        url = urljoin(base_url, href)
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https") or not parsed.path.lower().endswith(".pdf"):
+            continue
+        if url in seen:
+            continue
+        seen.add(url)
+        text = html_mod.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", anchor))).strip()
+        out.append({"url": url, "text": text[:200]})
+        if len(out) >= MAX_LINKS_PER_PAGE:
+            break
+    return out
+
+
+def _explain(exc: BaseException) -> str:
+    """Причина сбоя скачивания словами пользователя, не именем исключения."""
+    if isinstance(exc, httpx.ConnectTimeout):
+        return "сайт не отвечает (таймаут соединения)"
+    if isinstance(exc, httpx.ReadTimeout):
+        return "сайт не прислал данные за 20 с"
+    if isinstance(exc, httpx.ProxyError):
+        return "шлюз не смог подключиться к сайту"
+    if isinstance(exc, httpx.ConnectError):
+        text = str(exc).lower()
+        if "getaddrinfo" in text or "name or service" in text or "nodename" in text:
+            return "адрес сайта не найден (DNS)"
+        return "соединение с сайтом не установлено"
+    if isinstance(exc, httpx.RemoteProtocolError):
+        return "сайт оборвал соединение"
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"HTTP {exc.response.status_code}"
+    return type(exc).__name__
 
 
 def _download(url: str) -> tuple[bytes, str, str, int]:
@@ -164,7 +237,7 @@ def _download(url: str) -> tuple[bytes, str, str, int]:
             errors.append(f"{exc}{' через шлюз' if proxy else ''}")
             break
         except (httpx.TimeoutException, httpx.TransportError) as exc:
-            errors.append(f"{type(exc).__name__}{' через шлюз' if proxy else ''}")
+            errors.append(f"{_explain(exc)}{' через шлюз' if proxy else ''}")
             continue
     raise ConnectionError("; ".join(errors) or "не удалось скачать")
 
@@ -184,6 +257,9 @@ def fetch_document(url: str) -> dict[str, Any]:
     }
     try:
         raw, ctype, final, _ = _download(url)
+    except httpx.HTTPStatusError as exc:
+        out["error"] = f"не скачан: HTTP {exc.response.status_code}"
+        return out
     except Exception as exc:  # noqa: BLE001
         out["error"] = f"не скачан: {exc}"
         return out
@@ -197,8 +273,9 @@ def fetch_document(url: str) -> dict[str, Any]:
         elif "html" in ctype.lower() or raw[:300].lower().lstrip().startswith(
             (b"<!doctype", b"<html")
         ):
-            html = raw.decode("utf-8", errors="replace")
+            html = decode_html(raw, ctype)
             out["title"] = _html_title(html)
+            out["links"] = page_links(html, final)
             text = websearch.extract_text(html)
             if text.strip():
                 out["pages"] = [{"n": None, "text": text}]
@@ -289,27 +366,19 @@ def collect(
     """Скачать документы, найти упоминания участка/квартала/населённого пункта."""
     terms = terms_for(parcel, locality)
     cands = candidate_docs(admin_docs, max_docs=max_docs)
-    docs: dict[int, dict[str, Any]] = {}
-    timed_out = 0
-    if cands:
-        # документы параллельно, с общим лимитом времени; что не успели — помечаем честно
-        pool = ThreadPoolExecutor(max_workers=min(workers, len(cands)))
-        futures = {pool.submit(_safe_fetch, fetch, c["url"]): i for i, c in enumerate(cands)}
-        try:
-            for fut in as_completed(futures, timeout=budget_s):
-                docs[futures[fut]] = fut.result()
-        except TimeoutError:
-            pass
-        finally:
-            pool.shutdown(wait=False, cancel_futures=True)
-        for i, c in enumerate(cands):
-            if i not in docs:
-                timed_out += 1
-                docs[i] = {
-                    "url": c["url"],
-                    "pages": [],
-                    "error": f"не проверен: лимит времени проверки ({int(budget_s // 60)} мин)",
-                }
+    started = time.monotonic()
+    docs, timed_out = _fetch_wave(cands, fetch, workers, budget_s)
+    nested_skipped = 0
+    nested = nested_candidates(cands, docs, terms)
+    if nested:
+        left = budget_s - (time.monotonic() - started)
+        if left >= NESTED_MIN_BUDGET_S:
+            more, more_timed_out = _fetch_wave(nested, fetch, workers, left)
+            docs.extend(more)
+            timed_out += more_timed_out
+            cands = cands + nested
+        else:
+            nested_skipped = len(nested)
     docs_out: list[dict[str, Any]] = []
     hits = 0
     strong = 0
@@ -326,6 +395,7 @@ def collect(
             "is_pdf": doc.get("is_pdf", False),
             "pages": len(doc.get("pages") or []),
             "partial": doc.get("partial"),
+            "via": cand.get("via"),
             "error": doc.get("error"),
             "mentions": mentions,
             "strong": any(m["term_kind"] in ("cad", "quarter") for m in mentions)
@@ -341,6 +411,8 @@ def collect(
     )
     if timed_out:
         note += f" Не успели за {int(budget_s // 60)} минуты: {timed_out} — «перечитать документы»."
+    if nested_skipped:
+        note += f" Вложенные файлы разделов ({nested_skipped}) не проверены: лимит времени."
     return {
         "terms": terms,
         "docs": docs_out,
@@ -349,9 +421,82 @@ def collect(
         "checked": len(docs_out),
         "fetched_ok": sum(1 for d in docs_out if not d["error"]),
         "timed_out": timed_out,
+        "nested": sum(1 for d in docs_out if d.get("via")),
         "checked_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "note": note,
     }
+
+
+def _fetch_wave(
+    cands: list[dict[str, Any]],
+    fetch: Callable[[str], dict[str, Any]],
+    workers: int,
+    budget_s: float,
+) -> tuple[list[dict[str, Any]], int]:
+    """Скачать кандидатов параллельно в пределах бюджета; не успевшие — помечены."""
+    docs: dict[int, dict[str, Any]] = {}
+    if not cands:
+        return [], 0
+    pool = ThreadPoolExecutor(max_workers=max(1, min(workers, len(cands))))
+    futures = {pool.submit(_safe_fetch, fetch, c["url"]): i for i, c in enumerate(cands)}
+    try:
+        for fut in as_completed(futures, timeout=max(budget_s, 0.01)):
+            docs[futures[fut]] = fut.result()
+    except TimeoutError:
+        pass
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+    timed_out = 0
+    for i, c in enumerate(cands):
+        if i not in docs:
+            timed_out += 1
+            docs[i] = {
+                "url": c["url"],
+                "pages": [],
+                "error": f"не проверен: лимит времени проверки ({int(BUDGET_S // 60)} мин)",
+            }
+    return [docs[i] for i in range(len(cands))], timed_out
+
+
+def _link_score(link: dict[str, str], terms: list[dict[str, str]]) -> int:
+    text = f"{link.get('text') or ''} {urlparse(link['url']).path}".lower()
+    score = 0
+    if NESTED_HINT_RE.search(text):
+        score += 2
+    for t in terms:
+        value = t["value"].lower()
+        needle = value[:-1] if t["kind"] == "locality" and len(value) > 5 else value
+        if needle and needle in text:
+            score += 3
+    return score
+
+
+def nested_candidates(
+    cands: list[dict[str, Any]], docs: list[dict[str, Any]], terms: list[dict[str, str]]
+) -> list[dict[str, Any]]:
+    """PDF, на которые ведут прочитанные страницы разделов: по подсказкам в тексте ссылки
+    (межевание, планировка, постановление, номер участка, населённый пункт)."""
+    seen = {c["url"] for c in cands}
+    out: list[dict[str, Any]] = []
+    for cand, doc in zip(cands, docs, strict=False):
+        if cand["kind"] not in NESTED_KINDS or not doc.get("links"):
+            continue
+        fresh = [link for link in doc["links"] if link["url"] not in seen]
+        scored = sorted(fresh, key=lambda link: -_link_score(link, terms))
+        picked = [link for link in scored if _link_score(link, terms) > 0][:MAX_NESTED_PER_PAGE]
+        for link in picked:
+            seen.add(link["url"])
+            out.append(
+                {
+                    "url": link["url"],
+                    "title": link["text"] or urlparse(link["url"]).path.rsplit("/", 1)[-1],
+                    "kind": cand["kind"],
+                    "via": doc.get("final_url") or cand["url"],
+                }
+            )
+            if len(out) >= MAX_NESTED:
+                return out
+    return out
 
 
 def _safe_fetch(fetch: Callable[[str], dict[str, Any]], url: str) -> dict[str, Any]:

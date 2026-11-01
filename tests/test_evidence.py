@@ -282,3 +282,91 @@ def test_fetch_document_reports_download_errors(monkeypatch):
     monkeypatch.setattr(evidence, "_download", boom)
     doc = evidence.fetch_document("https://adm.example.ru/x.pdf")
     assert doc["pages"] == [] and doc["error"].startswith("не скачан: ConnectTimeout")
+
+
+def test_decode_html_honours_declared_charset_and_falls_back_to_cp1251():
+    text = "Постановление администрации «О проекте»"
+    assert evidence.decode_html(text.encode("cp1251"), "text/html; charset=windows-1251") == text
+    meta = ('<html><head><meta charset="windows-1251"><title>Док</title></head>' + text).encode(
+        "cp1251"
+    )
+    assert text in evidence.decode_html(meta, "text/html")
+    assert text in evidence.decode_html(text.encode("cp1251"), "text/html")  # без объявления
+    assert evidence.decode_html(text.encode("utf-8"), "text/html") == text
+    assert evidence._html_title("<title>Проект &quot;Север&quot; &mdash; ПМТ</title>") == (
+        'Проект "Север" — ПМТ'
+    )
+
+
+def test_page_links_and_nested_candidates_pick_relevant_pdfs():
+    html = (
+        '<a href="/docs/pmt-deshovki.pdf">Проект межевания д. Дешовки</a>'
+        '<a href="https://adm-kozelsk.ru/docs/budget-2026.pdf">Бюджет 2026</a>'
+        '<a href="/docs/postanovlenie-207.PDF?x=1">Постановление № 207</a>'
+        '<a href="/docs/pmt-deshovki.pdf">дубль</a>'
+        '<a href="/news/1">Новости</a>'
+        '<a href="mailto:a@b.ru">почта</a>'
+    )
+    links = evidence.page_links(html, NPA)
+    assert [link["url"] for link in links] == [
+        "https://adm-kozelsk.ru/docs/pmt-deshovki.pdf",
+        "https://adm-kozelsk.ru/docs/budget-2026.pdf",
+        "https://adm-kozelsk.ru/docs/postanovlenie-207.PDF?x=1",
+    ]
+    terms = evidence.terms_for(PARCEL, "д. Дешовки")
+    cands = [{"url": NPA, "title": "НПА", "kind": "npa"}, {"url": GISOGD, "kind": "pzz"}]
+    docs = [
+        {"final_url": NPA, "links": links, "pages": [{"n": None, "text": "x"}]},
+        {"links": links},
+    ]
+    nested = evidence.nested_candidates(cands, docs, terms)
+    assert [n["url"] for n in nested] == [
+        "https://adm-kozelsk.ru/docs/pmt-deshovki.pdf",  # межевание + Дешовки
+        "https://adm-kozelsk.ru/docs/postanovlenie-207.PDF?x=1",  # постановление
+    ]
+    assert nested[0]["kind"] == "npa" and nested[0]["via"] == NPA
+    assert nested[0]["title"] == "Проект межевания д. Дешовки"  # ПЗЗ-страницы вторую волну не дают
+
+
+def test_collect_reads_nested_pdf_and_raises_r25():
+    nested_pdf = "https://adm-kozelsk.ru/docs/pmt-deshovki.pdf"
+    index = _doc(NPA, ["Раздел «Планировка территории»"], pdf=False, title="Планировка")
+    index["links"] = [{"url": nested_pdf, "text": "Проект межевания д. Дешовки"}]
+    docs = {
+        NPA: index,
+        nested_pdf: _doc(nested_pdf, ["ПМТ", "Образуемый участок 40:10:160500:1"], title="ПМТ"),
+    }
+    calls: list[str] = []
+
+    def fetch(url: str) -> dict:
+        calls.append(url)
+        return docs[url]
+
+    admin_docs = {"registry": {"links": [{"url": NPA, "title": "Планировка"}]}}
+    ev = evidence.collect(PARCEL, admin_docs, "д. Дешовки", fetch=fetch)
+    assert calls == [NPA, nested_pdf] and ev["checked"] == 2 and ev["nested"] == 1
+    pdf = ev["docs"][1]
+    assert (
+        pdf["via"] == NPA and pdf["strong"] and pdf["mentions"][0]["url"] == nested_pdf + "#page=2"
+    )
+    flag = evidence.r25_flag(ev)
+    assert flag and flag["source"] == nested_pdf + "#page=2"
+    # бюджет почти исчерпан — вторая волна честно пропускается
+    ev2 = evidence.collect(PARCEL, admin_docs, "д. Дешовки", fetch=fetch, budget_s=0.0)
+    assert ev2["nested"] == 0 and "Вложенные файлы разделов (1) не проверены" in ev2["note"]
+
+
+def test_explain_download_errors_in_plain_words():
+    import httpx
+
+    req = httpx.Request("GET", "https://x.ru")
+    assert evidence._explain(httpx.ConnectTimeout("t", request=req)) == (
+        "сайт не отвечает (таймаут соединения)"
+    )
+    assert evidence._explain(httpx.ConnectError("[Errno -2] Name or service not known")) == (
+        "адрес сайта не найден (DNS)"
+    )
+    assert evidence._explain(httpx.RemoteProtocolError("Malformed reply")) == (
+        "сайт оборвал соединение"
+    )
+    assert evidence.doc_key("https://x.ru/a").startswith("doc2:")

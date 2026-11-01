@@ -179,12 +179,12 @@
   <h4>Риск-флаги</h4>
   {% for level, cls in [('стоп','stop'),('проверить','check')] %}
     {% for f in by_level[level] %}
-    <div class="flag {{ cls }}"><span class="badge v-{{ cls }}">{{ level }}</span> {{ f.message }}<div class="muted small">Источник: {{ f.source|lawlinks }}</div></div>
+    <div class="flag {{ cls }}"><span class="badge v-{{ cls }}">{{ level }}</span> {{ f.message|lawlinks }}<div class="muted small">Источник: {{ f.source|lawlinks }}</div></div>
     {% endfor %}
   {% endfor %}
   {% if by_level['ок'] %}
   <details><summary class="small">Справочно ({{ by_level['ок']|length }})</summary>
-    {% for f in by_level['ок'] %}<div class="flag ok">{{ f.message }}<div class="muted small">Источник: {{ f.source|lawlinks }}</div></div>{% endfor %}
+    {% for f in by_level['ок'] %}<div class="flag ok">{{ f.message|lawlinks }}<div class="muted small">Источник: {{ f.source|lawlinks }}</div></div>{% endfor %}
   </details>
   {% endif %}
   {% if not d.flags %}<p class="muted">Замечаний нет.</p>{% endif %}

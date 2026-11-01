@@ -8,11 +8,11 @@
   <p class="muted small"><a href="{{ evidence_url }}?refresh=1" hx-get="{{ evidence_url }}?refresh=1" hx-target="#evidence-slot" hx-swap="outerHTML">Повторить</a>.</p>
   {% else %}
   {% set with_hits = ev.docs|selectattr('mentions')|list %}
-  <span class="muted">— проверено документов: {{ ev.checked }}, прочитано: {{ ev.fetched_ok }}, упоминаний: {{ ev.hits }}</span></p>
+  <span class="muted">— проверено документов: {{ ev.checked }}{% if ev.nested %} (из них вложенных файлов разделов: {{ ev.nested }}){% endif %}, прочитано: {{ ev.fetched_ok }}, упоминаний: {{ ev.hits }}</span></p>
   {% if with_hits %}
   <ul class="small">
     {% for d in with_hits %}
-    <li>{% if d.strong %}<span class="badge mini v-check">проверить</span> {% endif %}<a href="{{ d.final_url }}" target="_blank" rel="noopener">{{ d.title|truncate(110) }}</a> <span class="muted">({{ d.kind }}{% if d.is_pdf %}, PDF, {{ d.pages }} стр.{% endif %}{% if d.partial %}; {{ d.partial }}{% endif %})</span>
+    <li>{% if d.strong %}<span class="badge mini v-check">проверить</span> {% endif %}<a href="{{ d.final_url }}" target="_blank" rel="noopener">{{ d.title|truncate(110) }}</a> <span class="muted">({{ d.kind }}{% if d.is_pdf %}, PDF, {{ d.pages }} стр.{% endif %}{% if d.partial %}; {{ d.partial }}{% endif %}{% if d.via %}; файл из раздела <a href="{{ d.via }}" target="_blank" rel="noopener">сайта</a>{% endif %})</span>
       <ul>
       {% for m in d.mentions %}
       <li><a href="{{ m.url }}" target="_blank" rel="noopener">{% if m.page %}стр. {{ m.page }}{% else %}страница{% endif %}</a> · {{ m.term_label }} «{{ m.term }}»: <q class="small">{{ m.quote|truncate(260) }}</q></li>
@@ -26,7 +26,7 @@
   {% set failed = ev.docs|rejectattr('mentions')|list %}
   {% if failed %}
   <details><summary class="small muted">Проверенные документы без упоминаний или без текста ({{ failed|length }})</summary>
-    <ul class="small muted">{% for d in failed %}<li><a href="{{ d.final_url }}" target="_blank" rel="noopener">{{ d.title|truncate(100) }}</a> — {% if d.error %}{{ d.error }}{% else %}{{ d.kind }}{% if d.is_pdf %}, PDF, {{ d.pages }} стр.{% else %}, страница прочитана{% endif %}{% if d.partial %}; {{ d.partial }}{% endif %}{% endif %}</li>{% endfor %}</ul>
+    <ul class="small muted">{% for d in failed %}<li><a href="{{ d.final_url }}" target="_blank" rel="noopener">{{ d.title|truncate(100) }}</a> — {% if d.error %}{{ d.error }}{% else %}{{ d.kind }}{% if d.is_pdf %}, PDF, {{ d.pages }} стр.{% else %}, страница прочитана{% endif %}{% if d.partial %}; {{ d.partial }}{% endif %}{% endif %}{% if d.via %}; файл из раздела сайта{% endif %}</li>{% endfor %}</ul>
   </details>
   {% endif %}
   <p class="muted small">{{ ev.note }} Проверено {{ ev.checked_at[:16]|replace('T', ' ') }} UTC · <a href="{{ evidence_url }}?refresh=1" hx-get="{{ evidence_url }}?refresh=1" hx-target="#evidence-slot" hx-swap="outerHTML">перечитать документы</a>.</p>

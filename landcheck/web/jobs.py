@@ -487,11 +487,10 @@ def fetch_evidence(
         key = evidence.doc_key(url)
         if not refresh:
             cached = cache.get_region(key)
-            if cached is not None:
+            if cached is not None and (not cached.get("error") or _fresh_failure(cached)):
                 return cached
         doc = evidence.fetch_document(url)
-        if doc.get("pages") or not doc.get("error"):
-            cache.put_region(key, doc)
+        cache.put_region(key, doc)  # неудача тоже кэшируется, но коротко (_fresh_failure)
         return doc
 
     try:
@@ -500,7 +499,32 @@ def fetch_evidence(
         cache.close()
 
 
+EVIDENCE_FAIL_TTL_H = 6  # недоступный сайт не ждём заново при каждой проверке
+
+
+def _fresh_failure(doc: dict[str, Any]) -> bool:
+    try:
+        at = datetime.fromisoformat(doc.get("fetched_at") or "")
+    except ValueError:
+        return False
+    return (datetime.now(UTC) - at).total_seconds() < EVIDENCE_FAIL_TTL_H * 3600
+
+
 _evidence_running: set[int] = set()
+_evidence_executor: ThreadPoolExecutor | None = None
+
+
+def evidence_executor() -> ThreadPoolExecutor:
+    """Свой пул: проверка документов идёт минуты и не должна занимать общие воркеры."""
+    global _evidence_executor
+    with _lock:
+        if _evidence_executor is None:
+            _evidence_executor = ThreadPoolExecutor(
+                max_workers=2, thread_name_prefix="landcheck-evidence"
+            )
+        return _evidence_executor
+
+
 EVIDENCE_STALE_MIN = 8  # фон ограничен 3 мин + разбор; дольше — перезапуск по запросу
 
 
@@ -509,7 +533,7 @@ def start_evidence(item_id: int, cad_num: str, *, refresh: bool = False) -> bool
         if item_id in _evidence_running:
             return False
         _evidence_running.add(item_id)
-    executor().submit(_evidence_job, item_id, cad_num, refresh)
+    evidence_executor().submit(_evidence_job, item_id, cad_num, refresh)
     return True
 
 
