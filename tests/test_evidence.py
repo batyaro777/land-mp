@@ -103,7 +103,7 @@ def test_collect_counts_hits_and_r25_points_to_page():
         return docs.get(url, broken)
 
     ev = evidence.collect(PARCEL, admin_docs, "д. Дешовки", fetch=fetch)
-    assert calls == [NPA, PMT]
+    assert sorted(calls) == sorted([NPA, PMT])  # параллельно, порядок вызовов не фиксирован
     # квартал внутри полного номера отдельно не считается — только сам участок и деревня
     assert ev["checked"] == 2 and ev["fetched_ok"] == 2 and ev["hits"] == 2
     pmt = next(d for d in ev["docs"] if d["url"] == PMT)
@@ -250,3 +250,35 @@ def test_admin_docs_block_embeds_evidence_slot(client, monkeypatch):  # noqa: F8
     block = client.get(base + "/admin-docs").text
     assert 'id="evidence-slot" hx-get="' + base + '/evidence"' in block
     assert 'hx-trigger="load delay:2s"' in block
+
+
+def test_collect_marks_documents_that_miss_the_time_budget():
+    import threading
+
+    gate = threading.Event()
+
+    def slow_fetch(url: str) -> dict:
+        if url == PMT:
+            gate.wait(2)  # дольше бюджета проверки
+            return _doc(PMT, ["Участок 40:10:160500:1"])
+        return _doc(NPA, ["Дешовки"], pdf=False)
+
+    admin_docs = {
+        "registry": {"links": [{"url": NPA}]},
+        "found": {"docs": {"pmt": [{"url": PMT}]}},
+    }
+    ev = evidence.collect(PARCEL, admin_docs, "д. Дешовки", fetch=slow_fetch, budget_s=0.3)
+    gate.set()
+    by_url = {d["url"]: d for d in ev["docs"]}
+    assert ev["timed_out"] == 1 and "лимит времени" in by_url[PMT]["error"]
+    assert by_url[NPA]["mentions"] and ev["fetched_ok"] == 1 and "Не успели" in ev["note"]
+    assert evidence.r25_flag(ev) is None
+
+
+def test_fetch_document_reports_download_errors(monkeypatch):
+    def boom(url):
+        raise ConnectionError("ConnectTimeout; ConnectTimeout через шлюз")
+
+    monkeypatch.setattr(evidence, "_download", boom)
+    doc = evidence.fetch_document("https://adm.example.ru/x.pdf")
+    assert doc["pages"] == [] and doc["error"].startswith("не скачан: ConnectTimeout")

@@ -14,7 +14,9 @@ import hashlib
 import io
 import logging
 import re
+import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
@@ -31,7 +33,13 @@ MAX_PAGES = 400
 MAX_DOCS = 12
 CONTEXT = 160
 MAX_QUOTES_PER_TERM = 3
-TIMEOUT_S = 40.0
+# Тайминги (прод 01.11: скачивание через RU-шлюз держало фон дольше 6 минут): на один документ —
+# не больше минуты скачивания и минуты разбора, вся проверка — 3 минуты, документы параллельно.
+TIMEOUT = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=10.0)
+DOWNLOAD_DEADLINE_S = 60.0
+PARSE_DEADLINE_S = 60.0
+BUDGET_S = 180.0
+WORKERS = 4
 UA = "Mozilla/5.0 (compatible; land-mp/1.0; +https://land-mp.dnai.engineering)"
 # документы, где упоминание участка — обременение или занятость (для флага R25)
 STRONG_KINDS = ("pmt", "npa", "notice", "registry", "hearings")
@@ -85,12 +93,19 @@ def _is_pdf(content_type: str, url: str, head: bytes) -> bool:
     )
 
 
-def _pdf_pages(raw: bytes) -> list[dict[str, Any]]:
+def _pdf_pages(raw: bytes) -> tuple[list[dict[str, Any]], str | None]:
+    """Страницы с текстом и пометка, если прочитаны не все (лимит страниц или времени)."""
     from pypdf import PdfReader
 
     reader = PdfReader(io.BytesIO(raw))
+    total = len(reader.pages)
     pages: list[dict[str, Any]] = []
+    started = time.monotonic()
+    partial = None
     for n, page in enumerate(reader.pages[:MAX_PAGES], start=1):
+        if time.monotonic() - started > PARSE_DEADLINE_S:
+            partial = f"прочитаны первые {n - 1} из {total} страниц (лимит времени разбора)"
+            break
         try:
             text = page.extract_text() or ""
         except Exception:  # noqa: BLE001 — одна битая страница не должна валить документ
@@ -98,7 +113,10 @@ def _pdf_pages(raw: bytes) -> list[dict[str, Any]]:
         text = re.sub(r"[ \t\xa0]+", " ", text)
         if text.strip():
             pages.append({"n": n, "text": text})
-    return pages
+    else:
+        if total > MAX_PAGES:
+            partial = f"прочитаны первые {MAX_PAGES} из {total} страниц"
+    return pages, partial
 
 
 def _html_title(html: str) -> str | None:
@@ -115,10 +133,11 @@ def _download(url: str) -> tuple[bytes, str, str, int]:
     errors: list[str] = []
     attempts = [None] + ([ruproxy.proxy_url()] if ruproxy.enabled() else [])
     for proxy in attempts:
+        started = time.monotonic()
         try:
             with httpx.Client(
                 proxy=proxy,
-                timeout=TIMEOUT_S,
+                timeout=TIMEOUT,
                 follow_redirects=True,
                 headers=headers,
                 verify=ruproxy.verify_context() if proxy else True,
@@ -132,14 +151,19 @@ def _download(url: str) -> tuple[bytes, str, str, int]:
                     for chunk in resp.iter_bytes():
                         buf.extend(chunk)
                         if len(buf) > MAX_BYTES:
-                            raise ValueError("слишком большой файл")
+                            raise ValueError("больше 25 МБ")
+                        if time.monotonic() - started > DOWNLOAD_DEADLINE_S:
+                            raise TimeoutError("скачивание дольше минуты")
                     return (
                         bytes(buf),
                         resp.headers.get("content-type", ""),
                         str(resp.url),
                         resp.status_code,
                     )
-        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
+        except TimeoutError as exc:  # медленный канал — шлюз не поможет
+            errors.append(f"{exc}{' через шлюз' if proxy else ''}")
+            break
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
             errors.append(f"{type(exc).__name__}{' через шлюз' if proxy else ''}")
             continue
     raise ConnectionError("; ".join(errors) or "не удалось скачать")
@@ -154,6 +178,7 @@ def fetch_document(url: str) -> dict[str, Any]:
         "content_type": None,
         "is_pdf": False,
         "pages": [],
+        "partial": None,
         "error": None,
         "fetched_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
@@ -166,7 +191,7 @@ def fetch_document(url: str) -> dict[str, Any]:
     try:
         if _is_pdf(ctype, final, raw[:8]):
             out["is_pdf"] = True
-            out["pages"] = _pdf_pages(raw)
+            out["pages"], out["partial"] = _pdf_pages(raw)
             if not out["pages"]:
                 out["error"] = "PDF без текстового слоя (скан): нужен просмотр глазами"
         elif "html" in ctype.lower() or raw[:300].lower().lstrip().startswith(
@@ -258,14 +283,38 @@ def collect(
     *,
     fetch: Callable[[str], dict[str, Any]] = fetch_document,
     max_docs: int = MAX_DOCS,
+    workers: int = WORKERS,
+    budget_s: float = BUDGET_S,
 ) -> dict[str, Any]:
     """Скачать документы, найти упоминания участка/квартала/населённого пункта."""
     terms = terms_for(parcel, locality)
+    cands = candidate_docs(admin_docs, max_docs=max_docs)
+    docs: dict[int, dict[str, Any]] = {}
+    timed_out = 0
+    if cands:
+        # документы параллельно, с общим лимитом времени; что не успели — помечаем честно
+        pool = ThreadPoolExecutor(max_workers=min(workers, len(cands)))
+        futures = {pool.submit(_safe_fetch, fetch, c["url"]): i for i, c in enumerate(cands)}
+        try:
+            for fut in as_completed(futures, timeout=budget_s):
+                docs[futures[fut]] = fut.result()
+        except TimeoutError:
+            pass
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
+        for i, c in enumerate(cands):
+            if i not in docs:
+                timed_out += 1
+                docs[i] = {
+                    "url": c["url"],
+                    "pages": [],
+                    "error": f"не проверен: лимит времени проверки ({int(budget_s // 60)} мин)",
+                }
     docs_out: list[dict[str, Any]] = []
     hits = 0
     strong = 0
-    for cand in candidate_docs(admin_docs, max_docs=max_docs):
-        doc = fetch(cand["url"])
+    for i, cand in enumerate(cands):
+        doc = docs[i]
         mentions = find_mentions(doc, terms) if doc.get("pages") else []
         for m in mentions:
             m["url"] = page_url(doc.get("final_url") or cand["url"], m["page"])
@@ -276,6 +325,7 @@ def collect(
             "kind": cand["kind"],
             "is_pdf": doc.get("is_pdf", False),
             "pages": len(doc.get("pages") or []),
+            "partial": doc.get("partial"),
             "error": doc.get("error"),
             "mentions": mentions,
             "strong": any(m["term_kind"] in ("cad", "quarter") for m in mentions)
@@ -284,6 +334,13 @@ def collect(
         hits += len(mentions)
         strong += 1 if row["strong"] else 0
         docs_out.append(row)
+    note = (
+        "Проверены текстовые слои документов по ссылкам из блока выше. Скан без текста и файлы "
+        "больше 25 МБ не читаются — такие помечены. Цитата ведёт на страницу документа "
+        "(для PDF — #page=N); в браузере откроется сам первоисточник."
+    )
+    if timed_out:
+        note += f" Не успели за {int(budget_s // 60)} минуты: {timed_out} — «перечитать документы»."
     return {
         "terms": terms,
         "docs": docs_out,
@@ -291,13 +348,18 @@ def collect(
         "strong": strong,
         "checked": len(docs_out),
         "fetched_ok": sum(1 for d in docs_out if not d["error"]),
+        "timed_out": timed_out,
         "checked_at": datetime.now(UTC).isoformat(timespec="seconds"),
-        "note": (
-            "Проверены текстовые слои документов по ссылкам из блока выше. Скан без текста и файлы "
-            "больше 25 МБ не читаются — такие помечены. Цитата ведёт на страницу документа "
-            "(для PDF — #page=N); в браузере откроется сам первоисточник."
-        ),
+        "note": note,
     }
+
+
+def _safe_fetch(fetch: Callable[[str], dict[str, Any]], url: str) -> dict[str, Any]:
+    try:
+        return fetch(url)
+    except Exception as exc:  # noqa: BLE001 — один документ не должен валить проверку
+        log.warning("evidence fetch %s: %s", url, exc)
+        return {"url": url, "pages": [], "error": f"не разобран: {type(exc).__name__}"}
 
 
 def r25_flag(evidence: dict[str, Any]) -> dict[str, Any] | None:

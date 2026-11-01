@@ -501,7 +501,7 @@ def fetch_evidence(
 
 
 _evidence_running: set[int] = set()
-EVIDENCE_STALE_MIN = 20
+EVIDENCE_STALE_MIN = 8  # фон ограничен 3 мин + разбор; дольше — перезапуск по запросу
 
 
 def start_evidence(item_id: int, cad_num: str, *, refresh: bool = False) -> bool:
