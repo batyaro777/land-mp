@@ -3,10 +3,12 @@
 <article class="admin-docs" id="admin-docs-slot">
   <h4>Документы администрации по территории участка {% if ad.municipality %}<span class="muted">— {{ ad.municipality }}{% if ad.region %}, {{ ad.region }}{% endif %}</span>{% endif %}</h4>
   <p class="small">Обременения и занятость участка часто видны только в документах администрации: проект межевания уже распределил землю, ПЗЗ изменили зону, постановление зарезервировало территорию — а в ЕГРН и НСПД этого ещё нет. Эти документы открыты, но лежат на сайте администрации и в ГИСОГД региона.</p>
-  {% set covering = plans|selectattr('covers_parcel')|list if plans is defined and plans else [] %}
-  {% if covering %}
+  {% set covering = plans|selectattr('covers_parcel')|list if plans else [] %}
+  {% if plans is none %}
+  <p class="muted small">Проверка «участок внутри проекта межевания» по слою НСПД появится после сбора раздела «Локация» (кнопка «обновить» в нём).</p>
+  {% elif covering %}
   <p class="small"><span class="badge mini v-check">проверить</span> <strong>Участок входит в проект межевания по НСПД:</strong> {% for d in covering %}{{ d.document|truncate(120) }}{% if d.issuer %} ({{ d.issuer }}){% endif %}{% if not loop.last %}; {% endif %}{% endfor %}. Найти документ и приложения ниже: кому распределён участок и на каком основании.</p>
-  {% elif plans is defined %}
+  {% else %}
   <p class="muted small">По слою НСПД «участки, образуемые по проекту межевания» этот участок в контуры ПМТ не входит{% if plans %} (рядом: {{ plans|length }}){% endif %}. Это не исключает проект на сайте администрации — слой заполняется не везде.</p>
   {% endif %}
   {% if not ad.municipality %}
@@ -23,7 +25,7 @@
     <ul class="small">{% for l in ad.federal %}<li><a href="{{ l.url }}" target="_blank" rel="noopener">{{ l.title }}</a></li>{% endfor %}</ul>
   </div>
   <div>
-    <strong>Найдено автопоиском{% if ad.found.total %} ({{ ad.found.total }}){% endif %}</strong>
+    <strong>Найдено автопоиском{% if ad.found.total %} ({{ ad.found.total }}){% endif %}</strong>{% if ad.found.dropped %} <span class="muted small">отсеяно нерелевантных: {{ ad.found.dropped }}</span>{% endif %}
     {% if ad.found.total %}
     {% for kind, items in ad.found.docs.items() %}
     <p class="small" style="margin-bottom:.2rem"><b>{{ ad.kind_titles[kind] }}</b></p>

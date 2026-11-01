@@ -751,7 +751,7 @@ def report_admin_docs(
             "_admin_docs.html",
             admin_docs=docs,
             admin_docs_url=f"/checks/{check.id}/items/{cad_num}/admin-docs",
-            plans=((data.get("location") or {}).get("plans") or []),
+            plans=(data["location"].get("plans") or []) if data.get("location") else None,
             user=user,
         )
 

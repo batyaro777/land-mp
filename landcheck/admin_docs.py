@@ -127,6 +127,93 @@ CHECKLIST: tuple[tuple[str, str], ...] = (
 )
 
 
+GENERIC_WORDS = {
+    "город",
+    "города",
+    "район",
+    "округ",
+    "муниципальный",
+    "городской",
+    "курорт",
+    "область",
+    "край",
+    "республика",
+    "сельское",
+    "поселение",
+    "муниципальное",
+    "образование",
+}
+_LAW_ARTICLE_RE = re.compile(r"^\s*(?:ГрК|ЗК|ГК|ЛК|ВК)\s*РФ|^\s*Статья\s+\d", re.I)
+
+
+def stems(name: str | None) -> set[str]:
+    """Основы слов названия для проверки, что документ — про этот муниципалитет/регион:
+    «Козельский район» → {«козельс»}, «город-курорт Сочи» → {«сочи»},
+    «Калужская область» → {«калужс»}."""
+    out: set[str] = set()
+    for word in re.split(r"[\s\-—,()]+", (name or "").lower()):
+        word = word.strip()
+        if len(word) < 4 or word in GENERIC_WORDS:
+            continue
+        out.add(word if len(word) <= 6 else word[: max(5, len(word) - 3)])
+    return out
+
+
+_TRANSLIT = str.maketrans(
+    {
+        "а": "a",
+        "б": "b",
+        "в": "v",
+        "г": "g",
+        "д": "d",
+        "е": "e",
+        "ё": "e",
+        "ж": "zh",
+        "з": "z",
+        "и": "i",
+        "й": "j",
+        "к": "k",
+        "л": "l",
+        "м": "m",
+        "н": "n",
+        "о": "o",
+        "п": "p",
+        "р": "r",
+        "с": "s",
+        "т": "t",
+        "у": "u",
+        "ф": "f",
+        "х": "h",
+        "ц": "c",
+        "ч": "ch",
+        "ш": "sh",
+        "щ": "sch",
+        "ъ": "",
+        "ы": "y",
+        "ь": "",
+        "э": "e",
+        "ю": "yu",
+        "я": "ya",
+    }
+)
+
+
+def translit(stem: str) -> str:
+    return stem.translate(_TRANSLIT)
+
+
+def is_about(text: str, name_stems: set[str]) -> bool:
+    """Текст (заголовок, сниппет, адрес) про этот муниципалитет: кириллическая основа в тексте
+    или её транслит в домене (adm-kozelsk.ru, kozelskgp-adm.ru)."""
+    t = text.lower()
+    return any(st in t or translit(st) in t for st in name_stems)
+
+
+def is_law_article(title: str) -> bool:
+    """Общие статьи кодексов на Консультанте/Гаранте — не документы этого муниципалитета."""
+    return bool(_LAW_ARTICLE_RE.search(title or ""))
+
+
 def host_of(url: str) -> str:
     try:
         return (urlparse(url).hostname or "").lower()
@@ -138,6 +225,8 @@ def is_official(url: str) -> bool:
     host = host_of(url)
     if not host or any(j in host for j in JUNK_HOSTS):
         return False
+    if not (host.endswith(".ru") or host.endswith(".рф") or host.endswith(".su")):
+        return False  # gorod.lv проходил по слову «gorod» (приёмка d378c55)
     if any(h in host for h in OFFICIAL_HINTS):
         return True
     return bool(OFFICIAL_RE.search(host))
@@ -199,13 +288,23 @@ def discover(
     *,
     search: Callable[..., dict[str, Any]] | None = None,
     max_per_kind: int = 4,
+    known_hosts: set[str] | None = None,
 ) -> dict[str, Any]:
-    """Официальные документы по видам через поисковый движок стека (SearXNG → DDGS)."""
+    """Официальные документы по видам через поисковый движок стека (SearXNG → DDGS).
+
+    Фильтры (приёмка d378c55 на проде: в выдаче были gorod.lv, ГИСОГД чужих регионов и статьи
+    Градкодекса): домен официальный и российский; текст про этот муниципалитет (или про регион —
+    для ГИСОГД и региональных порталов); общие статьи кодексов отбрасываются; хосты из реестра
+    муниципалитета проходят всегда."""
     search = search or websearch.search  # разрешается при вызове — удобно подменять в тестах
     docs: dict[str, list[dict[str, Any]]] = {k: [] for k, *_ in KINDS}
     seen: set[str] = set()
     errors: list[str] = []
     engine = None
+    muni_stems = stems(muni_name)
+    region_stems = stems(region)
+    known = {h.lower() for h in (known_hosts or set())}
+    dropped = 0
     for kind, _, _, template in KINDS:
         if kind == "gisogd" and not region:
             continue
@@ -222,7 +321,18 @@ def discover(
             url = (r.get("url") or "").strip()
             if not url or url in seen or not is_official(url):
                 continue
-            k = classify(r.get("title") or "", r.get("snippet") or "", kind)
+            title, snippet = r.get("title") or "", r.get("snippet") or ""
+            host = host_of(url)
+            text = f"{title} {snippet} {url}"
+            trusted = any(host == h or host.endswith("." + h) for h in known)
+            about_muni = is_about(text, muni_stems)
+            about_region = is_about(text, region_stems)
+            if not trusted and (
+                is_law_article(title) or not (about_muni or (kind == "gisogd" and about_region))
+            ):
+                dropped += 1
+                continue
+            k = classify(title, snippet, kind)
             if len(docs[k]) >= max_per_kind:
                 continue
             seen.add(url)
@@ -239,10 +349,15 @@ def discover(
     return {
         "docs": {k: v for k, v in docs.items() if v},
         "total": total,
+        "dropped": dropped,
         "engine": engine,
         "errors": errors,
         "checked_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
+
+
+def registry_hosts(muni: dict[str, Any] | None) -> set[str]:
+    return {host_of(link["url"]) for link in (muni or {}).get("links", []) if link.get("url")}
 
 
 def summary(
@@ -256,7 +371,12 @@ def summary(
     muni = municipality_for(parcel, locality)
     found = discovered
     if found is None and muni["name"]:
-        found = discover(muni["name"], muni["region"], search=search)
+        found = discover(
+            muni["name"],
+            muni["region"],
+            search=search,
+            known_hosts=registry_hosts(muni["registry"]),
+        )
     empty = {"docs": {}, "total": 0, "engine": None, "errors": [], "checked_at": None}
     return {
         "municipality": muni["name"],

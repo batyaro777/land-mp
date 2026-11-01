@@ -458,7 +458,11 @@ def fetch_admin_docs(
     try:
         found = None if refresh else cache.get_region(key)
         if found is None:
-            found = admin_docs.discover(muni["name"], muni["region"])
+            found = admin_docs.discover(
+                muni["name"],
+                muni["region"],
+                known_hosts=admin_docs.registry_hosts(muni["registry"]),
+            )
             if found.get("total") or not found.get("errors"):
                 cache.put_region(key, found)
     finally:

@@ -16,6 +16,20 @@ JUNK = [
         "snippet": "участки",
     },
     {"title": "Что-то на форуме", "url": "https://forum.example.com/t/1", "snippet": "обсуждение"},
+    # приёмка d378c55 на проде: латвийские новости по слову «gorod», ГИСОГД чужого региона,
+    # общая статья Градкодекса, администрация другого района
+    {"title": "Gorod.lv: Новости Даугавпилса", "url": "https://gorod.lv/x", "snippet": "ПЗЗ"},
+    {"title": "Портал ГИС ОГД", "url": "https://gisogd.mos.ru/", "snippet": "Москва"},
+    {
+        "title": "ГрК РФ Статья 30. Правила землепользования и застройки",
+        "url": "https://www.consultant.ru/document/cons_doc_LAW_51040/x/",
+        "snippet": "Козельский район в статье не упоминается, но слово «землепользования» есть",
+    },
+    {
+        "title": "Извещение о предоставлении земельного участка",
+        "url": "https://nadezhdinskij-r25.gosweb.gosuslugi.ru/x",
+        "snippet": "Надеждинский район Приморского края",
+    },
 ]
 
 
@@ -82,6 +96,19 @@ def test_municipality_and_official_filter():
     assert admin_docs.is_official("https://base.garant.ru/1")
     assert not admin_docs.is_official("https://www.avito.ru/x")
     assert not admin_docs.is_official("https://forum.example.com/x")
+    assert not admin_docs.is_official("https://gorod.lv/x")  # не .ru
+    assert admin_docs.stems("Козельский район") == {"козельс"}
+    assert admin_docs.stems("город-курорт Сочи") == {"сочи"}
+    assert admin_docs.stems("Калужская область") == {"калужс"}
+    assert admin_docs.is_about("ПЗЗ Козельского района", admin_docs.stems("Козельский район"))
+    assert admin_docs.is_about(
+        "https://adm-kozelsk.ru/npa/207", admin_docs.stems("Козельский район")
+    )
+    assert admin_docs.translit("козельс") == "kozels" and admin_docs.translit("сочи") == "sochi"
+    assert not admin_docs.is_about("ГИСОГД Москвы", admin_docs.stems("Калужская область"))
+    assert admin_docs.is_law_article("ГрК РФ Статья 30. Правила…")
+    assert admin_docs.is_law_article("Статья 5.1. Общественные обсуждения")
+    assert not admin_docs.is_law_article("Постановление № 207 об изменении проекта межевания")
     assert admin_docs.classify("Генеральный план поселения", "", "npa") == "genplan"
     assert admin_docs.classify("Без ключевых слов", "", "npa") == "npa"
     # слова вида запроса в приоритете
@@ -99,7 +126,33 @@ def test_discover_groups_official_docs_by_kind():
     assert "gisogd" in docs
     urls = [d["url"] for v in docs.values() for d in v]
     assert len(urls) == len(set(urls)) and not any("avito" in u or "forum" in u for u in urls)
-    assert found["total"] == len(urls) == 4
+    assert not any(
+        "gorod.lv" in u or "gisogd.mos" in u or "r25" in u or "consultant" in u for u in urls
+    )
+    assert found["total"] == len(urls) == 4 and found["dropped"] >= 3
+    # хост из реестра муниципалитета проходит и без упоминания названия в тексте
+    plain = {
+        "results": [
+            {"title": "Документы", "url": "https://www.kozelskgp-adm.ru/docs", "snippet": ""}
+        ],
+        "engine": "fake",
+        "error": None,
+    }
+    found2 = admin_docs.discover(
+        "Козельский район", None, search=lambda q, **_: plain, known_hosts={"www.kozelskgp-adm.ru"}
+    )
+    assert found2["total"] == 1 and found2["dropped"] == 0
+    found3 = admin_docs.discover("Козельский район", None, search=lambda q, **_: plain)
+    assert found3["total"] == 1  # домен с транслитом названия (kozelsk…) — про этот муниципалитет
+    other = {
+        "results": [
+            {"title": "Документы", "url": "https://www.adm-primorye.ru/docs", "snippet": ""}
+        ],
+        "engine": "fake",
+        "error": None,
+    }
+    found4 = admin_docs.discover("Козельский район", None, search=lambda q, **_: other)
+    assert found4["total"] == 0 and found4["dropped"] == 6
     s = admin_docs.summary(
         {"cad_num": "40:10:160500:1", "address": "Калужская область, Козельский район"},
         None,
@@ -172,6 +225,8 @@ def test_admin_docs_block_in_report(client, monkeypatch):  # noqa: F811
     assert "Что именно смотреть в документах администрации" in block and "ППТ/ПМТ" in block
     # синтетический адрес фикстуры муниципалитет не даёт — блок честно говорит об этом
     assert "Муниципалитет по адресу НСПД не определён" in block
+    # «Локация» не собрана — про проект межевания по НСПД ничего не утверждаем
+    assert "появится после сбора раздела «Локация»" in block and "не входит" not in block
     page = client.get(base).text  # повторно — блок уже в данных строки, без HTMX-слота
     assert "admin-docs-slot" in page and 'hx-trigger="load delay:4s"' not in page
     assert client.get(base + "/admin-docs?refresh=1").status_code == 200
