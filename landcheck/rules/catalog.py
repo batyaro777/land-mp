@@ -401,6 +401,15 @@ SRC_FOREST_PARK = (
     "зелёном поясе запрещено строительство вне перечня, перевод и изъятие земель ограничены"
 )
 OOPT_MIN_SHARE = 0.05  # меньше — считаем касанием границы, не вхождением
+SRC_OOPT_SETTLEMENT = (
+    "ст. 3.1 33-ФЗ (введена 505-ФЗ от 30.12.2020) и п. 6 ст. 95 ЗК РФ: населённые пункты включаются "
+    "в состав ООПТ без изъятия участков у правообладателей, оборот и приватизация допускаются, если "
+    "границы населённого пункта внесены в ЕГРН; режим ООПТ ограничивает строительство"
+)
+
+
+def _pct(share: float) -> str:
+    return "<1%" if 0 < share < 0.01 else f"{share:.0%}"
 
 
 def _overlap_share(parcel_geojson, features: list) -> float | None:
@@ -436,18 +445,32 @@ def r22_oopt(ctx: RuleContext):
         "oopt": [{"reg_number": z.reg_number, "name": z.name, "kind": z.kind} for z in p.oopt],
         "share": share,
     }
-    protected_cat = category_class(p.category) == "protected"
+    cls = category_class(p.category)
     if share is not None and share < OOPT_MIN_SHARE:
         return Flag(
             "R22",
             Level.CHECK,
-            f"граница ООПТ ({names}) задевает участок на {share:.0%} площади: проверить, не "
+            f"граница ООПТ ({names}) задевает участок на {_pct(share)} площади: проверить, не "
             "наложение ли это границ — запрос в дирекцию ООПТ или Минприроды региона",
             SRC_OOPT,
             details,
         )
-    pct = f" ({share:.0%} площади)" if share is not None else ""
-    if protected_cat:
+    pct = f" ({_pct(share)} площади)" if share is not None else ""
+    if cls == "settlement":
+        # Деревня внутри нацпарка (приёмка Клавдия, нацпарк «Угра»): участки законно частные,
+        # оборот разрешён ст. 3.1 33-ФЗ — это «проверить», не «стоп».
+        return Flag(
+            "R22",
+            Level.CHECK,
+            f"участок в границах ООПТ ({names}){pct} внутри населённого пункта: оборот и "
+            "частная собственность допускаются без изъятия у правообладателей, если границы "
+            "населённого пункта внесены в ЕГРН (ст. 3.1 33-ФЗ, п. 6 ст. 95 ЗК); строительство — по "
+            "режиму ООПТ и с согласованием дирекции; проверить границы населённого пункта в ЕГРН и "
+            "историю образования участка",
+            SRC_OOPT_SETTLEMENT,
+            details,
+        )
+    if cls == "protected":
         return Flag(
             "R22",
             Level.CHECK,
@@ -477,7 +500,7 @@ def r23_forest_park(ctx: RuleContext):
     share = _overlap_share(p.geometry, p.raw.get("forest_park") or [])
     if share is not None and share < OOPT_MIN_SHARE:
         return None  # касание границы
-    pct = f" ({share:.0%} площади)" if share is not None else ""
+    pct = f" ({_pct(share)} площади)" if share is not None else ""
     names = "; ".join(z.describe(max_len=80) for z in p.forest_park[:2])
     return Flag(
         "R23",

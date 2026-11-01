@@ -27,8 +27,19 @@ def run(payload, purpose=Purpose.IZHS):
     return parcel, {f.rule_id: f for f in evaluate(ctx)}
 
 
+AGRI = "Земли сельскохозяйственного назначения"
+
+
 def test_oopt_inside_is_stop_even_with_clean_category():
-    parcel, flags = run(make_payload("23:49:0420002:1332", oopt=[boundary(OOPT, "23:49-6.123")]))
+    # сельхозка внутри нацпарка (кейс Влада: 5 га в Красной Поляне) — стоп
+    parcel, flags = run(
+        make_payload(
+            "23:49:0420002:1332",
+            category=AGRI,
+            vri="Для сельскохозяйственного производства",
+            oopt=[boundary(OOPT, "23:49-6.123")],
+        )
+    )
     assert parcel.oopt_checked and len(parcel.oopt) == 1
     f = flags["R22"]
     assert f.level is Level.STOP and "23:49-6.123" in f.message and "100%" in f.message
@@ -46,11 +57,23 @@ def test_oopt_inside_is_stop_even_with_clean_category():
     assert back.parcel.oopt_checked and back.parcel.oopt[0].reg_number == "23:49-6.123"
 
 
+def test_oopt_settlement_inside_park_is_check_with_505fz():
+    # деревня внутри нацпарка «Угра» (приёмка 5f6123a): участки законно частные — проверить
+    _, flags = run(make_payload("40:04:180201:66", oopt=[boundary(OOPT, "40:00-9.6")]))
+    f = flags["R22"]
+    assert f.level is Level.CHECK and "населённого пункта" in f.message
+    assert "ст. 3.1 33-ФЗ" in f.message and "505-ФЗ" in f.source
+
+
 def test_oopt_touch_and_protected_category_are_check():
-    _, flags = run(make_payload("x", oopt=[boundary(OOPT, "r1", SLIVER)]))
+    _, flags = run(make_payload("x", category=AGRI, oopt=[boundary(OOPT, "r1", SLIVER)]))
     assert flags["R22"].level is Level.CHECK and "задевает" in flags["R22"].message
-    _, flags = run(make_payload("x", oopt=[boundary(OOPT, "r1", CORNER)]))
+    assert "1% площади" in flags["R22"].message
+    _, flags = run(make_payload("x", category=AGRI, oopt=[boundary(OOPT, "r1", CORNER)]))
     assert flags["R22"].level is Level.STOP and "25%" in flags["R22"].message
+    from landcheck.rules.catalog import _pct
+
+    assert _pct(0.004) == "<1%" and _pct(0.0) == "0%" and _pct(0.25) == "25%"
     _, flags = run(
         make_payload(
             "x",
