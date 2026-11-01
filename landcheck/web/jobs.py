@@ -377,24 +377,99 @@ def fetch_region(
         cache.close()
 
 
-def fetch_auctions(cad_num: str, *, refresh: bool = False) -> dict[str, Any]:
-    """Сводка торгов torgi.gov.ru по кадастровому району (ТЗ v3, п. 9): кэш на сутки → RU-шлюз.
-    Ошибки внутри результата (`error`), наружу исключений нет."""
+def _torgi_key(cad_num: str) -> str | None:
     from landcheck import torgi
 
     district = torgi.district_of(cad_num)
-    if district is None:
-        return torgi.empty_result(cad_num, "кадастровый номер без района — торги не ищем")
-    key = f"torgi:{district}:{torgi.MONTHS}"
+    return f"torgi:{district}:{torgi.MONTHS}" if district else None
+
+
+def cached_auctions(cad_num: str) -> dict[str, Any] | None:
+    """Готовая сводка торгов из кэша (сутки), если есть и без ошибки."""
+    key = _torgi_key(cad_num)
+    if key is None:
+        return None
     cache = ParcelCache(settings.cache_path, ttl_days=settings.torgi_ttl_days)
     try:
-        if not refresh:
-            cached = cache.get_region(key)
-            if cached is not None and not cached.get("error"):
-                return cached
-        result = torgi.nearby_auctions(cad_num)
-        if not result.get("error"):
-            cache.put_region(key, result)
-        return result
+        cached = cache.get_region(key)
     finally:
         cache.close()
+    return cached if cached is not None and not cached.get("error") else None
+
+
+def fetch_auctions(cad_num: str, *, refresh: bool = False) -> dict[str, Any]:
+    """Сводка торгов torgi.gov.ru по кадастровому району (ТЗ v3, п. 9): кэш на сутки → RU-шлюз.
+    Медленно (torgi пропускает запрос раз в 6 с — один район 2–5 минут), поэтому из веба
+    вызывается только через `start_auctions`. Ошибки внутри результата, исключений наружу нет."""
+    from landcheck import torgi
+
+    key = _torgi_key(cad_num)
+    if key is None:
+        return torgi.empty_result(cad_num, "кадастровый номер без района — торги не ищем")
+    if not refresh:
+        cached = cached_auctions(cad_num)
+        if cached is not None:
+            return cached
+    result = torgi.nearby_auctions(cad_num)
+    if not result.get("error"):
+        cache = ParcelCache(settings.cache_path, ttl_days=settings.torgi_ttl_days)
+        try:
+            cache.put_region(key, result)
+        finally:
+            cache.close()
+    return result
+
+
+_auctions_running: set[int] = set()
+AUCTIONS_STALE_MIN = 15  # «собираем» старше этого — считаем задачу потерянной и запускаем снова
+
+
+def start_auctions(item_id: int, cad_num: str, *, refresh: bool = False) -> bool:
+    """Запустить сбор торгов для строки проверки в фоне (не чаще одного на строку).
+    Возвращает True, если задача поставлена."""
+    with _lock:
+        if item_id in _auctions_running:
+            return False
+        _auctions_running.add(item_id)
+    executor().submit(_auctions_job, item_id, cad_num, refresh)
+    return True
+
+
+def _auctions_job(item_id: int, cad_num: str, refresh: bool) -> None:
+    try:
+        result = fetch_auctions(cad_num, refresh=refresh)
+    except Exception as exc:  # noqa: BLE001 — фон не должен падать молча
+        log.warning("auctions %s: %s", cad_num, exc)
+        from landcheck import torgi
+
+        result = torgi.empty_result(cad_num, f"сбой сбора торгов: {type(exc).__name__}")
+    try:
+        with session() as db:
+            item = db.get(CheckItem, item_id)
+            if item is not None:
+                item.data = {**(item.data or {}), "auctions": result}
+                db.commit()
+    finally:
+        with _lock:
+            _auctions_running.discard(item_id)
+
+
+def auctions_pending(cad_num: str) -> dict[str, Any]:
+    """Заглушка «собираем» в данные строки, пока фоновая задача не закончила."""
+    from landcheck import torgi
+
+    return {
+        "pending": True,
+        "district": torgi.district_of(cad_num),
+        "started_at": datetime.now(UTC).isoformat(timespec="seconds"),
+    }
+
+
+def auctions_stale(auctions: dict[str, Any]) -> bool:
+    if not auctions.get("pending"):
+        return False
+    try:
+        started = datetime.fromisoformat(auctions["started_at"])
+    except (KeyError, ValueError):
+        return True
+    return (datetime.now(UTC) - started).total_seconds() > AUCTIONS_STALE_MIN * 60

@@ -109,7 +109,7 @@ def _handler(seen: list[dict]):
 def test_nearby_auctions_stats_and_district_filter():
     seen: list[dict] = []
     client = httpx.Client(transport=httpx.MockTransport(_handler(seen)))
-    a = torgi.nearby_auctions("40:13:120101:22", client=client, now=NOW)
+    a = torgi.nearby_auctions("40:13:120101:22", client=client, now=NOW, interval=0)
     assert a["error"] is None and a["district"] == "40:13" and a["region"] == "40"
     # счётчики — только по лотам своего района, а не по totalElements поиска (он шире)
     assert (a["succeed_total"], a["failed_total"], a["active_total"], a["ea_total"]) == (
@@ -119,6 +119,7 @@ def test_nearby_auctions_stats_and_district_filter():
         6,
     )
     assert a["liquidity"] == 0.6 and a["complete"] is True and a["requests"] == 6
+    assert a["retries"] == 0
     # карточки тянем только для лотов своего района: 3 из 4
     cards = [s for s in seen if "/lotcards/" in s["path"] and not s["path"].endswith("search")]
     assert len(cards) == 3 and all(not s["path"].endswith("B_1") for s in cards)
@@ -154,10 +155,35 @@ def test_nearby_auctions_marks_truncated_pages():
         return httpx.Response(200, json=_card(url.path.rsplit("/", 1)[-1], "40:13:000001:1"))
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
-    a = torgi.nearby_auctions("40:13:120101:22", client=client, now=NOW)
+    a = torgi.nearby_auctions("40:13:120101:22", client=client, now=NOW, interval=0)
     assert a["complete"] is False and a["succeed_total"] == torgi.MAX_PAGES
     assert "счётчики по району занижены" in a["sample_note"]
     assert a["requests"] == torgi.MAX_PAGES * 3 + torgi.MAX_PAGES  # страницы + карточки
+
+
+def test_throttle_and_503_retry():
+    """torgi режет частые запросы: пауза между запросами и повтор на 503 с выдержкой."""
+    torgi._last_request_at = 0.0
+    calls = {"search": 0}
+    sleeps: list[float] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = urlparse(str(req.url))
+        if url.path.endswith("/lotcards/search"):
+            calls["search"] += 1
+            if calls["search"] == 1:
+                return httpx.Response(503, text="Service Unavailable")
+            return httpx.Response(200, json=_page([], 0))
+        return httpx.Response(200, json={})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    a = torgi.nearby_auctions(
+        "40:13:120101:22", client=client, now=NOW, interval=6.0, sleep=sleeps.append
+    )
+    assert a["error"] is None and a["retries"] == 1 and a["requests"] == 4
+    assert torgi.RETRY_DELAYS_S[0] in sleeps  # выдержка после 503
+    gaps = [x for x in sleeps if x not in torgi.RETRY_DELAYS_S]
+    assert len(gaps) >= 3 and all(0 < g <= 6.0 for g in gaps)  # пауза между запросами
 
 
 def test_nearby_auctions_network_error_is_contained():
@@ -165,7 +191,7 @@ def test_nearby_auctions_network_error_is_contained():
         raise httpx.ConnectError("socks refused", request=req)
 
     client = httpx.Client(transport=httpx.MockTransport(boom))
-    a = torgi.nearby_auctions("40:13:120101:22", client=client, now=NOW)
+    a = torgi.nearby_auctions("40:13:120101:22", client=client, now=NOW, interval=0)
     assert a["error"] == "torgi.gov.ru не ответил: ConnectError"
     assert a["liquidity_text"] == a["error"] and a["items"] == [] and a["ea_total"] == 0
 

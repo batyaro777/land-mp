@@ -18,6 +18,8 @@ from __future__ import annotations
 import logging
 import re
 import statistics
+import threading
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -37,8 +39,12 @@ SOURCE = (
 SCHEMA_VERSION = 1
 MONTHS = 12
 PAGE_SIZE = 10  # сервер молча режет size до 10
-MAX_PAGES = 10  # страниц поиска на каждый статус: поиск по тексту отдаёт и соседние районы
-MAX_CARDS = 20  # карточек состоявшихся лотов (итоговая цена только в карточке)
+MAX_PAGES = 8  # страниц поиска на каждый статус: поиск по тексту отдаёт и соседние районы
+MAX_CARDS = 12  # карточек состоявшихся лотов (итоговая цена только в карточке)
+# torgi.gov.ru режет частые запросы: после 3 подряд — 503, с паузой 6 с проходят все
+# (Клавдий, прод 01.11). Пауза общая на процесс, повтор на 503 с нарастающей выдержкой.
+REQUEST_INTERVAL_S = 6.0
+RETRY_DELAYS_S = (10.0, 20.0, 40.0)
 STATUS_ACTIVE = "PUBLISHED,APPLICATIONS_SUBMISSION,DETERMINING_WINNER"
 STATUS_SUCCEED = "SUCCEED"
 STATUS_FAILED = "FAILED"
@@ -63,19 +69,55 @@ def region_of(cad_num: str | None) -> str | None:
 
 
 # --- клиент ------------------------------------------------------------------------------
+_throttle_lock = threading.Lock()
+_last_request_at = 0.0
+
+
+def _wait_turn(interval: float, sleep=time.sleep) -> None:
+    """Не чаще одного запроса в `interval` секунд на весь процесс (все районы, все потоки)."""
+    global _last_request_at
+    with _throttle_lock:
+        now = time.monotonic()
+        wait = _last_request_at + interval - now
+        if wait > 0:
+            sleep(wait)
+            now = time.monotonic()
+        _last_request_at = now
+
+
 class TorgiClient:
-    def __init__(self, client: httpx.Client | None = None):
+    def __init__(
+        self,
+        client: httpx.Client | None = None,
+        *,
+        interval: float = REQUEST_INTERVAL_S,
+        retry_delays: tuple[float, ...] = RETRY_DELAYS_S,
+        sleep=time.sleep,
+    ):
         self._c = client or ruproxy.client()
         self.requests = 0
+        self.retries = 0
+        self._interval = interval
+        self._retry_delays = retry_delays
+        self._sleep = sleep
 
     def close(self) -> None:
         self._c.close()
 
     def _get(self, url: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        self.requests += 1
-        r = self._c.get(url, params=params)
-        r.raise_for_status()
-        return r.json()
+        for attempt in range(len(self._retry_delays) + 1):
+            _wait_turn(self._interval, self._sleep)
+            self.requests += 1
+            r = self._c.get(url, params=params)
+            if r.status_code in (429, 503) and attempt < len(self._retry_delays):
+                self.retries += 1
+                delay = self._retry_delays[attempt]
+                log.info("torgi: %s → %s, пауза %.0f с", url, r.status_code, delay)
+                self._sleep(delay)
+                continue
+            r.raise_for_status()
+            return r.json()
+        raise httpx.HTTPError("torgi: исчерпаны повторы")  # pragma: no cover
 
     def search(
         self,
@@ -259,6 +301,8 @@ def nearby_auctions(
     *,
     client: httpx.Client | None = None,
     now: datetime | None = None,
+    interval: float = REQUEST_INTERVAL_S,
+    sleep=time.sleep,
 ) -> dict[str, Any]:
     """Сводка торгов по кадастровому району участка. Ошибки — внутри (`error`), не наружу."""
     district = district_of(cad_num)
@@ -271,7 +315,7 @@ def nearby_auctions(
         )
     now = now or datetime.now(UTC)
     pub_from = (now - timedelta(days=30 * MONTHS)).date().isoformat()
-    api = TorgiClient(client)
+    api = TorgiClient(client, interval=interval, sleep=sleep)
     result = empty_result(cad_num)
     try:
         # Поиск по тексту «40:13» отдаёт и соседние районы (40:14, 40:17…), поэтому считаем
@@ -320,6 +364,7 @@ def nearby_auctions(
         )
     result["sample_note"] = "; ".join(notes) or None
     result["requests"] = api.requests
+    result["retries"] = api.retries
     result["liquidity_text"] = liquidity_text(result)
     return result
 

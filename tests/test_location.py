@@ -657,23 +657,36 @@ def test_auctions_block_admin_only(client, fixtures_dir: Path, monkeypatch):  # 
         return canned
 
     monkeypatch.setattr(jobs, "fetch_auctions", fake_fetch)
+    # фоновая задача — синхронно, чтобы тест не гонялся с потоком
+    monkeypatch.setattr(
+        jobs,
+        "start_auctions",
+        lambda item_id, cad, refresh=False: (jobs._auctions_job(item_id, cad, refresh), True)[1],
+    )
     login(client)
     r = client.post(
         "/checks", data={"numbers": "50:09:0060202:101; 2 500 000; 10 сот", "purpose": "izhs"}
     )
-    url = r.headers["location"] + "/items/50:09:0060202:101/location"
-    block = client.get(url).text
+    base = r.headers["location"] + "/items/50:09:0060202:101"
+    block = client.get(base + "/location").text
     assert "Торги рядом за год" not in block and calls == []  # обычный пользователь не видит
+    assert client.get(base + "/auctions").status_code == 404
     with session() as db:
         db.execute(update(User).values(is_admin=True))
         db.commit()
-    block = client.get(url).text
-    assert "Торги рядом за год" in block and "кадастровый район 50:09" in block
+    block = client.get(base + "/location").text  # первый заход: заглушка «собираем» + опрос
+    assert "Торги рядом за год" in block and "собираем" in block
+    assert 'hx-get="' + base + '/auctions"' in block and "every 30s" in block
+    assert calls == [("50:09:0060202:101", False)]
+    block = client.get(base + "/auctions").text  # фон уже записал результат в item.data
+    assert "собираем" not in block and "кадастровый район 50:09" in block
     assert "состоялись 3 из 4 завершённых (75 %)" in block and "спрос есть" in block
     from landcheck.web.serialize import fmt_money
 
     assert "50:09:0060202:77" in block and fmt_money(1_200_000) in block and "×1.4" in block
-    assert calls == [("50:09:0060202:101", False)]
-    client.get(url)  # второй заход — из item.data, job не дёргаем
     assert len(calls) == 1
+    block = client.get(base + "/location").text  # повторно — из item.data, без новой задачи
+    assert "кадастровый район 50:09" in block and len(calls) == 1
+    client.get(base + "/auctions?refresh=1")  # «обновить» — новая задача с refresh
+    assert calls[-1] == ("50:09:0060202:101", True)
     (fixtures_dir / "50_09_0060202_101.location.json").unlink()

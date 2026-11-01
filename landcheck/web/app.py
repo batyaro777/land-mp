@@ -1042,11 +1042,9 @@ def report_location(request: Request, user: UserDep, check_id: int, cad_num: str
             )
         elif data.get("terrain") is None and parcel.get("geometry"):
             data = _merge_item_data(db, item, terrain=_terrain_for(parcel.get("geometry"), loc))
-        # Торги рядом (ТЗ v3, п. 9) — внутренний режим: только админу, через RU-шлюз.
-        auctions = data.get("auctions")
-        if user.is_admin and (auctions is None or refresh):
-            auctions = jobs.fetch_auctions(cad_num, refresh=bool(refresh))
-            data = _merge_item_data(db, item, auctions=auctions)
+        # Торги рядом (ТЗ v3, п. 9) — внутренний режим: только админу, через RU-шлюз,
+        # в фоне (torgi пропускает запрос раз в 6 с) — блок сам опрашивает /auctions.
+        auctions = _auctions_for(db, item, user, cad_num, bool(refresh))
         return render(
             request,
             "_location.html",
@@ -1055,11 +1053,55 @@ def report_location(request: Request, user: UserDep, check_id: int, cad_num: str
             rights=data.get("rights"),
             gpzu=data.get("gpzu"),
             auctions=auctions,
+            auctions_url=f"/checks/{check.id}/items/{cad_num}/auctions",
             public=False,
             location_url=f"/checks/{check.id}/items/{cad_num}/location",
             region=data.get("region"),
             user=user,
             **_loc_extras(loc, data.get("region")),
+        )
+
+
+def _auctions_for(
+    db, item: CheckItem, user: User, cad_num: str, refresh: bool
+) -> dict[str, Any] | None:
+    """Сводка торгов для админа: из данных строки / кэша, иначе фоновый сбор и заглушка."""
+    if not user.is_admin:
+        return None
+    data = item.data or {}
+    auctions = data.get("auctions")
+    if auctions and not refresh and not jobs.auctions_stale(auctions):
+        return auctions
+    if not refresh:
+        cached = jobs.cached_auctions(cad_num)
+        if cached is not None:
+            _merge_item_data(db, item, auctions=cached)
+            return cached
+    pending = jobs.auctions_pending(cad_num)
+    _merge_item_data(db, item, auctions=pending)
+    jobs.start_auctions(item.id, cad_num, refresh=refresh)
+    return pending
+
+
+@router.get("/checks/{check_id}/items/{cad_num}/auctions", response_class=HTMLResponse)
+def report_auctions(request: Request, user: UserDep, check_id: int, cad_num: str, refresh: int = 0):
+    """Блок «Торги рядом за год» (HTMX-опрос, пока фоновый сбор не закончил; только админу)."""
+    if not user.is_admin:
+        raise HTTPException(404)
+    with session() as db:
+        check = _own_check(db, user, check_id)
+        item = db.scalar(
+            select(CheckItem).where(CheckItem.check_id == check.id, CheckItem.cad_num == cad_num)
+        )
+        if item is None:
+            raise HTTPException(404)
+        auctions = _auctions_for(db, item, user, cad_num, bool(refresh))
+        return render(
+            request,
+            "_auctions.html",
+            auctions=auctions,
+            auctions_url=f"/checks/{check.id}/items/{cad_num}/auctions",
+            user=user,
         )
 
 
