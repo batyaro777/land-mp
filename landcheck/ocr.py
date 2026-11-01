@@ -65,7 +65,9 @@ def tesseract_env() -> dict[str, str]:
 def recognize_png(png: bytes, lang: str = OCR_LANG) -> str:
     """tesseract из stdin в stdout; без временных файлов."""
     proc = subprocess.run(  # noqa: S603 — фиксированная команда, данные только через stdin
-        ["tesseract", "stdin", "stdout", "-l", lang, "--psm", "4"],
+        # psm 1: сегментация с определением ориентации — сканы администраций бывают повёрнуты на 90°
+        # (прод 01.11: страница «Решения ГСС № 44» давала 0 символов в psm 4 и 1732 в psm 1)
+        ["tesseract", "stdin", "stdout", "-l", lang, "--psm", "1"],
         input=png,
         capture_output=True,
         timeout=OCR_PAGE_TIMEOUT_S,

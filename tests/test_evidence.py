@@ -459,8 +459,9 @@ def test_page_links_strip_file_size_from_anchor():
     ]
 
 
-def _scan_pdf(lines: list[str]) -> bytes:
-    """PDF-скан без текстового слоя: картинка с текстом (как у администраций)."""
+def _scan_pdf(lines: list[str], *, rotate: int = 0) -> bytes:
+    """PDF-скан без текстового слоя: картинка с текстом (как у администраций); rotate — поворот
+    страницы в градусах (сканы бывают повёрнуты на 90°)."""
     import io
 
     from PIL import Image, ImageDraw, ImageFont
@@ -485,6 +486,8 @@ def _scan_pdf(lines: list[str]) -> bytes:
     for line in lines:
         draw.text((40, y), line, fill=0, font=font)
         y += 70
+    if rotate:
+        img = img.rotate(rotate, expand=True, fillcolor=255)
     buf = io.BytesIO()
     img.save(buf, format="PDF", resolution=200)
     return buf.getvalue()
@@ -522,6 +525,18 @@ def test_ocr_reads_scanned_pdf_and_normalizes_numbers():
     assert "40:10:160500:1" in text and "изымается" in text.lower()
     assert ocr.normalize("4О:1O:16О5ОО:1 и 40 : 10 : 160500") == "40:10:160500:1 и 40:10:160500"
     assert ocr.tesseract_env()["OMP_THREAD_LIMIT"] == "1"  # по одному потоку на процесс
+    # повёрнутая на 90° страница (прод 01.11, Сочи): ориентация определяется автоматически
+    rotated = _scan_pdf(
+        [
+            "ПОСТАНОВЛЕНИЕ администрации",
+            "Участок 40:10:160500:1 изымается",
+            "д. Дешовки",
+            "Срок 2026",
+        ],
+        rotate=90,
+    )
+    pages, _ = ocr.pdf_ocr_pages(rotated)
+    assert pages and "40:10:160500:1" in pages[0]["text"]
 
 
 def test_fetch_document_falls_back_to_ocr_for_scans(monkeypatch):
