@@ -457,3 +457,132 @@ def test_page_links_strip_file_size_from_anchor():
         "Решение ГСС от 10.04.2025 № 44",
         "Проект планировки",
     ]
+
+
+def _scan_pdf(lines: list[str]) -> bytes:
+    """PDF-скан без текстового слоя: картинка с текстом (как у администраций)."""
+    import io
+
+    from PIL import Image, ImageDraw, ImageFont
+
+    img = Image.new("L", (1700, 500), 255)
+    draw = ImageDraw.Draw(img)
+    font = None
+    for path in (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    ):
+        try:
+            font = ImageFont.truetype(path, 44)
+            break
+        except OSError:
+            continue
+    if font is None:
+        import pytest
+
+        pytest.skip("нет TTF-шрифта с кириллицей для синтетического скана")
+    y = 40
+    for line in lines:
+        draw.text((40, y), line, fill=0, font=font)
+        y += 70
+    buf = io.BytesIO()
+    img.save(buf, format="PDF", resolution=200)
+    return buf.getvalue()
+
+
+def _docx(paragraphs: list[str]) -> bytes:
+    import io
+    import zipfile
+
+    body = "".join(f"<w:p><w:r><w:t>{p}</w:t></w:r></w:p>" for p in paragraphs)
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats'
+        f'.org/wordprocessingml/2006/main"><w:body>{body}</w:body></w:document>'
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("[Content_Types].xml", "<Types/>")
+        zf.writestr("word/document.xml", xml)
+    return buf.getvalue()
+
+
+def test_ocr_reads_scanned_pdf_and_normalizes_numbers():
+    import pytest
+
+    from landcheck import ocr
+
+    if not ocr.available():
+        pytest.skip("tesseract не установлен")
+    raw = _scan_pdf(
+        ["ПОСТАНОВЛЕНИЕ администрации", "Участок 40:10:160500:1 изымается", "д. Дешовки"]
+    )
+    pages, partial = ocr.pdf_ocr_pages(raw)
+    assert partial is None and len(pages) == 1 and pages[0]["n"] == 1
+    text = pages[0]["text"]
+    assert "40:10:160500:1" in text and "изымается" in text.lower()
+    assert ocr.normalize("4О:1O:16О5ОО:1 и 40 : 10 : 160500") == "40:10:160500:1 и 40:10:160500"
+
+
+def test_fetch_document_falls_back_to_ocr_for_scans(monkeypatch):
+    from landcheck import ocr
+
+    raw = _scan_pdf(["Схема расположения участка 40:10:160500:1"])
+    monkeypatch.setattr(evidence, "_download", lambda url: (raw, "application/pdf", url, 200))
+    monkeypatch.setattr(ocr, "available", lambda: True)
+    monkeypatch.setattr(
+        ocr,
+        "pdf_ocr_pages",
+        lambda data, **kw: ([{"n": 1, "text": "Схема расположения участка 40:10:160500:1"}], None),
+    )
+    doc = evidence.fetch_document("https://adm.example.ru/scan.pdf")
+    assert doc["is_pdf"] and doc["ocr"] and doc["error"] is None and doc["pages"][0]["n"] == 1
+    terms = evidence.terms_for(PARCEL, None)
+    found = evidence.find_mentions(doc, terms)
+    assert found and found[0]["term_kind"] == "cad" and found[0]["page"] == 1
+    # без OCR скан честно помечен
+    monkeypatch.setattr(ocr, "available", lambda: False)
+    doc = evidence.fetch_document("https://adm.example.ru/scan2.pdf")
+    assert doc["pages"] == [] and doc["error"].startswith("PDF без текстового слоя")
+
+
+def test_docx_and_zip_attachments_are_read(monkeypatch):
+    import io
+    import zipfile
+
+    docx = _docx(["Постановление № 207", "Образуемый участок 40:10:160500:1 — под улицу"])
+    monkeypatch.setattr(
+        evidence,
+        "_download",
+        lambda url: (
+            docx,
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            url,
+            200,
+        ),
+    )
+    doc = evidence.fetch_document("https://adm.example.ru/post-207.docx")
+    assert doc["format"] == "docx" and doc["error"] is None
+    assert "40:10:160500:1" in doc["pages"][0]["text"] and doc["pages"][0]["n"] is None
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("docs/Приложение 1.docx", docx)
+        zf.writestr("docs/readme.txt", "x")
+    monkeypatch.setattr(
+        evidence, "_download", lambda url: (buf.getvalue(), "application/zip", url, 200)
+    )
+    doc = evidence.fetch_document("https://adm.example.ru/pmt.zip")
+    assert doc["format"] == "zip" and doc["error"] is None
+    assert doc["pages"][0]["label"] == "файл Приложение 1.docx"
+    found = evidence.find_mentions(doc, evidence.terms_for(PARCEL, None))
+    assert found[0]["label"] == "файл Приложение 1.docx"
+    ev = evidence.collect(
+        PARCEL,
+        {"registry": {"links": [{"url": "https://adm.example.ru/pmt.zip", "title": "ПМТ"}]}},
+        None,
+        fetch=lambda url: doc,
+    )
+    assert ev["docs"][0]["mentions"][0]["url"] == "https://adm.example.ru/pmt.zip"  # без #page
+    flag = evidence.r25_flag(ev)
+    assert flag and "файл Приложение 1.docx" in flag["message"]
+    assert evidence.page_links('<a href="/a.docx">Приложение</a><a href="/b.zip">Архив</a>', NPA)

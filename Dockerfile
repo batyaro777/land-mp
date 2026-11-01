@@ -5,7 +5,9 @@ FROM python:3.12-slim-bookworm
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 WORKDIR /app
 
+# tesseract-ocr + rus: OCR сканов документов администраций («первоисточники», ТЗ п. 2.5)
 RUN apt-get update && apt-get install -y --no-install-recommends openssl libengine-gost-openssl \
+    tesseract-ocr tesseract-ocr-rus \
     && rm -rf /var/lib/apt/lists/*
 
 ARG ASR_LOCAL=0

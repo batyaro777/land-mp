@@ -25,7 +25,7 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
-from landcheck import ruproxy, websearch
+from landcheck import ocr, ruproxy, websearch
 from landcheck.inputs import CAD_RE
 
 log = logging.getLogger(__name__)
@@ -106,12 +106,96 @@ def terms_for(parcel: dict[str, Any], locality: str | None) -> list[dict[str, st
 
 
 # --- загрузка и текст --------------------------------------------------------------------------
+OFFICE_EXT = (".pdf", ".docx", ".zip")
+ZIP_MAX_MEMBERS = 5
+
+
 def _is_pdf(content_type: str, url: str, head: bytes) -> bool:
     return (
         "pdf" in content_type.lower()
         or urlparse(url).path.lower().endswith(".pdf")
         or head[:5] == b"%PDF-"
     )
+
+
+def _format_of(content_type: str, url: str, raw: bytes) -> str:
+    """pdf | docx | zip | html | other — по заголовку, расширению и сигнатуре файла."""
+    if _is_pdf(content_type, url, raw[:8]):
+        return "pdf"
+    path = urlparse(url).path.lower()
+    ctype = content_type.lower()
+    if raw[:2] == b"PK":
+        if (
+            path.endswith(".docx")
+            or "wordprocessingml" in ctype
+            or _zip_has(raw, "word/document.xml")
+        ):
+            return "docx"
+        return "zip"
+    if "html" in ctype or raw[:300].lower().lstrip().startswith((b"<!doctype", b"<html")):
+        return "html"
+    return "other"
+
+
+def _zip_has(raw: bytes, name: str) -> bool:
+    import zipfile
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+            return name in zf.namelist()
+    except zipfile.BadZipFile:
+        return False
+
+
+def docx_text(raw: bytes) -> str:
+    """Текст .docx без сторонних библиотек: абзацы word/document.xml."""
+    import zipfile
+
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        xml = zf.read("word/document.xml").decode("utf-8", errors="replace")
+    xml = re.sub(r"</w:p>", "\n", xml)
+    xml = re.sub(r"<w:tab/>", " ", xml)
+    text = re.sub(r"<[^>]+>", "", xml)
+    return html_mod.unescape(re.sub(r"[ \t\xa0]+", " ", text))
+
+
+def _zip_pages(raw: bytes) -> tuple[list[dict[str, Any]], str | None, int]:
+    """Страницы файлов внутри архива (pdf/docx, до ZIP_MAX_MEMBERS); у страниц метка файла."""
+    import zipfile
+
+    pages: list[dict[str, Any]] = []
+    notes: list[str] = []
+    members = 0
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        infos = [i for i in zf.infolist() if i.filename.lower().endswith((".pdf", ".docx"))]
+        skipped = len(infos) - min(len(infos), ZIP_MAX_MEMBERS)
+        for info in infos[:ZIP_MAX_MEMBERS]:
+            if info.file_size > MAX_BYTES:
+                notes.append(f"{info.filename}: больше 25 МБ")
+                continue
+            data = zf.read(info)
+            name = info.filename.rsplit("/", 1)[-1]
+            members += 1
+            if info.filename.lower().endswith(".docx"):
+                text = docx_text(data)
+                if text.strip():
+                    pages.append({"n": None, "label": f"файл {name}", "text": text})
+                continue
+            inner, partial = _pdf_pages(data)
+            if not inner and ocr.available():
+                inner, partial = ocr.pdf_ocr_pages(data)
+                if inner:
+                    notes.append(f"{name}: распознано OCR")
+            if not inner:
+                notes.append(f"{name}: без текстового слоя")
+            for pg in inner:
+                pg["label"] = f"файл {name}, стр. {pg['n']}"
+                pages.append(pg)
+            if partial:
+                notes.append(f"{name}: {partial}")
+        if skipped:
+            notes.append(f"ещё {skipped} файлов в архиве не прочитаны (лимит {ZIP_MAX_MEMBERS})")
+    return pages, ("; ".join(notes) or None), members
 
 
 def _pdf_pages(raw: bytes) -> tuple[list[dict[str, Any]], str | None]:
@@ -174,7 +258,7 @@ def page_links(html: str, base_url: str) -> list[dict[str, str]]:
         href = html_mod.unescape(href.strip())
         url = urljoin(base_url, href)
         parsed = urlparse(url)
-        if parsed.scheme not in ("http", "https") or not parsed.path.lower().endswith(".pdf"):
+        if parsed.scheme not in ("http", "https") or not parsed.path.lower().endswith(OFFICE_EXT):
             continue
         if url in seen:
             continue
@@ -284,6 +368,8 @@ def fetch_document(url: str) -> dict[str, Any]:
         "title": None,
         "content_type": None,
         "is_pdf": False,
+        "format": None,
+        "ocr": False,
         "pages": [],
         "partial": None,
         "error": None,
@@ -299,14 +385,34 @@ def fetch_document(url: str) -> dict[str, Any]:
         return out
     out["final_url"], out["content_type"] = final, ctype
     try:
-        if _is_pdf(ctype, final, raw[:8]):
+        fmt = _format_of(ctype, final, raw)
+        out["format"] = fmt
+        if fmt == "pdf":
             out["is_pdf"] = True
             out["pages"], out["partial"] = _pdf_pages(raw)
+            if not out["pages"] and ocr.available():
+                out["pages"], out["partial"] = ocr.pdf_ocr_pages(raw)
+                out["ocr"] = bool(out["pages"])
             if not out["pages"]:
-                out["error"] = "PDF без текстового слоя (скан): нужен просмотр глазами"
-        elif "html" in ctype.lower() or raw[:300].lower().lstrip().startswith(
-            (b"<!doctype", b"<html")
-        ):
+                out["error"] = (
+                    "PDF без текстового слоя (скан): OCR не дал текста, нужен просмотр глазами"
+                    if ocr.available()
+                    else "PDF без текстового слоя (скан): нужен просмотр глазами"
+                )
+        elif fmt == "docx":
+            text = docx_text(raw)
+            if text.strip():
+                out["pages"] = [{"n": None, "text": text}]
+            else:
+                out["error"] = "в .docx нет текста"
+        elif fmt == "zip":
+            out["pages"], out["partial"], members = _zip_pages(raw)
+            out["ocr"] = "распознано OCR" in (out["partial"] or "")
+            if not members:
+                out["error"] = "в архиве нет PDF или .docx"
+            elif not out["pages"]:
+                out["error"] = "файлы архива без текстового слоя: " + (out["partial"] or "")
+        elif fmt == "html":
             html = decode_html(raw, ctype)
             out["title"] = _html_title(html)
             out["links"] = page_links(html, final)
@@ -349,6 +455,7 @@ def find_mentions(doc: dict[str, Any], terms: list[dict[str, str]]) -> list[dict
                         "term_kind": term["kind"],
                         "term_label": term["label"],
                         "page": page["n"],
+                        "label": page.get("label"),
                         "quote": ("…" if a > 0 else "") + quote + ("…" if b < len(text) else ""),
                     }
                 )
@@ -420,13 +527,17 @@ def collect(
         doc = docs[i]
         mentions = find_mentions(doc, terms) if doc.get("pages") else []
         for m in mentions:
-            m["url"] = page_url(doc.get("final_url") or cand["url"], m["page"])
+            m["url"] = page_url(
+                doc.get("final_url") or cand["url"], m["page"] if doc.get("is_pdf") else None
+            )
         row = {
             "url": cand["url"],
             "final_url": doc.get("final_url") or cand["url"],
             "title": doc.get("title") or cand.get("title") or cand["url"],
             "kind": cand["kind"],
             "is_pdf": doc.get("is_pdf", False),
+            "format": doc.get("format"),
+            "ocr": doc.get("ocr", False),
             "pages": len(doc.get("pages") or []),
             "partial": doc.get("partial"),
             "via": cand.get("via"),
@@ -439,7 +550,8 @@ def collect(
         strong += 1 if row["strong"] else 0
         docs_out.append(row)
     note = (
-        "Проверены текстовые слои документов по ссылкам из блока выше. Скан без текста и файлы "
+        "Проверены текстовые слои документов по ссылкам из блока выше; сканы распознаются OCR "
+        "(до 15 страниц, в тексте возможны ошибки распознавания — сверяйте по ссылке). Файлы "
         "больше 25 МБ не читаются — такие помечены. Цитата ведёт на страницу документа "
         "(для PDF — #page=N); в браузере откроется сам первоисточник."
     )
@@ -549,7 +661,7 @@ def r25_flag(evidence: dict[str, Any]) -> dict[str, Any] | None:
         return None
     d = strong_docs[0]
     m = next(x for x in d["mentions"] if x["term_kind"] in ("cad", "quarter"))
-    where = f"стр. {m['page']}" if m.get("page") else "страница документа"
+    where = m.get("label") or (f"стр. {m['page']}" if m.get("page") else "страница документа")
     what = (
         f"участок {m['term']}"
         if m["term_kind"] == "cad"
