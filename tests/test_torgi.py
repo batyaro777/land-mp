@@ -158,7 +158,7 @@ def test_nearby_auctions_marks_truncated_pages():
     a = torgi.nearby_auctions("40:13:120101:22", client=client, now=NOW, interval=0)
     assert a["complete"] is False and a["succeed_total"] == torgi.MAX_PAGES
     assert "счётчики по району занижены" in a["sample_note"]
-    assert a["requests"] == torgi.MAX_PAGES * 3 + torgi.MAX_PAGES  # страницы + карточки
+    assert a["requests"] == torgi.MAX_PAGES * 3 + min(torgi.MAX_PAGES, torgi.MAX_CARDS)
 
 
 def test_throttle_and_503_retry():
