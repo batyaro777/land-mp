@@ -7,7 +7,7 @@ import io
 from datetime import datetime
 from pathlib import Path
 
-from landcheck.models import SOTKA_M2, BatchResult, CheckResult, Level
+from landcheck.models import SOTKA_M2, BatchResult, CheckResult, Level, Purpose
 
 DISCLAIMER = (
     "Отчёт сформирован автоматически по открытым данным НСПД (nspd.gov.ru) и данным объявлений. "
@@ -147,6 +147,11 @@ def to_markdown(batch: BatchResult, *, limit: int | None = None) -> str:
         f"# Проверка подборки — {batch.finished_at:%d.%m.%Y %H:%M} UTC",
         "",
         f"Цель: **{batch.request.purpose.label}**"
+        + (
+            f" (использование: {batch.request.use.label})"
+            if batch.request.purpose.professional and batch.request.use is not Purpose.ANY
+            else ""
+        )
         + (
             f", бюджет до {batch.request.budget_rub:,.0f} ₽".replace(",", " ")
             if batch.request.budget_rub

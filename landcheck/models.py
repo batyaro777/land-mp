@@ -326,6 +326,16 @@ class Request:
     min_area_m2: float | None = None
     max_area_m2: float | None = None
     region_hint: str | None = None
+    # для целей профессионала (торги / у муниципалитета / инвестиция) — что делать на участке
+    # после получения: «на торгах под ИЖС». Для обычных целей не используется.
+    use: Purpose = Purpose.ANY
+
+    @property
+    def land_purpose(self) -> Purpose:
+        """Цель, по которой оцениваются категория, ВРИ и зона: для профессионала — `use`."""
+        if self.purpose.professional and self.use is not Purpose.ANY and not self.use.professional:
+            return self.use
+        return self.purpose
 
 
 @dataclass

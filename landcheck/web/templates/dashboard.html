@@ -22,11 +22,18 @@
       <small class="muted">Колонки: кадастровый номер, цена, площадь (единицы читаются из заголовка), ссылка.</small>
     </label>
     <label>Что покупатель хочет делать на участке
-      <select name="purpose">
+      <select name="purpose" id="purpose-select">
         {% for value, label in purposes %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
       </select>
       <small class="muted">Проверим на трёх уровнях: категория земель, ВРИ и территориальная зона ПЗЗ.</small>
     </label>
+    <label id="use-wrap" hidden>А после получения — что делать на участке
+      <select name="use">
+        {% for value, label in USES %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+      </select>
+      <small class="muted">Для целей «у муниципалитета», «торги», «инвестиция»: путь получения оценим по форме собственности, а категорию, ВРИ и зону — под это использование.</small>
+    </label>
+    <script>(function(){var p=document.getElementById('purpose-select'),w=document.getElementById('use-wrap');if(!p||!w)return;var pro={{ PRO_PURPOSES|tojson }};function f(){w.hidden=pro.indexOf(p.value)<0;}p.addEventListener('change',f);f();})();</script>
     <div class="grid">
       <label>Бюджет, ₽
         <input name="budget" placeholder="3 000 000 или 3 млн">

@@ -125,15 +125,21 @@ _INVEST_BLOCK = {
 }
 
 
-def checklist_for(item: dict[str, Any], purpose: Purpose) -> dict[str, Any]:
+def checklist_for(
+    item: dict[str, Any], purpose: Purpose, use: Purpose = Purpose.ANY
+) -> dict[str, Any]:
     """Чек-лист под форму собственности и цель: для муниципального участка под КФХ «нотариальное
-    согласие супруга» и «взносы СНТ» не нужны (зум 28.10, п. 1.12)."""
+    согласие супруга» и «взносы СНТ» не нужны (зум 28.10, п. 1.12). Для цели профессионала
+    «что проверить на месте» — по использованию после получения."""
     parcel = item.get("parcel") or {}
+    land = (
+        use if purpose.professional and use is not Purpose.ANY and not use.professional else purpose
+    )
     own = (parcel.get("ownership_type") or "").lower()
     public = any(
         k in own for k in ("публичн", "государств", "муниципальн", "не разграничен", "федеральн")
     )
-    site = site_block(parcel, purpose)
+    site = site_block(parcel, land)
     if public:
         blocks = list(CHECKLIST_PUBLIC)
         blocks.append(
@@ -149,7 +155,7 @@ def checklist_for(item: dict[str, Any], purpose: Purpose) -> dict[str, Any]:
     blocks = [dict(b) for b in CHECKLIST]
     if purpose is Purpose.INVEST:
         blocks.append(_INVEST_BLOCK)
-    if purpose in (Purpose.FARMING, Purpose.INDUSTRY, Purpose.COMMERCE):
+    if land in (Purpose.FARMING, Purpose.INDUSTRY, Purpose.COMMERCE):
         blocks[0] = {
             "title": blocks[0]["title"],
             "items": [i for i in blocks[0]["items"] if "СНТ" not in i]
@@ -285,8 +291,12 @@ _PRO_OVERALL_TEXT = {
 }
 
 
-def goal_summary(item: dict[str, Any], purpose: Purpose) -> dict[str, Any] | None:
-    """Три уровня проверки цели одной таблицей. None — цель не задана или участка нет."""
+def goal_summary(
+    item: dict[str, Any], purpose: Purpose, use: Purpose = Purpose.ANY
+) -> dict[str, Any] | None:
+    """Три уровня проверки цели одной таблицей. None — цель не задана или участка нет.
+    Для цели профессионала с заданным использованием («на торгах под ИЖС») — путь (R21) плюс
+    три уровня по использованию."""
     parcel = item.get("parcel") or {}
     if purpose is Purpose.ANY or not parcel.get("found"):
         return None
@@ -294,7 +304,12 @@ def goal_summary(item: dict[str, Any], purpose: Purpose) -> dict[str, Any] | Non
     rows: list[dict[str, Any]] = []
     worst = Level.OK
     pro = purpose.professional
-    goal_rows, ok_text = (_PRO_ROWS, _PRO_OK_TEXT) if pro else (_GOAL_ROWS, _GOAL_OK_TEXT)
+    combined = pro and use is not Purpose.ANY and not use.professional
+    if combined:
+        goal_rows = (_PRO_ROWS[0], *_GOAL_ROWS)
+        ok_text = {**_GOAL_OK_TEXT, "R21": _PRO_OK_TEXT["R21"]}
+    else:
+        goal_rows, ok_text = (_PRO_ROWS, _PRO_OK_TEXT) if pro else (_GOAL_ROWS, _GOAL_OK_TEXT)
     for rule_id, title in goal_rows:
         if rule_id == "R21":
             value = parcel.get("ownership_type") or "в НСПД не указана"
@@ -325,10 +340,15 @@ def goal_summary(item: dict[str, Any], purpose: Purpose) -> dict[str, Any] | Non
                 "source": source,
             }
         )
+    activity = purpose.activity
+    if combined:
+        activity = f"{purpose.activity} — под «{use.activity[0].lower() + use.activity[1:]}»"
     return {
-        "activity": purpose.activity,
+        "activity": activity,
+        "use": use.value if combined else None,
         "question": "Как получить" if pro else "Можно ли здесь",
         "professional": pro,
+        "combined": combined,
         "level": worst.value,
         "text": (_PRO_OVERALL_TEXT if pro else _OVERALL_TEXT)[worst],
         "rows": rows,

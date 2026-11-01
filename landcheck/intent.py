@@ -159,6 +159,17 @@ def detect_purpose(text: str) -> Purpose:
     return Purpose.ANY
 
 
+def detect_use(text: str) -> Purpose:
+    """Что делать на участке после получения — для целей профессионала: «на торгах под ИЖС»."""
+    t = text.lower()
+    for purpose, keys in PURPOSE_KEYWORDS.items():
+        if purpose.professional:
+            continue
+        if any(_has_keyword(t, k) for k in keys):
+            return purpose
+    return Purpose.ANY
+
+
 def _area_to_m2(value: float, unit: str) -> float:
     u = unit.lower()
     if u.startswith("га"):
@@ -194,4 +205,7 @@ def parse_request(text: str) -> Request:
             v = _area_to_m2(float(am.group(1).replace(",", ".")), am.group(2))
             # Одно число — трактуем как минимум с допуском +50%.
             min_area, max_area = v * 0.9, v * 1.5
-    return Request(purpose=purpose, budget_rub=budget, min_area_m2=min_area, max_area_m2=max_area)
+    use = detect_use(t) if purpose.professional else Purpose.ANY
+    return Request(
+        purpose=purpose, budget_rub=budget, min_area_m2=min_area, max_area_m2=max_area, use=use
+    )

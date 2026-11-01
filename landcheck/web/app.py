@@ -140,8 +140,13 @@ templates.env.globals.update(
 )
 
 PURPOSES = [(p.value, p.activity) for p in Purpose]
+# использование после получения — для целей профессионала («на торгах под ИЖС»)
+USES = [(p.value, p.activity) for p in Purpose if not p.professional]
+PRO_PURPOSES = [p.value for p in Purpose if p.professional]
 VERDICT_ORDER = ["ок", "проверить", "стоп"]
 templates.env.globals.update(
+    USES=USES,
+    PRO_PURPOSES=PRO_PURPOSES,
     ROLES=ROLES,
     PUBLIC_ROLES_MAP={k: ROLES[k] for k in PUBLIC_ROLES},
     PROOF_KINDS=PROOF_KINDS,
@@ -415,6 +420,7 @@ async def create_check(
     title: Annotated[str, Form()] = "",
     numbers: Annotated[str, Form()] = "",
     purpose: Annotated[str, Form()] = "any",
+    use: Annotated[str, Form()] = "any",
     query: Annotated[str, Form()] = "",
     budget: Annotated[str, Form()] = "",
     min_area: Annotated[str, Form()] = "",
@@ -482,6 +488,7 @@ async def create_check(
             req.purpose = Purpose(purpose)
         except ValueError:
             pass
+    _apply_use(req, use)
     if budget.strip():
         from landcheck.inputs import parse_number
 
@@ -563,7 +570,8 @@ def check_page(
         new_count = sum(1 for h in hist if h.get("is_new"))
         changed_count = sum(1 for h in hist if h.get("changed"))
         purpose = _check_purpose(check)
-        goals = {i.id: goal_summary(i.data, purpose) for i in items}
+        use = _check_use(check)
+        goals = {i.id: goal_summary(i.data, purpose, use) for i in items}
         median = batch_median(check.stats, [i.data for i in check.items])
         prices = {i.id: price_position(i.data, median) for i in items}
         return render(
@@ -652,6 +660,29 @@ def _check_purpose(check: Check) -> Purpose:
         return Purpose((check.request or {}).get("purpose") or "any")
     except ValueError:
         return Purpose.ANY
+
+
+def _check_use(check: Check) -> Purpose:
+    """Использование после получения (только для целей профессионала), иначе ANY."""
+    if not _check_purpose(check).professional:
+        return Purpose.ANY
+    try:
+        use = Purpose((check.request or {}).get("use") or "any")
+    except ValueError:
+        return Purpose.ANY
+    return Purpose.ANY if use.professional else use
+
+
+def _apply_use(req: CheckRequest, use: str) -> None:
+    """Явный выбор «использование» в форме — только при цели профессионала."""
+    if not req.purpose.professional or not use or use == Purpose.ANY.value:
+        return
+    try:
+        value = Purpose(use)
+    except ValueError:
+        return
+    if not value.professional:
+        req.use = value
 
 
 def _loc_extras(loc: dict[str, Any] | None, region: dict[str, Any] | None) -> dict[str, Any]:
@@ -797,6 +828,7 @@ def _earth_url_for(parcel: dict[str, Any]) -> str | None:
 def _report_ctx(check: Check, item: CheckItem, public: bool) -> dict[str, Any]:
     data = item.data
     purpose = _check_purpose(check)
+    use = _check_use(check)
     median = batch_median(check.stats, [i.data for i in check.items])
     loc, region = data.get("location"), data.get("region")
     return {
@@ -805,7 +837,8 @@ def _report_ctx(check: Check, item: CheckItem, public: bool) -> dict[str, Any]:
         "d": data,
         "by_level": flags_by_level(data),
         "purpose": purpose,
-        "goal": goal_summary(data, purpose),
+        "goal": goal_summary(data, purpose, use),
+        "use": use,
         "loc": loc,
         "terrain": data.get("terrain"),
         "location_url": f"/checks/{check.id}/items/{item.cad_num}/location",
@@ -817,7 +850,7 @@ def _report_ctx(check: Check, item: CheckItem, public: bool) -> dict[str, Any]:
         "rights": data.get("rights") or rights.summarize([], data.get("parcel") or {}, purpose),
         "rights_url": f"/checks/{check.id}/items/{item.cad_num}/rights",
         "lk_url": rights.LK_URL,
-        "checklist": (ck := checklist_for(data, purpose))["blocks"],
+        "checklist": (ck := checklist_for(data, purpose, use))["blocks"],
         "checklist_title": ck["title"],
         "pzz_url": _pzz_search_url(data.get("parcel") or {}),
         "earth_url": _earth_url_for(data.get("parcel") or {}),
@@ -1362,6 +1395,7 @@ def single_create(
     purpose: Annotated[str, Form()] = "any",
     price: Annotated[str, Form()] = "",
     area: Annotated[str, Form()] = "",
+    use: Annotated[str, Form()] = "any",
 ):
     m = CAD_RE.search(cad_num)
     if not m:
@@ -1376,6 +1410,7 @@ def single_create(
         req.purpose = Purpose(purpose)
     except ValueError:
         pass
+    _apply_use(req, use)
     with session() as db:
         check = Check(
             user_id=user.id,

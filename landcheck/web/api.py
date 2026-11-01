@@ -53,6 +53,11 @@ class CheckIn(BaseModel):
     numbers: list[str] | None = Field(default=None, description="кадастровые номера")
     text: str | None = Field(default=None, description="свободный текст: номера, цены, площади")
     purpose: str = Field(default="any", description="цель: " + ", ".join(p.value for p in Purpose))
+    use: str = Field(
+        default="any",
+        description="для целей municipal/auction/invest — использование после получения "
+        "(izhs, lph, snt, farming, …): категория, ВРИ и зона оцениваются под него",
+    )
     budget_rub: float | None = None
     min_area_sotka: float | None = None
     max_area_sotka: float | None = None
@@ -166,8 +171,8 @@ def api_index() -> dict[str, Any]:
         "auth": "Authorization: Bearer <ключ из профиля>",
         "endpoints": {
             "POST /api/v1/checks": (
-                "проверка: {numbers: [...], purpose, budget_rub, min_area_sotka, max_area_sotka, "
-                "title} или {text: '...'} → 202 {id, status}"
+                "проверка: {numbers: [...], purpose, use, budget_rub, min_area_sotka, "
+                "max_area_sotka, title} или {text: '...'} → 202 {id, status}"
             ),
             "GET /api/v1/checks": "мои проверки (последние 50)",
             "GET /api/v1/checks/{id}": "статус и результаты (items — когда status=done)",
@@ -192,6 +197,10 @@ def api_create_check(user: ApiUser, body: CheckIn) -> dict[str, Any]:
     req = CheckRequest()
     try:
         req.purpose = Purpose(body.purpose)
+        if req.purpose.professional and body.use and body.use != "any":
+            use = Purpose(body.use)
+            if not use.professional:
+                req.use = use
     except ValueError as exc:
         raise HTTPException(400, f"неизвестная цель «{body.purpose}»") from exc
     req.budget_rub = body.budget_rub

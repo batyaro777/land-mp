@@ -113,7 +113,8 @@ def r04_category(ctx: RuleContext):
     if not p.found:
         return None
     cls = category_class(p.category)
-    matrix = CATEGORY_MATRIX[ctx.request.purpose]
+    land = ctx.request.land_purpose
+    matrix = CATEGORY_MATRIX[land]
     if cls is None:
         if p.category:
             return Flag(
@@ -128,14 +129,14 @@ def r04_category(ctx: RuleContext):
         return None
     level, text = hit
     source = SRC_ZK7
-    if cls == "agri" and ctx.request.purpose is Purpose.IZHS:
+    if cls == "agri" and land is Purpose.IZHS:
         exception = house_possible_on_agri(p.permitted_use_all)
         if exception:
             level, text, source = exception
     return Flag(
         "R04",
         level,
-        f"цель «{ctx.request.purpose.label}»: " + text.format(cat=CATEGORY_CLASS_LABEL[cls]),
+        f"цель «{land.label}»: " + text.format(cat=CATEGORY_CLASS_LABEL[cls]),
         source,
         {"category": p.category, "category_class": cls},
     )
@@ -144,9 +145,9 @@ def r04_category(ctx: RuleContext):
 @rule("R05", "ВРИ против цели", "Вид разрешённого использования не соответствует цели")
 def r05_vri(ctx: RuleContext):
     p = ctx.parcel
-    if not p.found or ctx.request.purpose is Purpose.ANY or ctx.request.purpose.professional:
+    purpose = ctx.request.land_purpose
+    if not p.found or purpose is Purpose.ANY or purpose.professional:
         return None
-    purpose = ctx.request.purpose
     label = purpose.label
     vri = p.permitted_use or (p.permitted_use_tab[0] if p.permitted_use_tab else "—")
     special = vri_verdict(purpose, p.permitted_use_all, category_class(p.category))
@@ -342,7 +343,7 @@ def r10_zouit(ctx: RuleContext):
     p = ctx.parcel
     if not p.found or not p.zouit_checked or not p.zouit:
         return None
-    residential = ctx.request.purpose.value in RESIDENTIAL
+    residential = ctx.request.land_purpose.value in RESIDENTIAL
     wide = [z for z in p.zouit if is_wide_zone(z.kind, z.name)]
     zones = [z for z in p.zouit if not is_wide_zone(z.kind, z.name)]
     details = {
@@ -403,7 +404,7 @@ def r11_territorial_zone(ctx: RuleContext):
             "не загружены): проверить зону по карте ПЗЗ на сайте администрации или во ФГИС ТП",
             SRC_PZZ,
         )
-    purpose = ctx.request.purpose
+    purpose = ctx.request.land_purpose
     zones = [(z, zone_class(z)) for z in p.territorial_zones]
     names = "; ".join(z.describe() for z, _ in zones[:3])
     details = {
@@ -551,22 +552,28 @@ def r21_acquisition(ctx: RuleContext):
             details,
         )
     # INVEST
+    agri_note = (
+        "; сельхозземля: при продаже у региона преимущественное право покупки, извещение и до "
+        "30 дней ожидания (ст. 8 101-ФЗ)"
+        if ctx.request.use is not Purpose.ANY and category_class(p.category) == "agri"
+        else ""
+    )
     if public:
         return Flag(
             "R21",
             Level.CHECK,
             f"собственность «{p.ownership_type}»: сначала оформить право (торги ст. 39.11 или "
             "ст. 39.18 ЗК), перепродажа — только после регистрации; право аренды переуступается "
-            "(ст. 22 ЗК) — это и есть сделка «вход на торгах → выход переуступкой»",
+            "(ст. 22 ЗК) — это и есть сделка «вход на торгах → выход переуступкой»" + agri_note,
             SRC_ZK_PROVISION,
             details,
         )
     if private:
         return Flag(
             "R21",
-            Level.OK,
+            Level.CHECK if agri_note else Level.OK,
             "частная собственность: обычная купля-продажа; при перепродаже раньше 5 лет владения — "
-            "НДФЛ 13 % с разницы (ст. 217.1 НК), заложить в расчёт доходности",
+            "НДФЛ 13 % с разницы (ст. 217.1 НК), заложить в расчёт доходности" + agri_note,
             SRC_NK_217,
             details,
         )

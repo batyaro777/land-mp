@@ -151,3 +151,98 @@ def test_professional_goals_in_dropdown_and_check(client):  # noqa: F811
     report = client.get(r.headers["location"] + "/items/50:09:0060202:101").text
     assert "Как получить: купить или арендовать на торгах" in report
     assert "Форма собственности и путь" in report and "Можно ли здесь" not in report
+
+
+# --- комбинированные цели: «на торгах под ИЖС» (путь профессионала + использование) ----------
+def run_use(payload, purpose, use):
+    parcel = parcel_from_payload(payload)
+    ctx = RuleContext(
+        listing=Listing(cad_num=payload["cad_num"]),
+        parcel=parcel,
+        request=Request(purpose=purpose, use=use),
+        stats=BatchStats(),
+    )
+    return parcel, {f.rule_id: f for f in evaluate(ctx)}
+
+
+def test_land_purpose_and_intent_use():
+    assert Request(purpose=Purpose.AUCTION, use=Purpose.IZHS).land_purpose is Purpose.IZHS
+    assert Request(purpose=Purpose.AUCTION).land_purpose is Purpose.AUCTION
+    assert Request(purpose=Purpose.IZHS, use=Purpose.SNT).land_purpose is Purpose.IZHS  # не профи
+    assert Request(purpose=Purpose.INVEST, use=Purpose.AUCTION).land_purpose is Purpose.INVEST
+    from landcheck.intent import parse_request
+
+    req = parse_request("купить на торгах участок под ИЖС до 2 млн")
+    assert (
+        req.purpose is Purpose.AUCTION and req.use is Purpose.IZHS and req.budget_rub == 2_000_000
+    )
+    req = parse_request("оформить у администрации под КФХ, сенокошение")
+    assert req.purpose is Purpose.MUNICIPAL and req.use is Purpose.FARMING
+    assert parse_request("переуступка аренды").use is Purpose.ANY
+    assert parse_request("построить дом").use is Purpose.ANY
+    from landcheck.web.serialize import request_from_dict, request_to_dict
+
+    d = request_to_dict(Request(purpose=Purpose.AUCTION, use=Purpose.IZHS))
+    assert d["use"] == "izhs" and request_from_dict(d).use is Purpose.IZHS
+    assert request_from_dict({"purpose": "izhs"}).use is Purpose.ANY
+
+
+def test_combined_goal_rules_and_summary():
+    from landcheck.models import CheckResult
+
+    payload = make_payload(
+        "40:10:160500:1",
+        category=AGRI,
+        vri="Для сельскохозяйственного производства",
+        ownership=PUBLIC,
+        tz=[zone("Территориальные зоны", "1", "Сх-1")],
+    )
+    # на торгах под ИЖС: путь — по торгам, земля — как под ИЖС (сельхозка → стоп)
+    parcel, flags = run_use(payload, Purpose.AUCTION, Purpose.IZHS)
+    assert flags["R21"].level is Level.CHECK and "аукцион" in flags["R21"].message
+    assert flags["R04"].level is Level.STOP and "Жилой дом (ИЖС)" in flags["R04"].message
+    assert flags["R05"].level is Level.STOP  # сельхозпроизводство несовместимо с ИЖС
+    assert "R11" in flags
+    item = result_to_dict(
+        CheckResult(
+            listing=Listing(cad_num=payload["cad_num"]), parcel=parcel, flags=list(flags.values())
+        )
+    )
+    goal = goal_summary(item, Purpose.AUCTION, Purpose.IZHS)
+    assert goal["combined"] and goal["use"] == "izhs" and goal["question"] == "Как получить"
+    assert [r["rule_id"] for r in goal["rows"]] == ["R21", "R04", "R05", "R11"]
+    assert goal["level"] == "стоп" and "под «построить жилой дом" in goal["activity"]
+    # у муниципалитета под КФХ — та же сельхозка подходит
+    _, flags = run_use(payload, Purpose.MUNICIPAL, Purpose.FARMING)
+    assert "R04" not in flags and "R05" not in flags and flags["R21"].level is Level.CHECK
+    # инвестиция под дачу на сельхозке: R04 по даче, напоминание про ст. 8 101-ФЗ — в R21
+    _, flags = run_use(
+        make_payload("x", category=AGRI, vri="Для сельскохозяйственного производства"),
+        Purpose.INVEST,
+        Purpose.SNT,
+    )
+    assert flags["R21"].level is Level.CHECK and "ст. 8 101-ФЗ" in flags["R21"].message
+    assert "R04" not in flags or flags["R04"].message.startswith("цель «Дача, садоводство»")
+    # чек-лист «на месте» — под использование
+    cl = checklist_for(item, Purpose.AUCTION, Purpose.FARMING)
+    assert any("Что проверить на месте" in b["title"] for b in cl["blocks"])
+
+
+def test_combined_goal_web_form(client):  # noqa: F811
+    login(client)
+    page = client.get("/").text
+    assert 'name="use"' in page and 'id="use-wrap" hidden' in page and '"auction"' in page
+    r = client.post(
+        "/checks",
+        data={"numbers": "50:09:0060202:101", "purpose": "auction", "use": "izhs"},
+    )
+    assert r.status_code == 303
+    report = client.get(r.headers["location"] + "/items/50:09:0060202:101").text
+    assert "Как получить: купить или арендовать на торгах" in report
+    assert "Вид разрешённого использования" in report and "Форма собственности и путь" in report
+    # «use» без цели профессионала игнорируется
+    r = client.post(
+        "/checks", data={"numbers": "50:09:0060202:101", "purpose": "izhs", "use": "snt"}
+    )
+    report = client.get(r.headers["location"] + "/items/50:09:0060202:101").text
+    assert "Можно ли здесь: построить жилой дом" in report

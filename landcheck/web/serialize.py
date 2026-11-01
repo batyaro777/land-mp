@@ -11,6 +11,7 @@ from landcheck.models import SOTKA_M2, CheckResult, Flag, Level, Parcel, Purpose
 def request_to_dict(r: Request) -> dict[str, Any]:
     return {
         "purpose": r.purpose.value,
+        "use": r.use.value,
         "budget_rub": r.budget_rub,
         "min_area_m2": r.min_area_m2,
         "max_area_m2": r.max_area_m2,
@@ -21,6 +22,7 @@ def request_to_dict(r: Request) -> dict[str, Any]:
 def request_from_dict(d: dict[str, Any]) -> Request:
     return Request(
         purpose=Purpose(d.get("purpose", "any")),
+        use=Purpose(d.get("use") or "any"),
         budget_rub=d.get("budget_rub"),
         min_area_m2=d.get("min_area_m2"),
         max_area_m2=d.get("max_area_m2"),
