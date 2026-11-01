@@ -37,8 +37,8 @@ SOURCE = (
 SCHEMA_VERSION = 1
 MONTHS = 12
 PAGE_SIZE = 10  # сервер молча режет size до 10
-MAX_SUCCEED_PAGES = 3  # до 30 состоявшихся лотов → карточки с итоговой ценой
-MAX_CARDS = 30
+MAX_PAGES = 10  # страниц поиска на каждый статус: поиск по тексту отдаёт и соседние районы
+MAX_CARDS = 20  # карточек состоявшихся лотов (итоговая цена только в карточке)
 STATUS_ACTIVE = "PUBLISHED,APPLICATIONS_SUBMISSION,DETERMINING_WINNER"
 STATUS_SUCCEED = "SUCCEED"
 STATUS_FAILED = "FAILED"
@@ -166,8 +166,8 @@ def item_of(card: dict[str, Any], district: str) -> dict[str, Any] | None:
     kind = "аренда" if card.get("typeTransaction") == "rent" else "продажа"
     price = fin if isinstance(fin, int | float) else None
     rub_m2 = round(price / area, 1) if price and area else None
-    uplift = (
-        round(fin / start - 1, 3)
+    ratio = (
+        round(fin / start, 2)
         if isinstance(fin, int | float) and isinstance(start, int | float) and start > 0
         else None
     )
@@ -181,7 +181,7 @@ def item_of(card: dict[str, Any], district: str) -> dict[str, Any] | None:
         "price_start": start if isinstance(start, int | float) else None,
         "price_fin": price,
         "rub_m2": rub_m2,
-        "uplift": uplift,
+        "ratio": ratio,
         "date": _date(card),
         "address": card.get("estateAddress"),
         "vri": vri_of(card),
@@ -202,14 +202,14 @@ def _quantile(values: list[float], q: float) -> float | None:
 
 def _stats(items: list[dict[str, Any]]) -> dict[str, Any]:
     per_m2 = [i["rub_m2"] for i in items if i.get("rub_m2")]
-    uplifts = [i["uplift"] for i in items if i.get("uplift") is not None]
+    ratios = [i["ratio"] for i in items if i.get("ratio") is not None]
     return {
         "count": len(items),
         "with_price": len(per_m2),
         "median_rub_m2": round(statistics.median(per_m2), 1) if per_m2 else None,
         "p25_rub_m2": _quantile(per_m2, 0.25),
         "p75_rub_m2": _quantile(per_m2, 0.75),
-        "median_uplift": round(statistics.median(uplifts), 3) if uplifts else None,
+        "median_ratio": round(statistics.median(ratios), 2) if ratios else None,
     }
 
 
@@ -228,12 +228,30 @@ def empty_result(cad_num: str, error: str | None = None) -> dict[str, Any]:
         "sale": _stats([]),
         "rent": _stats([]),
         "items": [],
+        "complete": True,
         "sample_note": None,
         "search_url": SEARCH_URL,
         "source": SOURCE,
         "error": error,
         "liquidity_text": error or "торги не запрашивались",
     }
+
+
+def _collect(
+    api: TorgiClient, region: str, district: str, statuses: str, pub_from: str
+) -> tuple[list[dict[str, Any]], bool]:
+    """Страницы поиска → лоты своего кадастрового района. Второе значение — все ли страницы
+    просмотрены (иначе счётчик занижен)."""
+    hits: list[dict[str, Any]] = []
+    page, total_pages = 0, 1
+    while page < total_pages and page < MAX_PAGES:
+        data = api.search(
+            region=region, text=district, statuses=statuses, pub_from=pub_from, page=page
+        )
+        total_pages = int(data.get("totalPages") or 0)
+        hits.extend(h for h in data.get("content") or [] if item_of(h, district) is not None)
+        page += 1
+    return hits, page >= total_pages
 
 
 def nearby_auctions(
@@ -256,45 +274,25 @@ def nearby_auctions(
     api = TorgiClient(client)
     result = empty_result(cad_num)
     try:
-        # 1. Состоявшиеся аукционы: страницы поиска → карточки (итоговая цена только там).
-        succeed_pages: list[dict[str, Any]] = []
-        first = api.search(region=region, text=district, statuses=STATUS_SUCCEED, pub_from=pub_from)
-        succeed_pages.append(first)
-        total_pages = int(first.get("totalPages") or 0)
-        for page in range(1, min(total_pages, MAX_SUCCEED_PAGES)):
-            succeed_pages.append(
-                api.search(
-                    region=region,
-                    text=district,
-                    statuses=STATUS_SUCCEED,
-                    pub_from=pub_from,
-                    page=page,
-                )
-            )
-        result["succeed_total"] = int(first.get("totalElements") or 0)
+        # Поиск по тексту «40:13» отдаёт и соседние районы (40:14, 40:17…), поэтому считаем
+        # только лоты, у которых кадастровый номер действительно из этого района.
+        succeed, done1 = _collect(api, region, district, STATUS_SUCCEED, pub_from)
+        failed, done2 = _collect(api, region, district, STATUS_FAILED, pub_from)
+        active, done3 = _collect(api, region, district, STATUS_ACTIVE, pub_from)
+        result["succeed_total"] = len(succeed)
+        result["failed_total"] = len(failed)
+        result["active_total"] = len(active)
+        result["complete"] = done1 and done2 and done3
         items: list[dict[str, Any]] = []
-        cards = 0
-        for page_json in succeed_pages:
-            for hit in page_json.get("content") or []:
-                if cards >= MAX_CARDS:
-                    break
-                if item_of(hit, district) is None:  # чужой район по тексту — карточку не тянем
-                    continue
-                cards += 1
-                try:
-                    card = api.lot(hit["id"])
-                except (httpx.HTTPError, ValueError) as exc:
-                    log.warning("torgi: карточка %s: %s", hit.get("id"), exc)
-                    card = hit
-                row = item_of(card, district)
-                if row:
-                    items.append(row)
-        # 2. Не состоявшиеся и идущие сейчас — только счётчики (цены старта в поиске есть,
-        #    но ориентир строим по итоговым).
-        failed = api.search(region=region, text=district, statuses=STATUS_FAILED, pub_from=pub_from)
-        active = api.search(region=region, text=district, statuses=STATUS_ACTIVE, pub_from=pub_from)
-        result["failed_total"] = int(failed.get("totalElements") or 0)
-        result["active_total"] = int(active.get("totalElements") or 0)
+        for hit in succeed[:MAX_CARDS]:  # поиск уже отсортирован: новые первыми
+            try:
+                card = api.lot(hit["id"])
+            except (httpx.HTTPError, ValueError) as exc:
+                log.warning("torgi: карточка %s: %s", hit.get("id"), exc)
+                card = hit
+            row = item_of(card, district)
+            if row:
+                items.append(row)
     except (httpx.HTTPError, ValueError, KeyError) as exc:
         log.warning("torgi: %s: %s", district, exc)
         result["error"] = f"torgi.gov.ru не ответил: {type(exc).__name__}"
@@ -310,11 +308,17 @@ def nearby_auctions(
     result["items"] = items[:15]
     result["sale"] = _stats([i for i in items if i["kind"] == "продажа"])
     result["rent"] = _stats([i for i in items if i["kind"] == "аренда"])
+    notes = []
     if result["succeed_total"] > len(items):
-        result["sample_note"] = (
+        notes.append(
             f"цены посчитаны по {len(items)} последним состоявшимся аукционам из "
             f"{result['succeed_total']}"
         )
+    if not result["complete"]:
+        notes.append(
+            f"просмотрено по {MAX_PAGES * PAGE_SIZE} лотов на статус — счётчики по району занижены"
+        )
+    result["sample_note"] = "; ".join(notes) or None
     result["requests"] = api.requests
     result["liquidity_text"] = liquidity_text(result)
     return result

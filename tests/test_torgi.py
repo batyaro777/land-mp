@@ -65,6 +65,14 @@ SUCCEED = [
 ]
 
 
+FAILED = [
+    _card("F_1", "40:13:000002:1", fin=None, status="FAILED"),
+    _card("F_2", "40:13:000002:2", fin=None, status="FAILED"),
+    _card("F_9", "40:17:000002:9", fin=None, status="FAILED"),
+]
+ACTIVE = [_card("P_1", "40:13:000003:1", fin=None, status="APPLICATIONS_SUBMISSION")]
+
+
 def _page(content: list[dict], total: int) -> dict:
     return {
         "content": content,
@@ -88,9 +96,9 @@ def _handler(seen: list[dict]):
                 # в поиске итоговой цены нет — только старт
                 hits = [{k: v for k, v in c.items() if k != "priceFin"} for c in SUCCEED]
                 return httpx.Response(200, json=_page(hits, 4))
-            if status == "FAILED":
-                return httpx.Response(200, json=_page([], 6))
-            return httpx.Response(200, json=_page([], 2))  # идут сейчас
+            if status == "FAILED":  # два своих, один чужой район — считаем только свои
+                return httpx.Response(200, json=_page(FAILED, 3))
+            return httpx.Response(200, json=_page(ACTIVE, 1))  # идут сейчас
         lot_id = url.path.rsplit("/", 1)[-1]
         card = next(c for c in SUCCEED if c["id"] == lot_id)
         return httpx.Response(200, json=card)
@@ -103,13 +111,14 @@ def test_nearby_auctions_stats_and_district_filter():
     client = httpx.Client(transport=httpx.MockTransport(_handler(seen)))
     a = torgi.nearby_auctions("40:13:120101:22", client=client, now=NOW)
     assert a["error"] is None and a["district"] == "40:13" and a["region"] == "40"
+    # счётчики — только по лотам своего района, а не по totalElements поиска (он шире)
     assert (a["succeed_total"], a["failed_total"], a["active_total"], a["ea_total"]) == (
-        4,
-        6,
+        3,
         2,
-        12,
+        1,
+        6,
     )
-    assert a["liquidity"] == 0.4
+    assert a["liquidity"] == 0.6 and a["complete"] is True and a["requests"] == 6
     # карточки тянем только для лотов своего района: 3 из 4
     cards = [s for s in seen if "/lotcards/" in s["path"] and not s["path"].endswith("search")]
     assert len(cards) == 3 and all(not s["path"].endswith("B_1") for s in cards)
@@ -124,14 +133,31 @@ def test_nearby_auctions_stats_and_district_filter():
         "median_rub_m2": 62.5,
         "p25_rub_m2": 56.2,
         "p75_rub_m2": 68.8,
-        "median_uplift": 0.25,
+        "median_ratio": 1.25,
     }
     assert a["rent"]["count"] == 1 and a["rent"]["median_rub_m2"] == 40.0
     assert a["items"][0]["url"].endswith("/lots/lot/A_1") and a["items"][0]["kind"] == "продажа"
-    assert "состоялись 4 из 10 завершённых (40 %)" in a["liquidity_text"]
-    assert "спрос неровный" in a["liquidity_text"]
-    assert a["sample_note"] == "цены посчитаны по 3 последним состоявшимся аукционам из 4"
+    assert "состоялись 3 из 5 завершённых (60 %)" in a["liquidity_text"]
+    assert "спрос есть" in a["liquidity_text"]
+    assert a["sample_note"] is None
     json.dumps(a, ensure_ascii=False)  # сериализуется в item.data
+
+
+def test_nearby_auctions_marks_truncated_pages():
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = urlparse(str(req.url))
+        if url.path.endswith("/lotcards/search"):
+            q = {k: v[0] for k, v in parse_qs(url.query).items()}
+            page = int(q["page"])
+            hit = _card(f"S_{q['lotStatus'][:3]}_{page}", f"40:13:0000{page:02d}:1", fin=None)
+            return httpx.Response(200, json={**_page([hit], 500), "totalPages": 50})
+        return httpx.Response(200, json=_card(url.path.rsplit("/", 1)[-1], "40:13:000001:1"))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    a = torgi.nearby_auctions("40:13:120101:22", client=client, now=NOW)
+    assert a["complete"] is False and a["succeed_total"] == torgi.MAX_PAGES
+    assert "счётчики по району занижены" in a["sample_note"]
+    assert a["requests"] == torgi.MAX_PAGES * 3 + torgi.MAX_PAGES  # страницы + карточки
 
 
 def test_nearby_auctions_network_error_is_contained():
@@ -162,7 +188,7 @@ def test_card_parsing_and_edge_cases():
     ips["lotDescription"] = "участок с кадастровым номером 40:13:020705:1868 площадью 700 кв.м"
     row = torgi.item_of(ips, "40:13")
     assert row and row["cad_num"] == "40:13:020705:1868" and row["kind"] == "аренда"
-    assert row["price_fin"] is None and row["rub_m2"] is None and row["uplift"] is None
+    assert row["price_fin"] is None and row["rub_m2"] is None and row["ratio"] is None
     assert torgi.item_of(ips, "40:04") is None
     tiny = _card("T_1", "40:13:000001:2", area=10)  # 10 м² — не участок
     assert torgi.item_of(tiny, "40:13")["area_m2"] is None

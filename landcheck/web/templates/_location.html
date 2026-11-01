@@ -172,8 +172,8 @@
     {% if au.sale.with_price or au.rent.with_price %}
     <table class="facts">
       <tr><th>Сделка</th><th class="num">Состоялось</th><th class="num">Медиана итога, ₽/м²</th><th class="num">25–75 %, ₽/м²</th><th class="num">Итог к старту</th></tr>
-      {% if au.sale.with_price %}<tr><td>Продажа</td><td class="num">{{ au.sale.count }}</td><td class="num">{{ au.sale.median_rub_m2 }}</td><td class="num">{{ au.sale.p25_rub_m2 }} – {{ au.sale.p75_rub_m2 }}</td><td class="num">{% if au.sale.median_uplift is not none %}+{{ (au.sale.median_uplift * 100)|round(0)|int }} %{% else %}—{% endif %}</td></tr>{% endif %}
-      {% if au.rent.with_price %}<tr><td>Аренда (цена за год)</td><td class="num">{{ au.rent.count }}</td><td class="num">{{ au.rent.median_rub_m2 }}</td><td class="num">{{ au.rent.p25_rub_m2 }} – {{ au.rent.p75_rub_m2 }}</td><td class="num">{% if au.rent.median_uplift is not none %}+{{ (au.rent.median_uplift * 100)|round(0)|int }} %{% else %}—{% endif %}</td></tr>{% endif %}
+      {% if au.sale.with_price %}<tr><td>Продажа</td><td class="num">{{ au.sale.count }}</td><td class="num">{{ au.sale.median_rub_m2 }}</td><td class="num">{{ au.sale.p25_rub_m2 }} – {{ au.sale.p75_rub_m2 }}</td><td class="num">{% if au.sale.median_ratio %}×{{ au.sale.median_ratio }}{% else %}—{% endif %}</td></tr>{% endif %}
+      {% if au.rent.with_price %}<tr><td>Аренда (цена за год)</td><td class="num">{{ au.rent.count }}</td><td class="num">{{ au.rent.median_rub_m2 }}</td><td class="num">{{ au.rent.p25_rub_m2 }} – {{ au.rent.p75_rub_m2 }}</td><td class="num">{% if au.rent.median_ratio %}×{{ au.rent.median_ratio }}{% else %}—{% endif %}</td></tr>{% endif %}
     </table>
     {% endif %}
     {% if au['items'] %}
@@ -190,7 +190,7 @@
       {% endfor %}
     </table>
     {% endif %}
-    <p class="muted small">{{ au.source }}{% if au.sample_note %}; {{ au.sample_note }}{% endif %}. Аренда — годовая плата, не выкуп. Данные на {{ au.as_of[:10] }}; <a href="{{ au.search_url }}" target="_blank" rel="noopener">реестр torgi.gov.ru</a>. Это ориентир ликвидности и цен государственной земли, а не оценка участка (ТЗ v3, п. 9).</p>
+    <p class="muted small">{{ au.source }}{% if au.sample_note %}; {{ au.sample_note }}{% endif %}. Аренда — годовая плата, не выкуп; «итог к старту» — во сколько раз цена победителя выше начальной (у аренды старт — минимальная годовая плата, поэтому рост бывает кратным). Данные на {{ au.as_of[:10] }}; <a href="{{ au.search_url }}" target="_blank" rel="noopener">реестр torgi.gov.ru</a>. Это ориентир ликвидности и цен государственной земли, а не оценка участка (ТЗ v3, п. 9).</p>
     {% endif %}
   </details>
   {% endif %}

@@ -627,7 +627,7 @@ def test_auctions_block_admin_only(client, fixtures_dir: Path, monkeypatch):  # 
             "median_rub_m2": 1200.0,
             "p25_rub_m2": 1100.0,
             "p75_rub_m2": 1300.0,
-            "median_uplift": 0.4,
+            "median_ratio": 1.4,
         },
         items=[
             {
@@ -640,7 +640,7 @@ def test_auctions_block_admin_only(client, fixtures_dir: Path, monkeypatch):  # 
                 "price_start": 900_000,
                 "price_fin": 1_200_000,
                 "rub_m2": 1200.0,
-                "uplift": 0.33,
+                "ratio": 1.33,
                 "date": "2026-10-20",
                 "address": "Московская обл.",
                 "vri": "Для ИЖС",
@@ -672,7 +672,7 @@ def test_auctions_block_admin_only(client, fixtures_dir: Path, monkeypatch):  # 
     assert "состоялись 3 из 4 завершённых (75 %)" in block and "спрос есть" in block
     from landcheck.web.serialize import fmt_money
 
-    assert "50:09:0060202:77" in block and fmt_money(1_200_000) in block and "+40 %" in block
+    assert "50:09:0060202:77" in block and fmt_money(1_200_000) in block and "×1.4" in block
     assert calls == [("50:09:0060202:101", False)]
     client.get(url)  # второй заход — из item.data, job не дёргаем
     assert len(calls) == 1
