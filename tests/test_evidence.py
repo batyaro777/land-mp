@@ -370,3 +370,45 @@ def test_explain_download_errors_in_plain_words():
         "сайт оборвал соединение"
     )
     assert evidence.doc_key("https://x.ru/a").startswith("doc2:")
+
+    class ProtocolError(Exception):  # как socksio.exceptions.ProtocolError
+        pass
+
+    ProtocolError.__module__ = "socksio.exceptions"
+    assert evidence._explain(ProtocolError("Malformed reply")) == (
+        "шлюз не получил ответ от сайта (обрыв SOCKS)"
+    )
+
+
+def test_download_explains_unknown_transport_errors(monkeypatch):
+    import httpx
+
+    class ProtocolError(Exception):
+        pass
+
+    ProtocolError.__module__ = "socksio.exceptions"
+    calls: list[str | None] = []
+
+    class FakeClient:
+        def __init__(self, *, proxy=None, **kw):
+            calls.append(proxy)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def stream(self, method, url):
+            raise ProtocolError("Malformed reply")
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    monkeypatch.setattr(evidence.ruproxy, "enabled", lambda: True)
+    monkeypatch.setattr(evidence.ruproxy, "proxy_url", lambda: "socks5h://gw:1080")
+    monkeypatch.setattr(evidence.ruproxy, "verify_context", lambda: True)
+    doc = evidence.fetch_document("https://gosweb.example.ru/x")
+    assert calls == [None, "socks5h://gw:1080"]
+    assert doc["error"] == (
+        "не скачан: шлюз не получил ответ от сайта (обрыв SOCKS); "
+        "шлюз не получил ответ от сайта (обрыв SOCKS) через шлюз"
+    )

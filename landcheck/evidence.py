@@ -197,6 +197,9 @@ def _explain(exc: BaseException) -> str:
         return "сайт оборвал соединение"
     if isinstance(exc, httpx.HTTPStatusError):
         return f"HTTP {exc.response.status_code}"
+    text = str(exc).lower()
+    if "socks" in (type(exc).__module__ or "").lower() or "malformed reply" in text:
+        return "шлюз не получил ответ от сайта (обрыв SOCKS)"
     return type(exc).__name__
 
 
@@ -233,10 +236,15 @@ def _download(url: str) -> tuple[bytes, str, str, int]:
                         str(resp.url),
                         resp.status_code,
                     )
-        except TimeoutError as exc:  # медленный канал — шлюз не поможет
+        except (
+            TimeoutError,
+            ValueError,
+        ) as exc:  # медленный канал или большой файл — шлюз не поможет
             errors.append(f"{exc}{' через шлюз' if proxy else ''}")
             break
-        except (httpx.TimeoutException, httpx.TransportError) as exc:
+        except httpx.HTTPStatusError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — сетевые сбои, в т. ч. socksio «Malformed reply»
             errors.append(f"{_explain(exc)}{' через шлюз' if proxy else ''}")
             continue
     raise ConnectionError("; ".join(errors) or "не удалось скачать")
