@@ -521,6 +521,7 @@ def test_ocr_reads_scanned_pdf_and_normalizes_numbers():
     text = pages[0]["text"]
     assert "40:10:160500:1" in text and "изымается" in text.lower()
     assert ocr.normalize("4О:1O:16О5ОО:1 и 40 : 10 : 160500") == "40:10:160500:1 и 40:10:160500"
+    assert ocr.tesseract_env()["OMP_THREAD_LIMIT"] == "1"  # по одному потоку на процесс
 
 
 def test_fetch_document_falls_back_to_ocr_for_scans(monkeypatch):

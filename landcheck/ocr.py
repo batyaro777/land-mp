@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -52,6 +53,15 @@ def render_png(pdf: Any, index: int, dpi: int = OCR_DPI) -> bytes:
     return buf.getvalue()
 
 
+def tesseract_env() -> dict[str, str]:
+    """Один поток на процесс: документы распознаются параллельно (несколько tesseract сразу), и
+    многопоточный OpenMP на 4 ядрах давал таймауты страниц (прод 01.11: 0 страниц за 80 с против
+    всех страниц за 24 с с OMP_THREAD_LIMIT=1)."""
+    env = dict(os.environ)
+    env.setdefault("OMP_THREAD_LIMIT", "1")
+    return env
+
+
 def recognize_png(png: bytes, lang: str = OCR_LANG) -> str:
     """tesseract из stdin в stdout; без временных файлов."""
     proc = subprocess.run(  # noqa: S603 — фиксированная команда, данные только через stdin
@@ -60,6 +70,7 @@ def recognize_png(png: bytes, lang: str = OCR_LANG) -> str:
         capture_output=True,
         timeout=OCR_PAGE_TIMEOUT_S,
         check=False,
+        env=tesseract_env(),
     )
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr.decode("utf-8", errors="replace")[-200:] or "tesseract")

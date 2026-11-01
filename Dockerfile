@@ -2,7 +2,8 @@
 # в trixie пакета нет.
 FROM python:3.12-slim-bookworm
 
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+# OMP_THREAD_LIMIT=1: tesseract по одному потоку, документы распознаются параллельно (ocr.py)
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 OMP_THREAD_LIMIT=1
 WORKDIR /app
 
 # tesseract-ocr + rus: OCR сканов документов администраций («первоисточники», ТЗ п. 2.5)
