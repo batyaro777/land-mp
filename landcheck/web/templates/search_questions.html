@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Уточним запрос — {{ brand }}{% endblock %}
+{% block content %}
+<article class="narrow">
+  <hgroup>
+    <h2>Уточним, что важно</h2>
+    <p>Цель: {{ purpose.activity|lower }}{% if req.budget_rub %} · до {{ req.budget_rub|money }}{% endif %}{% if req.region %} · {{ req.region }}{% endif %}. Эти вопросы задал бы опытный брокер; ответы меняют порядок подборки и подсказывают, что проверить.</p>
+  </hgroup>
+  <form method="post" action="/search/{{ req.id }}/answers">
+    {% for q in questions %}
+    <fieldset>
+      <legend><strong>{{ q.text }}</strong> <small class="muted">— {{ q.why }}</small></legend>
+      {% for value, label in q.options %}
+      <label><input type="radio" name="{{ q.key }}" value="{{ value }}" {{ 'checked' if answers.get(q.key) == value else '' }}> {{ label }}</label>
+      {% endfor %}
+    </fieldset>
+    {% endfor %}
+    <div class="grid">
+      <button type="submit">Показать подборку</button>
+      <a href="/search/{{ req.id }}" role="button" class="outline secondary" onclick="document.querySelectorAll('input[type=radio]').forEach(r=>r.checked=false)">Пропустить вопросы</a>
+    </div>
+  </form>
+</article>
+{% endblock %}

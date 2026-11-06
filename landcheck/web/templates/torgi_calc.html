@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+{% set inp = calc.inputs %}{% set lim = calc.limits %}
+<h2>Калькулятор входа в торги <span class="badge mini">внутренний режим</span></h2>
+<p class="muted small">{% if parcel %}Участок <code>{{ inp.cad_num }}</code>{% if parcel.address %} — {{ parcel.address }}{% endif %}{% if report_url %} · <a href="{{ report_url }}">к отчёту</a>{% endif %}. {% endif %}Считаем до аукциона, на каком шаге сделка перестаёт укладываться в целевую доходность. Предельная цена покупки по сценарию: P = ((S − E)·(1 − t) − r·E) / (r + 1 − t), где S — цена продажи, E — доп. расходы, t — налог с прибыли, r — целевой ROI (ТЗ v3, п. 13.7). Пример: S = {{ 120000|money }}, E = 0, t = 0, r = 40 % → P = {{ 85714|money }}.</p>
+{% if raw.lot_url %}<p class="small">Лот: <a href="{{ raw.lot_url }}" target="_blank" rel="noopener">{{ raw.lot_url }}</a>{% if inp.kind == 'аренда' %} — <strong>аренда</strong>: «старт» и шаг — годовая арендная плата; сценарии продажи — ожидаемая цена переуступки права, расходы — платежи до сделки{% endif %}.</p>{% endif %}
+<form method="get" class="grid no-print">
+  <input type="hidden" name="cad" value="{{ raw.cad or '' }}">
+  {% if raw.lot_url %}<input type="hidden" name="lot_url" value="{{ raw.lot_url }}">{% endif %}
+  <input type="hidden" name="kind" value="{{ inp.kind }}">
+  <fieldset>
+    <legend>Лот</legend>
+    <label>Площадь, м² <input name="area" inputmode="decimal" value="{{ raw.area or '' }}"></label>
+    <label>Начальная цена, ₽ <input name="start" inputmode="decimal" value="{{ raw.start or '' }}" required></label>
+    <label>Шаг аукциона, ₽ <input name="step" inputmode="decimal" value="{{ raw.step or '' }}" placeholder="обычно 3–5 % от начальной"></label>
+    <label>Шагов в таблице <input name="steps" type="number" min="1" max="40" value="{{ inp.steps }}"></label>
+  </fieldset>
+  <fieldset>
+    <legend>Экономика</legend>
+    <label>Доп. расходы, ₽ <input name="extra" inputmode="decimal" value="{{ raw.extra or '' }}" placeholder="межевание, подключения, юрист, реклама"></label>
+    <label>Налог с прибыли, % <input name="tax" inputmode="decimal" value="{{ raw.tax if raw.tax else (inp.tax * 100)|round(1) }}"></label>
+    <label>Целевой ROI, % <input name="roi" inputmode="decimal" value="{{ raw.roi if raw.roi else (inp.roi * 100)|round(0)|int }}"></label>
+    <label>Аренда в месяц, ₽ (если сдавать) <input name="rent" inputmode="decimal" value="{{ raw.rent or '' }}"></label>
+  </fieldset>
+  <fieldset>
+    <legend>Цена продажи по сценариям{% if raw._note %} <span class="muted small">(подставлено {{ raw._note }})</span>{% endif %}</legend>
+    <label>MIN, ₽ <input name="smin" inputmode="decimal" value="{{ raw.smin or '' }}"></label>
+    <label>MEDIUM, ₽ <input name="smid" inputmode="decimal" value="{{ raw.smid or '' }}"></label>
+    <label>MAX, ₽ <input name="smax" inputmode="decimal" value="{{ raw.smax or '' }}"></label>
+    <button>Рассчитать</button>
+  </fieldset>
+</form>
+{% if inp.price_start > 0 %}
+<h3>Предельные цены входа при ROI {{ (inp.roi * 100)|round(0)|int }} %</h3>
+<table class="facts">
+  <tr><th>Сценарий</th><th class="num">Цена продажи</th><th class="num">Предельная цена покупки</th><th class="num">₽/м²</th><th class="num">Запас к старту</th></tr>
+  {% for key, name in (('min', 'MIN'), ('mid', 'MEDIUM'), ('max', 'MAX')) %}
+  <tr><td>{{ name }}</td>
+    <td class="num">{% if inp.sale[key] %}{{ inp.sale[key]|money }}{% else %}—{% endif %}</td>
+    <td class="num">{% if lim[key] is not none %}<strong>{{ lim[key]|money }}</strong>{% else %}—{% endif %}</td>
+    <td class="num">{% if lim[key] is not none and inp.area_m2 %}{{ (lim[key] / inp.area_m2)|round(1) }}{% else %}—{% endif %}</td>
+    <td class="num">{% if lim[key] is not none %}{% set gap = lim[key] - inp.price_start %}{% if gap >= 0 %}+{{ gap|money }}{% if inp.step %} ({{ (gap // inp.step)|int }} шаг.){% endif %}{% else %}<span class="bad">{{ gap|money }}</span>{% endif %}{% else %}—{% endif %}</td></tr>
+  {% endfor %}
+</table>
+<p><strong>Безопасный ориентир:</strong> {% if lim.safe is not none %}{{ lim.safe|money }} (минимум из предельных цен){% else %}не задан{% endif %}. <strong>Вывод:</strong> {{ calc.verdict }}.</p>
+<p class="small muted">Вход: {{ calc.entry.price|money }}{% if calc.entry.per_m2 %} ({{ calc.entry.per_m2 }} ₽/м²){% endif %}{% if inp.extra %}, с расходами {{ calc.entry.cost|money }}{% endif %}{% if calc.entry.payback_years %}; окупаемость арендой {{ calc.entry.payback_years }} лет при {{ calc.entry.rent_year|money }} в год{% endif %}.</p>
+{% if inp.step > 0 %}
+<h3>Таблица по шагам аукциона</h3>
+<table class="facts steps">
+  <tr><th class="num">Шаг</th><th class="num">Цена</th>{% if inp.area_m2 %}<th class="num">₽/м²</th>{% endif %}{% if inp.extra %}<th class="num">Всего с расходами</th>{% endif %}{% if inp.rent_month %}<th class="num">Окупаемость арендой, лет</th>{% endif %}
+    {% for key, name in (('min', 'MIN'), ('mid', 'MEDIUM'), ('max', 'MAX')) %}{% if inp.sale[key] %}<th class="num">Прибыль {{ name }} · ROI</th>{% endif %}{% endfor %}<th>В пределах</th></tr>
+  {% for r in calc.rows %}
+  <tr class="{% if r.within_safe %}ok{% elif r.status == 'вне порога' %}bad{% endif %}">
+    <td class="num">{{ r.step }}</td>
+    <td class="num">{{ r.price|money }}</td>
+    {% if inp.area_m2 %}<td class="num">{{ r.per_m2 }}</td>{% endif %}
+    {% if inp.extra %}<td class="num">{{ r.cost|money }}</td>{% endif %}
+    {% if inp.rent_month %}<td class="num">{{ r.payback_years if r.payback_years is not none else '—' }}</td>{% endif %}
+    {% for key, _ in (('min', 'MIN'), ('mid', 'MEDIUM'), ('max', 'MAX')) %}{% if inp.sale[key] %}{% set sc = r.scenarios[key] %}<td class="num">{{ sc.profit|money }} · {% if sc.roi is not none %}{{ (sc.roi * 100)|round(0)|int }} %{% else %}—{% endif %}</td>{% endif %}{% endfor %}
+    <td class="small">{% if r.within_safe %}✓ {% endif %}{{ r.status }}</td>
+  </tr>
+  {% endfor %}
+</table>
+<p class="muted small">«В пределах» — прибыль после налога на этом шаге даёт целевой ROI по названным сценариям; ✓ — цена не выше безопасного ориентира (ROI достигается даже при MIN). Таблица — инструмент дисциплины на торгах, а не оценка участка: цены продажи задаёте вы, ориентир стоимости из отчёта — только стартовая подстановка.</p>
+{% else %}
+<p class="muted small">Укажите шаг аукциона — появится таблица по шагам.</p>
+{% endif %}
+{% endif %}
+<style>
+.steps tr.ok td{background:rgba(46,117,182,.08)} .steps tr.bad td{color:var(--pico-muted-color)} .bad{color:#C4663A}
+</style>
+{% endblock %}

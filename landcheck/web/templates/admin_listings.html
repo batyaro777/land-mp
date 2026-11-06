@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Модерация объявлений — {{ brand }}{% endblock %}
+{% block content %}
+<hgroup>
+  <h2>Модерация объявлений</h2>
+  <p>Подтверждение права: сверьте кадастровый номер и ФИО в документе с тем, кто размещает. Автосверка выписки подсвечивает совпадения и расхождения, решение за вами. После решения файлы удаляются, из сверки остаётся только итог.</p>
+</hgroup>
+<div class="toolbar">
+  {% for st, label in LISTING_STATUSES.items() %}
+  <a href="/admin/listings?status={{ st }}" role="button" class="outline sm {{ 'secondary' if status != st else '' }}">{{ label }} {{ counts.get(st, 0) }}</a>
+  {% endfor %}
+  <a href="/admin/listings?status=all" role="button" class="outline sm {{ 'secondary' if status != 'all' else '' }}">все</a>
+</div>
+{% if not rows %}<p class="muted">Пусто.</p>{% endif %}
+{% for r in rows %}
+{% set o = owners.get(r.user_id) %}
+<article>
+  <h4><code>{{ r.cad_num }}</code> — {{ r.data.title or 'без заголовка' }} <span class="badge {{ {'draft':'','pending':'v-check','verified':'v-ok','rejected':'v-stop'}[r.status] }}">{{ r.status_label }}</span></h4>
+  <p class="small">Размещает: {{ o.name if o else r.user_id }}{% if o and o.email %} · {{ o.email }}{% endif %}{% if o and o.contact %} · {{ o.contact }}{% endif %} · роль: {{ o.role_label if o else '—' }}
+    · {{ PROOF_KINDS.get(r.proof_kind, '—') }}{% if r.submitted_at %} · отправлено {{ r.submitted_at|dt }}{% endif %}</p>
+  <p class="small">{{ r.data.address or '' }}{% if r.data.price_rub %} · {{ r.data.price_rub|money }}{% endif %}{% if r.data.land_area_sotka %} · {{ r.data.land_area_sotka }} сот.{% endif %}
+    {% if r.data.warnings %}<br><span class="err">Противоречия с кадастром: {{ r.data.warnings|join('; ') }}</span>{% endif %}</p>
+  {% if proofs.get(r.id) %}<p class="small">Документы: {% for f in proofs[r.id] %}<a href="/listing/{{ r.id }}/proof/{{ f }}" target="_blank">{{ f }}</a>{% if not loop.last %}, {% endif %}{% endfor %}</p>{% endif %}
+  {% if r.data.proof_check %}{% set d = r.data %}{% include "_proof_check.html" %}{% endif %}
+  {% if r.moderation_note %}<p class="small muted">Заметка: {{ r.moderation_note }}</p>{% endif %}
+  {% if r.status == 'pending' %}
+  <form method="post" action="/admin/listings/{{ r.id }}/decide" class="decide">
+    <input name="note" placeholder="Заметка продавцу (при отказе — причина)">
+    <button name="decision" value="approve" class="sm">Право подтверждено</button>
+    <button name="decision" value="reject" class="outline secondary sm">Отклонить</button>
+  </form>
+  {% endif %}
+  <p class="small"><a href="/listing/{{ r.id }}">открыть объявление</a></p>
+</article>
+{% endfor %}
+{% endblock %}

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<article class="narrow">
+  <hgroup>
+    <h2>Объявление из кадастра</h2>
+    <p>Загрузите всё, что есть, как есть: фото, сканы, выписку ЕГРН, договор, описание. Мы сами отделим фото от документов, достанем номер, цену и площадь, соберём текст по фактам НСПД, а документы отправим на подтверждение права с автосверкой. На выходе текст и XML для автозагрузки Avito.</p>
+  </hgroup>
+  <form method="post" action="/listing" enctype="multipart/form-data">
+    <label>Материалы участка <small class="muted">(фото, электронная выписка ЕГРН в PDF или XML с .sig, архив из Росреестра, договор, описание txt/docx — любые файлы, до 25 штук по 10 МБ; фото документов в подтверждение не идут)</small>
+      <input type="file" name="files" multiple>
+    </label>
+    <label>Ссылка на папку в облаке <small class="muted">(публичная папка Яндекс.Диска: disk.yandex.ru/d/…)</small>
+      <input name="cloud_url" type="url" placeholder="https://disk.yandex.ru/d/XXXXXXXX"></label>
+    <label>Кто размещает <small class="muted">(важно, если среди материалов есть выписка или договор: они сразу уйдут на подтверждение права)</small>
+      <select name="proof_kind">{% for k, v in PROOF_KINDS.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select>
+    </label>
+    <label>Кадастровый номер <small class="muted">(можно не указывать, если он есть в документах)</small>
+      <input name="cad_num" value="{{ cad_num }}" placeholder="50:09:0060202:101"></label>
+    <label>Цена, ₽ <small class="muted">(если не указать — возьмём из материалов)</small><input name="price" placeholder="2 500 000 или 2,5 млн"></label>
+    <label>Тип участка для Avito
+      <select name="object_type">
+        <option value="">определить по НСПД</option>
+        {% for key, label in object_types.items() %}<option value="{{ label }}">{{ label }}</option>{% endfor %}
+      </select>
+    </label>
+    <label for="notes">Заметки продавца <small class="muted">(что есть на участке и рядом: свет, газ, дорога, лес, река, соседи — своими словами или голосом)</small></label>
+    <div class="mic-wrap">
+      <textarea id="notes" name="notes" rows="6" placeholder="Электричество 15 кВт по границе, газ по улице, круглогодичный подъезд, рядом лес и река, до Истры 10 минут"></textarea>
+      {% if voice_enabled %}<button type="button" class="mic outline sm" data-target="notes" title="Надиктовать описание, до 60 секунд">🎙 Голосом</button>{% endif %}
+      <small class="mic-status muted"></small>
+    </div>
+    <label>Телефон для объявления <small class="muted">(если не указать — возьмём из материалов)</small><input name="phone" placeholder="+7 900 000-00-00"></label>
+    <button type="submit">Собрать объявление</button>
+  </form>
+</article>
+{% endblock %}

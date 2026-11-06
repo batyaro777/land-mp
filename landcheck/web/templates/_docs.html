@@ -1,0 +1,32 @@
+{# Блок «Документы и упоминания»: суды, торги, акты, новости, объявления по кадастровому номеру #}
+<article class="docs" id="docs">
+  <hgroup>
+    <h4>Документы и упоминания участка</h4>
+    <p class="muted small">Открытые источники по кадастровому номеру{% if docs and docs.fetched_at %} · собрано {{ docs.fetched_at|dt }}{% endif %}
+      {% if not public %}· <a href="{{ docs_url }}?refresh=1" hx-get="{{ docs_url }}?refresh=1" hx-target="#docs" hx-swap="outerHTML" class="small">обновить</a>{% endif %}</p>
+  </hgroup>
+  {% if not docs or docs.error %}
+    <p class="muted">Поиск по открытым источникам временно не ответил — нажмите «обновить» позже.</p>
+  {% elif not docs.groups %}
+    <p class="muted">Упоминаний кадастрового номера в судах, торгах, актах, новостях и объявлениях не найдено. Это не гарантия отсутствия споров: выписка ЕГРН и картотека судов по продавцу остаются в чек-листе.</p>
+  {% else %}
+    {% set why = {
+      'court': 'номер участка упомянут в судебном акте — возможен спор или прошлое дело; откройте и проверьте стороны, предмет и дату',
+      'torgi': 'участок выставлялся или продавался на торгах — в протоколе видна цена, число участников и условия',
+      'gov': 'акт администрации, где перечислен участок: присвоение адреса, межевание, изъятие, изменение зоны — откройте и найдите строку с этим номером',
+      'news': 'упоминание в новостях или на сайтах — контекст, а не вывод; проверьте дату и источник',
+      'ads': 'объявления о продаже этого участка: история цены и сколько он на рынке'
+    } %}
+    {% for g in docs.groups %}
+    <p><strong>{{ g.title }}</strong>{% if g.kind == 'court' or g.kind == 'torgi' %} <span class="badge mini v-check">проверить</span>{% endif %}
+      <br><span class="muted small">Зачем это здесь: {{ why.get(g.kind, '') }}.</span></p>
+    <ul class="loc-list">
+      {% for d in g['items'] %}
+      <li><a href="{{ d.url }}" target="_blank" rel="noopener">{{ d.title|truncate(110) }}</a> <span class="muted small">{{ d.host }}{% if d.date %}, {{ d.date|day }}{% endif %}</span>
+        {% if d.snippet %}<div class="muted small">{{ d.snippet|truncate(200) }}</div>{% endif %}</li>
+      {% endfor %}
+    </ul>
+    {% endfor %}
+    <p class="muted small">Совпадение номера в тексте страницы — повод открыть документ, а не вывод. Суды и торги проверяйте по первоисточнику.</p>
+  {% endif %}
+</article>

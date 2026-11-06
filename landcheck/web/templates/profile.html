@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Профиль — {{ brand }}<form id="tg-off" method="post" action="/profile/telegram/off"></form><form id="api-on" method="post" action="/profile/api-key"></form><form id="api-off" method="post" action="/profile/api-key/off"></form>
+{% endblock %}
+{% block content %}
+<article class="narrow">
+  <hgroup>
+    <h2>Профиль и логотип</h2>
+    <p>Имя, бренд и логотип идут в шапку отчётов для клиентов: публичная ссылка и PDF.</p>
+  </hgroup>
+  {% if saved %}<p class="ok-msg">Сохранено.</p>{% endif %}
+  {% if error %}<p class="err">{{ error }}</p>{% endif %}
+  <form method="post" action="/profile" enctype="multipart/form-data">
+    <label>Как вас называть<input name="name" value="{{ user.name }}" required></label>
+    <label>Название компании или бренда <small class="muted">(в шапке отчётов)</small>
+      <input name="brand_name" value="{{ user.brand or '' }}" placeholder="Например, Земля Подмосковья"></label>
+    <label>Контакт <small class="muted">(телефон или Telegram; в отчёты пока не выводится)</small>
+      <input name="contact" value="{{ user.contact or '' }}" placeholder="@username"></label>
+    <label>Роль
+      <select name="role">
+        {% for key, label in PUBLIC_ROLES_MAP.items() %}<option value="{{ key }}" {{ 'selected' if user.role == key else '' }}>{{ label }}</option>{% endfor %}
+      </select>
+      <small class="muted">Брокер видит всё: подборки, отчёты, объявления. Роль можно менять.</small>
+    </label>
+    <div class="grid">
+      <label>Email для входа<input type="email" name="email" value="{{ user.email or '' }}" placeholder="you@example.com"></label>
+      <label>Новый пароль <small class="muted">(пусто — не менять)</small><input type="password" name="password" minlength="8" autocomplete="new-password"></label>
+    </div>
+    <p><strong>Telegram для уведомлений:</strong>
+      {% if user.telegram_chat_id %}<span class="badge v-ok">подключён</span>
+        <button type="submit" form="tg-off" class="outline secondary sm">отключить</button>
+      {% elif tg_link %}<a href="{{ tg_link }}" target="_blank" rel="noopener" role="button" class="sm">Подключить Telegram</a>
+        <small class="muted">откроется бот, нажмите «Start» — и всё</small>
+      {% else %}<span class="muted small">бот не подключён к сервису</span>{% endif %}</p>
+    <input type="hidden" name="telegram_chat_id" value="">
+    <label class="inline-check"><input type="checkbox" name="notify_email" value="1" {{ 'checked' if user.notify_email else '' }}> присылать уведомления на email</label>
+    <label>Логотип <small class="muted">(PNG, JPG или WebP до 2 МБ; в отчёте высота 40 px)</small>
+      <input type="file" name="logo" accept=".png,.jpg,.jpeg,.webp"></label>
+    {% if logo_url %}
+    <p><img src="{{ logo_url }}" alt="логотип" class="brand-logo"> <label class="inline-check"><input type="checkbox" name="remove_logo" value="1"> удалить логотип</label></p>
+    {% endif %}
+    <button type="submit">Сохранить</button>
+  </form>
+</article>
+<article id="api">
+  <h4>API для интеграций <small class="muted">(юристам, инженерам, CRM)</small></h4>
+  {% if user.api_key %}
+  <p>Ключ: <code id="api-key">{{ user.api_key }}</code> <button type="button" class="outline sm" onclick="navigator.clipboard.writeText(document.getElementById('api-key').textContent);this.textContent='Скопировано'">Скопировать</button>
+    <button type="submit" form="api-on" class="outline sm secondary" onclick="return confirm('Старый ключ перестанет работать. Перевыпустить?')">Перевыпустить</button>
+    <button type="submit" form="api-off" class="outline sm secondary">Отозвать</button></p>
+  <details><summary class="small">Как пользоваться</summary>
+<pre class="small">curl -X POST {{ base_url }}/api/v1/checks \
+  -H "Authorization: Bearer {{ user.api_key }}" -H "Content-Type: application/json" \
+  -d '{"numbers": ["50:09:0060202:101"], "purpose": "izhs"}'
+# → {"id": <id>, "status": "queued", ...}; затем, подставив id:
+curl -H "Authorization: Bearer {{ user.api_key }}" {{ base_url }}/api/v1/checks/<id>
+curl -H "Authorization: Bearer {{ user.api_key }}" -o result.csv {{ base_url }}/api/v1/checks/<id>/export.csv</pre>
+    <p class="muted small">Описание всех методов: <a href="/api/v1" target="_blank">/api/v1</a>. Цели: {{ purposes }}. До {{ max_items }} участков за запрос.</p>
+  </details>
+  {% else %}
+  <p class="muted small">Ключ даёт доступ к проверкам из своих программ: POST номера → JSON/CSV/XLSX с вердиктами и флагами. <button type="submit" form="api-on" class="outline sm">Выпустить ключ API</button></p>
+  {% endif %}
+</article>
+{% endblock %}

@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Вход — {{ brand }}{% endblock %}
+{% block content %}
+<article class="narrow">
+  <hgroup>
+    <h2>Вход</h2>
+    <p>Проверка земельных участков по открытым данным: для покупателей, продавцов и брокеров.</p>
+  </hgroup>
+  {% if error %}<p class="err">{{ error }}</p>{% endif %}
+  <nav class="tabs">
+    <a href="/login?tab=password" class="{{ 'active' if tab == 'password' else '' }}">Войти</a>
+    <a href="/login?tab=register" class="{{ 'active' if tab == 'register' else '' }}">Регистрация</a>
+    <a href="/login?tab=code" class="{{ 'active' if tab == 'code' else '' }}">По коду приглашения</a>
+  </nav>
+
+  {% if tab == 'register' %}
+  <form method="post" action="/register">
+    {% if ref %}<input type="hidden" name="ref" value="{{ ref }}"><p class="small muted">Вы пришли по партнёрской ссылке.</p>{% endif %}
+    <label>Email<input type="email" name="email" placeholder="you@example.com" required autofocus></label>
+    <label>Пароль <small class="muted">(не короче 8 знаков)</small><input type="password" name="password" minlength="8" required></label>
+    <label>Как вас называть<input name="name" placeholder="Имя" required></label>
+    <label>Кто вы
+      <select name="role">
+        {% for key, label in PUBLIC_ROLES_MAP.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
+      </select>
+      <small class="muted">Покупатель — проверка участков под свою цель. Продавец — объявление с проверкой права. Брокер — всё сразу и подборки до 300 участков.</small>
+    </label>
+    <label>Название компании или бренда <small class="muted">(необязательно, для шапки отчётов)</small><input name="brand_name"></label>
+    <button type="submit">Зарегистрироваться</button>
+  </form>
+  {% elif tab == 'code' %}
+  <form method="post" action="/login">
+    <label>Код приглашения<input name="code" placeholder="LC-XXXXXX" required autocomplete="off" autofocus></label>
+    <label>Как вас называть<input name="name" placeholder="Имя" required></label>
+    <label>Название вашей компании или бренда <small class="muted">(будет в шапке отчётов для клиентов)</small><input name="brand_name" placeholder="Например, Земля Подмосковья"></label>
+    <label>Контакт <small class="muted">(телефон или Telegram, по желанию)</small><input name="contact" placeholder="@username"></label>
+    <button type="submit">Войти по коду</button>
+    <p class="muted small">Код выдаёт организатор пилота. Пароль не нужен; email и пароль можно задать потом в профиле.</p>
+  </form>
+  {% else %}
+  <form method="post" action="/login/password">
+    <label>Email<input type="email" name="email" required autofocus></label>
+    <label>Пароль<input type="password" name="password" required></label>
+    <button type="submit">Войти</button>
+    <p class="muted small">Нет аккаунта — <a href="/login?tab=register">зарегистрируйтесь</a>. Есть код приглашения — <a href="/login?tab=code">войдите по коду</a>.</p>
+  </form>
+  {% endif %}
+</article>
+{% endblock %}

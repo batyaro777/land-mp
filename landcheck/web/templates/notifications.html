@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Уведомления — {{ brand }}{% endblock %}
+{% block content %}
+<hgroup>
+  <h2>Уведомления</h2>
+  <p>Новые участки под ваши запросы, запросы контакта и решения модератора. Email и Telegram для доставки — в <a href="/profile">профиле</a>.</p>
+</hgroup>
+{% if not rows %}<p class="muted">Пока пусто.</p>{% endif %}
+{% for n in rows %}
+<div class="check-card{% if n.id in unread_ids %} unread{% endif %}">
+  <p><span class="badge mini">{{ labels.get(n.kind, n.kind) }}</span> <span class="muted small">{{ n.created_at|dt }}</span>{% if n.id in unread_ids %} <span class="badge mini v-check">новое</span>{% endif %}</p>
+  <p>{{ n.text }}</p>
+  {% if n.url %}<p class="small"><a href="{{ n.url }}">открыть</a></p>{% endif %}
+</div>
+{% endfor %}
+{% endblock %}

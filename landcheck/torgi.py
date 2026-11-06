@@ -1,0 +1,494 @@
+"""Торги земельными участками рядом — ГИС «Торги» torgi.gov.ru (ТЗ v3, п. 9).
+
+Что считаем: за последние 12 месяцев в кадастровом районе участка (первые две группы
+номера, например `40:13`) — сколько электронных аукционов по земле состоялось, сколько
+не состоялось, сколько идёт сейчас; по состоявшимся — медиана итоговой цены за м²
+(продажа и аренда отдельно) и насколько итог выше старта. Это ликвидность локации
+и ориентир «почём реально уходит земля у государства», а не рыночная оценка.
+
+Источник — публичный API torgi.gov.ru (без авторизации). Из-за гео-блока запросы идут
+через RU-шлюз (`landcheck.ruproxy`). Ограничения API, снятые 01.11.2026: страница не
+больше 10 лотов, `text=` ищет по названию и описанию (префикс кадастрового номера
+работает), итоговая цена `priceFin` есть только в карточке лота, у «сообщений о
+предоставлении» (biddForm=IPS) цены нет — поэтому считаем только электронные аукционы (EA).
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+import statistics
+import threading
+import time
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+import httpx
+
+from landcheck import ruproxy
+
+log = logging.getLogger(__name__)
+
+API = "https://torgi.gov.ru/new/api/public"
+LOT_URL = "https://torgi.gov.ru/new/public/lots/lot/{lot_id}"
+SEARCH_URL = "https://torgi.gov.ru/new/public/lots/reg"
+SOURCE = (
+    "ГИС «Торги» torgi.gov.ru: земельные участки (catCode=2), электронные аукционы (EA), "
+    "публикация за последние 12 месяцев, поиск по кадастровому району"
+)
+SCHEMA_VERSION = 1
+MONTHS = 12
+PAGE_SIZE = 10  # сервер молча режет size до 10
+# Страниц поиска на каждый статус. Поиск по тексту отдаёт и соседние районы, свои лоты
+# размазаны по страницам: при 8 страницах 40:10 терял единственную продажу, при 15 —
+# состоявшиеся (145 по тексту) собраны целиком, а не состоявшиеся (255) обрезаны (Клавдий,
+# прод 01.11). 30 страниц = 300 лотов на статус; что обрезано — названо в пометке.
+MAX_PAGES = 30
+MAX_CARDS = 12  # карточек состоявшихся лотов (итоговая цена только в карточке)
+# torgi.gov.ru режет частые запросы: после 3 подряд — 503, с паузой 6 с проходят все
+# (Клавдий, прод 01.11). Пауза общая на процесс, повтор на 503 с нарастающей выдержкой.
+REQUEST_INTERVAL_S = 6.0
+RETRY_DELAYS_S = (10.0, 20.0, 40.0)
+STATUS_ACTIVE = "PUBLISHED,APPLICATIONS_SUBMISSION,DETERMINING_WINNER"
+STATUS_SUCCEED = "SUCCEED"
+STATUS_FAILED = "FAILED"
+MIN_AREA_M2 = 50.0  # меньше — не участок, а опечатка в карточке
+
+_CAD_RE = re.compile(r"\b(\d{2}):(\d{2}):\d{6,7}:\d+\b")
+
+
+def district_of(cad_num: str | None) -> str | None:
+    """`40:13:120101:22` → `40:13` (кадастровый район)."""
+    if not cad_num:
+        return None
+    parts = cad_num.strip().split(":")
+    if len(parts) < 2 or not (parts[0].isdigit() and parts[1].isdigit()):
+        return None
+    return f"{parts[0].zfill(2)}:{parts[1].zfill(2)}"
+
+
+def region_of(cad_num: str | None) -> str | None:
+    d = district_of(cad_num)
+    return d.split(":")[0] if d else None
+
+
+# --- клиент ------------------------------------------------------------------------------
+_throttle_lock = threading.Lock()
+_last_request_at = 0.0
+
+
+def _wait_turn(interval: float, sleep=time.sleep) -> None:
+    """Не чаще одного запроса в `interval` секунд на весь процесс (все районы, все потоки)."""
+    global _last_request_at
+    with _throttle_lock:
+        now = time.monotonic()
+        wait = _last_request_at + interval - now
+        if wait > 0:
+            sleep(wait)
+            now = time.monotonic()
+        _last_request_at = now
+
+
+class TorgiClient:
+    def __init__(
+        self,
+        client: httpx.Client | None = None,
+        *,
+        interval: float = REQUEST_INTERVAL_S,
+        retry_delays: tuple[float, ...] = RETRY_DELAYS_S,
+        sleep=time.sleep,
+    ):
+        self._c = client or ruproxy.client()
+        self.requests = 0
+        self.retries = 0
+        self._interval = interval
+        self._retry_delays = retry_delays
+        self._sleep = sleep
+
+    def close(self) -> None:
+        self._c.close()
+
+    def _get(self, url: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        for attempt in range(len(self._retry_delays) + 1):
+            _wait_turn(self._interval, self._sleep)
+            self.requests += 1
+            r = self._c.get(url, params=params)
+            if r.status_code in (429, 503) and attempt < len(self._retry_delays):
+                self.retries += 1
+                delay = self._retry_delays[attempt]
+                log.info("torgi: %s → %s, пауза %.0f с", url, r.status_code, delay)
+                self._sleep(delay)
+                continue
+            r.raise_for_status()
+            return r.json()
+        raise httpx.HTTPError("torgi: исчерпаны повторы")  # pragma: no cover
+
+    def search(
+        self,
+        *,
+        region: str,
+        text: str,
+        statuses: str,
+        pub_from: str,
+        page: int = 0,
+        form: str | None = "EA",
+    ) -> dict[str, Any]:
+        params = {
+            "catCode": "2",
+            "subjRF": region,
+            "text": text,
+            "lotStatus": statuses,
+            "pubFrom": pub_from,
+            "byFirstVersion": "true",
+            "size": str(PAGE_SIZE),
+            "page": str(page),
+            "sort": "firstVersionPublicationDate,desc",
+        }
+        if form:
+            params["biddForm"] = form
+        return self._get(f"{API}/lotcards/search", params)
+
+    def lot(self, lot_id: str) -> dict[str, Any]:
+        return self._get(f"{API}/lotcards/{lot_id}")
+
+
+# --- разбор карточки --------------------------------------------------------------------
+def _chars(card: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for ch in card.get("characteristics") or []:
+        code = ch.get("code")
+        if code:
+            out[code] = ch.get("characteristicValue")
+    return out
+
+
+def cad_num_of(card: dict[str, Any]) -> str | None:
+    val = _chars(card).get("CadastralNumber")
+    if isinstance(val, str) and _CAD_RE.search(val):
+        return _CAD_RE.search(val).group(0)
+    text = f"{card.get('lotName') or ''} {card.get('lotDescription') or ''}"
+    m = _CAD_RE.search(text)
+    return m.group(0) if m else None
+
+
+def area_of(card: dict[str, Any]) -> float | None:
+    val = _chars(card).get("SquareZU")
+    try:
+        area = float(val) if val is not None else None
+    except (TypeError, ValueError):
+        return None
+    return area if area and area >= MIN_AREA_M2 else None
+
+
+def vri_of(card: dict[str, Any]) -> str | None:
+    val = _chars(card).get("PermittedUse")
+    if isinstance(val, list) and val:
+        return (val[0] or {}).get("name")
+    if isinstance(val, dict):
+        return val.get("name")
+    return None
+
+
+def _date(card: dict[str, Any]) -> str | None:
+    raw = (
+        card.get("auctionStartDate")
+        or card.get("biddEndTime")
+        or card.get("noticeFirstVersionPublicationDate")
+    )
+    return raw[:10] if isinstance(raw, str) else None
+
+
+def _code(obj: Any) -> str | None:
+    return obj.get("code") if isinstance(obj, dict) else (obj if isinstance(obj, str) else None)
+
+
+def item_of(card: dict[str, Any], district: str) -> dict[str, Any] | None:
+    """Строка таблицы «Торги рядом»; None — лот не из этого кадастрового района."""
+    cad = cad_num_of(card)
+    if cad is None or district_of(cad) != district:
+        return None
+    area = area_of(card)
+    start = card.get("priceMin")
+    fin = card.get("priceFin")
+    kind = "аренда" if card.get("typeTransaction") == "rent" else "продажа"
+    price = fin if isinstance(fin, int | float) else None
+    rub_m2 = round(price / area, 1) if price and area else None
+    ratio = (
+        round(fin / start, 2)
+        if isinstance(fin, int | float) and isinstance(start, int | float) and start > 0
+        else None
+    )
+    return {
+        "id": card.get("id"),
+        "url": LOT_URL.format(lot_id=card.get("id")),
+        "cad_num": cad,
+        "kind": kind,
+        "status": card.get("lotStatus"),
+        "area_m2": area,
+        "price_start": start if isinstance(start, int | float) else None,
+        "price_fin": price,
+        "rub_m2": rub_m2,
+        "ratio": ratio,
+        "date": _date(card),
+        "address": card.get("estateAddress"),
+        "vri": vri_of(card),
+        "category": (card.get("category") or {}).get("name"),
+        "form": _code(card.get("biddForm")),
+    }
+
+
+# --- статистика --------------------------------------------------------------------------
+def _quantile(values: list[float], q: float) -> float | None:
+    if not values:
+        return None
+    s = sorted(values)
+    pos = (len(s) - 1) * q
+    lo, hi = int(pos), min(int(pos) + 1, len(s) - 1)
+    return round(s[lo] + (s[hi] - s[lo]) * (pos - lo), 1)
+
+
+def _stats(items: list[dict[str, Any]]) -> dict[str, Any]:
+    per_m2 = [i["rub_m2"] for i in items if i.get("rub_m2")]
+    ratios = [i["ratio"] for i in items if i.get("ratio") is not None]
+    return {
+        "count": len(items),
+        "with_price": len(per_m2),
+        "median_rub_m2": round(statistics.median(per_m2), 1) if per_m2 else None,
+        "p25_rub_m2": _quantile(per_m2, 0.25),
+        "p75_rub_m2": _quantile(per_m2, 0.75),
+        "median_ratio": round(statistics.median(ratios), 2) if ratios else None,
+    }
+
+
+def empty_result(cad_num: str, error: str | None = None) -> dict[str, Any]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "region": region_of(cad_num),
+        "district": district_of(cad_num),
+        "months": MONTHS,
+        "as_of": datetime.now(UTC).isoformat(timespec="seconds"),
+        "succeed_total": 0,
+        "failed_total": 0,
+        "active_total": 0,
+        "ea_total": 0,
+        "liquidity": None,
+        "sale": _stats([]),
+        "rent": _stats([]),
+        "items": [],
+        "complete": True,
+        "truncated": [],
+        "sample_note": None,
+        "search_url": SEARCH_URL,
+        "source": SOURCE,
+        "error": error,
+        "liquidity_text": error or "торги не запрашивались",
+    }
+
+
+def _collect(
+    api: TorgiClient, region: str, district: str, statuses: str, pub_from: str
+) -> tuple[list[dict[str, Any]], bool]:
+    """Страницы поиска → лоты своего кадастрового района. Второе значение — все ли страницы
+    просмотрены (иначе счётчик занижен)."""
+    hits: list[dict[str, Any]] = []
+    page, total_pages = 0, 1
+    while page < total_pages and page < MAX_PAGES:
+        data = api.search(
+            region=region, text=district, statuses=statuses, pub_from=pub_from, page=page
+        )
+        total_pages = int(data.get("totalPages") or 0)
+        hits.extend(h for h in data.get("content") or [] if item_of(h, district) is not None)
+        page += 1
+    return hits, page >= total_pages
+
+
+def nearby_auctions(
+    cad_num: str,
+    *,
+    client: httpx.Client | None = None,
+    now: datetime | None = None,
+    interval: float = REQUEST_INTERVAL_S,
+    sleep=time.sleep,
+) -> dict[str, Any]:
+    """Сводка торгов по кадастровому району участка. Ошибки — внутри (`error`), не наружу."""
+    district = district_of(cad_num)
+    region = region_of(cad_num)
+    if district is None or region is None:
+        return empty_result(cad_num, "кадастровый номер без района — торги не ищем")
+    if client is None and not ruproxy.enabled():
+        return empty_result(
+            cad_num, "RU-шлюз не настроен (LANDCHECK_RU_PROXY) — torgi.gov.ru из-за рубежа закрыт"
+        )
+    now = now or datetime.now(UTC)
+    pub_from = (now - timedelta(days=30 * MONTHS)).date().isoformat()
+    api = TorgiClient(client, interval=interval, sleep=sleep)
+    result = empty_result(cad_num)
+    try:
+        # Поиск по тексту «40:13» отдаёт и соседние районы (40:14, 40:17…), поэтому считаем
+        # только лоты, у которых кадастровый номер действительно из этого района.
+        succeed, done1 = _collect(api, region, district, STATUS_SUCCEED, pub_from)
+        failed, done2 = _collect(api, region, district, STATUS_FAILED, pub_from)
+        active, done3 = _collect(api, region, district, STATUS_ACTIVE, pub_from)
+        result["succeed_total"] = len(succeed)
+        result["failed_total"] = len(failed)
+        result["active_total"] = len(active)
+        result["complete"] = done1 and done2 and done3
+        result["truncated"] = [
+            name
+            for name, done in (
+                ("состоявшиеся", done1),
+                ("не состоявшиеся", done2),
+                ("идущие", done3),
+            )
+            if not done
+        ]
+        items: list[dict[str, Any]] = []
+        for hit in succeed[:MAX_CARDS]:  # поиск уже отсортирован: новые первыми
+            try:
+                card = api.lot(hit["id"])
+            except (httpx.HTTPError, ValueError) as exc:
+                log.warning("torgi: карточка %s: %s", hit.get("id"), exc)
+                card = hit
+            row = item_of(card, district)
+            if row:
+                items.append(row)
+    except (httpx.HTTPError, ValueError, KeyError) as exc:
+        log.warning("torgi: %s: %s", district, exc)
+        result["error"] = f"torgi.gov.ru не ответил: {type(exc).__name__}"
+        result["liquidity_text"] = result["error"]
+        return result
+    finally:
+        if client is None:
+            api.close()
+    result["ea_total"] = result["succeed_total"] + result["failed_total"] + result["active_total"]
+    closed = result["succeed_total"] + result["failed_total"]
+    result["liquidity"] = round(result["succeed_total"] / closed, 2) if closed else None
+    items.sort(key=lambda i: i.get("date") or "", reverse=True)
+    result["items"] = items[:15]
+    result["sale"] = _stats([i for i in items if i["kind"] == "продажа"])
+    result["rent"] = _stats([i for i in items if i["kind"] == "аренда"])
+    notes = []
+    if result["succeed_total"] > len(items):
+        notes.append(
+            f"цены посчитаны по {len(items)} последним состоявшимся аукционам из "
+            f"{result['succeed_total']}"
+        )
+    if not result["complete"]:
+        notes.append(
+            f"{', '.join(result['truncated'])}: просмотрено {MAX_PAGES * PAGE_SIZE} последних "
+            "лотов поиска — счётчик по району занижен"
+        )
+    result["sample_note"] = "; ".join(notes) or None
+    result["requests"] = api.requests
+    result["retries"] = api.retries
+    result["liquidity_text"] = liquidity_text(result)
+    return result
+
+
+# --- лот самого участка (ТЗ v3, п. 1.12: цели «торги», «инвестиция», «у муниципалитета») -----
+ALL_STATUSES = "PUBLISHED,APPLICATIONS_SUBMISSION,DETERMINING_WINNER,SUCCEED,FAILED,CANCELED"
+STATUS_RU = {
+    "PUBLISHED": "опубликован",
+    "APPLICATIONS_SUBMISSION": "приём заявок",
+    "DETERMINING_WINNER": "определение победителя",
+    "SUCCEED": "состоялся",
+    "FAILED": "не состоялся",
+    "CANCELED": "отменён",
+}
+LOT_MONTHS = 24
+
+
+def _num(v: Any) -> float | None:
+    return float(v) if isinstance(v, int | float) else None
+
+
+def parcel_lot(
+    cad_num: str,
+    *,
+    client: httpx.Client | None = None,
+    now: datetime | None = None,
+    interval: float = REQUEST_INTERVAL_S,
+    sleep=time.sleep,
+) -> dict[str, Any]:
+    """Извещения torgi.gov.ru по самому участку за два года: аукцион (EA) или извещение о
+    предоставлении по ст. 39.18 ЗК (IPS). Два запроса через общий троттлинг; ошибки — в
+    результате, исключений наружу нет."""
+    now = now or datetime.now(UTC)
+    region = region_of(cad_num)
+    out: dict[str, Any] = {
+        "cad_num": cad_num,
+        "found": False,
+        "lot": None,
+        "months": LOT_MONTHS,
+        "as_of": now.isoformat(timespec="seconds"),
+        "search_url": SEARCH_URL,
+        "error": None,
+    }
+    if region is None:
+        out["error"] = "кадастровый номер без региона"
+        return out
+    pub_from = (now - timedelta(days=LOT_MONTHS * 30)).date().isoformat()
+    api = TorgiClient(client, interval=interval, sleep=sleep)
+    try:
+        page = api.search(
+            region=region, text=cad_num, statuses=ALL_STATUSES, pub_from=pub_from, form=None
+        )
+        cards = [c for c in page.get("content") or [] if cad_num_of(c) == cad_num]
+        if not cards:
+            return out
+        card = cards[0]  # сортировка по дате публикации, свежее первым
+        try:
+            card = {**card, **api.lot(card.get("id"))}
+        except Exception as exc:  # noqa: BLE001 — карточка не критична: есть данные поиска
+            log.info("torgi lot %s: %s", card.get("id"), exc)
+        form = _code(card.get("biddForm"))
+        status = card.get("lotStatus")
+        out["found"] = True
+        out["lot"] = {
+            "id": card.get("id"),
+            "url": LOT_URL.format(lot_id=card.get("id")),
+            "status": status,
+            "status_ru": STATUS_RU.get(status or "", status or "—"),
+            "form": form,
+            "notice_3918": form == "IPS",
+            "kind": "аренда" if card.get("typeTransaction") == "rent" else "продажа",
+            "price_start": _num(card.get("priceMin")),
+            "price_step": _num(card.get("priceStep")),
+            "deposit": _num(card.get("deposit")),
+            "price_fin": _num(card.get("priceFin")),
+            "area_m2": area_of(card),
+            "bidd_end": (card.get("biddEndTime") or "")[:10] or None,
+            "auction_start": (card.get("auctionStartDate") or "")[:10] or None,
+            "published": (card.get("noticeFirstVersionPublicationDate") or "")[:10] or None,
+            "vri": vri_of(card),
+            "address": card.get("estateAddress"),
+        }
+    except Exception as exc:  # noqa: BLE001
+        log.warning("torgi parcel_lot %s: %s", cad_num, exc)
+        out["error"] = f"torgi.gov.ru недоступен: {type(exc).__name__}"
+    finally:
+        out["requests"] = api.requests
+        if client is None:
+            api.close()
+    return out
+
+
+def liquidity_text(a: dict[str, Any]) -> str:
+    """Одна фраза для отчёта: насколько охотно здесь покупают землю на торгах."""
+    if a.get("error"):
+        return a["error"]
+    if not a.get("ea_total"):
+        return "за год электронных аукционов по земле в этом кадастровом районе не было"
+    liq = a.get("liquidity")
+    if liq is None:
+        return f"идут {a['active_total']} аукционов, завершённых за год ещё нет"
+    if liq >= 0.6:
+        verdict = "спрос есть: большинство аукционов состоялись"
+    elif liq >= 0.3:
+        verdict = "спрос неровный: состоялась примерно треть–половина аукционов"
+    else:
+        verdict = "спрос слабый: большинство аукционов не состоялись (нет заявок)"
+    return (
+        f"состоялись {a['succeed_total']} из {a['succeed_total'] + a['failed_total']} "
+        f"завершённых ({int(liq * 100)} %), идут сейчас {a['active_total']} — {verdict}"
+    )
