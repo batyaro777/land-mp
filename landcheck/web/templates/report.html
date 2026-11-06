@@ -19,6 +19,7 @@
   <h2><code>{{ p.cad_num }}</code> <span class="badge v-{{ vclass }} big">{{ d.verdict }}</span></h2>
   <p>{{ (p.address or 'Адрес в НСПД не указан')|short_address }}{% if p.address and (p.address|short_address) != p.address %} <span class="muted small" title="{{ p.address }}">(адрес по ЕГРН задан относительно ориентира)</span>{% endif %}</p>
 </hgroup>
+{% if summary %}<p class="small"><strong>{{ summary.headline }}</strong> <a href="#summary">Итог простыми словами ↓</a></p>{% endif %}
 {% if p.errors %}
 <p class="err small">{% if p.from_stale_cache %}НСПД не ответил, показаны данные прошлой проверки от {{ p.fetched_at|dt }}{% else %}Данные НСПД получены с ошибкой{% endif %}: {{ p.errors[0]|truncate(120) }}.{% if not public %} Нажмите «Обновить данные» в подборке позже.{% endif %}</p>
 {% endif %}
@@ -158,7 +159,6 @@
     {% if p.forest_park_checked and p.forest_park %}<tr><th>Лесопарковый зелёный пояс</th><td><span class="badge mini v-check">в границах</span> {% for z in p.forest_park %}{{ z.describe }}{% if not loop.last %}; {% endif %}{% endfor %}</td></tr>{% endif %}
     <tr><th>Кадастровая стоимость</th><td>{{ p.cadastral_cost_rub|money }}{% if p.cost_index_rub_m2 %} <span class="muted small">({{ p.cost_index_rub_m2|money }}/м²)</span>{% endif %}</td></tr>
     {% if d.listing.price_rub %}<tr><th>Цена в объявлении</th><td>{{ d.listing.price_rub|money }}{% if d.price_per_sotka %} <span class="muted small">({{ d.price_per_sotka|money }} за сотку)</span>{% endif %}</td></tr>{% endif %}
-    <tr><th>Форма собственности</th><td>{{ p.ownership_type or 'в карточке не указана' }}</td></tr>
     <tr><th>Вид участка</th><td>{{ p.land_record_subtype or p.land_record_type or '—' }}</td></tr>
     <tr><th>Дата постановки на учёт</th><td>{{ p.reg_date|day }}</td></tr>
     <tr><th>Территориальная зона</th><td>{% if not p.territorial_zone_checked %}не проверялась{% elif p.territorial_zones %}{% for z in p.territorial_zones %}{{ z.describe }}{% if not loop.last %}; {% endif %}{% endfor %}{% else %}к участку в НСПД не привязана (ПЗЗ муниципалитета в НСПД не загружены){% if pzz_url %} — <a href="{{ pzz_url }}" target="_blank" rel="noopener">найти карту ПЗЗ муниципалитета</a> и проверить границу зоны{% endif %}{% endif %}</td></tr>
@@ -175,22 +175,30 @@
 </article>
 </div>
 
-<article>
-  <h4>Риск-флаги</h4>
+<article id="risks">
+  <h4>Риски и что делать</h4>
   {% for level, cls in [('стоп','stop'),('проверить','check')] %}
     {% for f in by_level[level] %}
-    <div class="flag {{ cls }}"><span class="badge v-{{ cls }}">{{ level }}</span> {{ f.message|lawlinks }}<div class="muted small">Источник: {{ f.source|lawlinks }}</div></div>
+    {% set acts = plan_by_msg.get(f.message) %}
+    <div class="flag {{ cls }}"><span class="badge v-{{ cls }}">{{ level }}</span>
+      {% if f.message in goal_msgs %}{{ goal_msgs[f.message] }} — разобрано выше, в блоке «{{ goal.question or 'Можно ли здесь' }}»{% else %}{{ f.message|lawlinks }}<div class="muted small">Источник: {{ f.source|lawlinks }}</div>{% endif %}
+      {% if acts %}
+      <table class="facts actions">
+        <thead><tr><th>Что подтвердить</th><th>Где взять</th><th>Следующий шаг</th></tr></thead>
+        <tbody>{% for a in acts %}<tr><td>{{ a.what|lawlinks }}</td><td>{{ a.where|lawlinks }}</td><td>{{ a.next|lawlinks }}</td></tr>{% endfor %}</tbody>
+      </table>
+      {% endif %}
+    </div>
     {% endfor %}
   {% endfor %}
-  {% if by_level['ок'] %}
-  <details><summary class="small">Справочно ({{ by_level['ок']|length }})</summary>
-    {% for f in by_level['ок'] %}<div class="flag ok">{{ f.message|lawlinks }}<div class="muted small">Источник: {{ f.source|lawlinks }}</div></div>{% endfor %}
+  {% set refs = by_level['ок']|rejectattr('message', 'in', goal_msgs)|list %}
+  {% if refs %}
+  <details><summary class="small">Справочно ({{ refs|length }})</summary>
+    {% for f in refs %}<div class="flag ok">{{ f.message|lawlinks }}<div class="muted small">Источник: {{ f.source|lawlinks }}</div></div>{% endfor %}
   </details>
   {% endif %}
-  {% if not d.flags %}<p class="muted">Замечаний нет.</p>{% endif %}
+  {% if not d.flags %}<p class="muted">Замечаний нет.</p>{% elif plan.documents %}<p class="muted small">Документы к запросу — в чек-листе в конце отчёта.</p>{% endif %}
 </article>
-
-{% include "_actions.html" %}
 
 {% if p.zouit %}
 <article>
@@ -288,11 +296,11 @@
 <article>
   <h4>Ориентир по кадастру <span class="muted small">кадастровая стоимость — государственная оценка, не рынок; рынок — в блоке выше</span></h4>
   <table class="facts">
-    {% for label, v in price.points %}<tr><th>{{ label }}</th><td>{{ v|money }}</td></tr>{% endfor %}
+    {% for label, v in price.points if label.startswith('кадастр') %}<tr><th>{{ label }}</th><td>{{ v|money }}</td></tr>{% endfor %}
   </table>
-  {% if price_pos %}<p><strong>Цена к ориентиру:</strong> {{ price_pos.text }}.</p>{% endif %}
-  {% if corridor %}<p><strong>Коридор по базе Land-MP</strong> ({{ corridor.kind_label }}, {{ corridor.where }}, {{ corridor.n }} уч. за {{ corridor.days }} дней): медиана {{ corridor.median|money }} за сотку, середина рынка {{ corridor.p25|money }} – {{ corridor.p75|money }}{% if corridor.position_text %}; цена участка <strong>{{ corridor.position_text }}</strong>{% endif %}.</p>{% endif %}
-  <p class="small muted">{% if price.low == price.high %}Единственный ориентир — {{ price.low|money }} за сотку (кадастровая стоимость, государственная оценка, обычно ниже рынка); рыночный диапазон — в блоке «Рынок».{% else %}Диапазон {{ price.low|money }} – {{ price.high|money }}.{% endif %} {{ price.disclaimer }}</p>
+  {% if price_pos and price_pos.parts %}<p><strong>Цена к ориентиру:</strong> {{ price_pos.parts|join(' · ') }}.</p>{% endif %}
+  {% if corridor and not (valuation and valuation.range_source == 'база Land-MP') %}<p><strong>Коридор по базе Land-MP</strong> ({{ corridor.kind_label }}, {{ corridor.where }}, {{ corridor.n }} уч. за {{ corridor.days }} дней): медиана {{ corridor.median|money }} за сотку, середина рынка {{ corridor.p25|money }} – {{ corridor.p75|money }}{% if corridor.position_text %}; цена участка <strong>{{ corridor.position_text }}</strong>{% endif %}.</p>{% endif %}
+  <p class="small muted">Кадастровая стоимость — государственная оценка, обычно ниже рынка; медиана подборки и цена объявления — в блоке «Рынок» выше. {{ price.disclaimer }}</p>
 </article>
 {% elif corridor %}
 <article>
@@ -311,6 +319,17 @@
     </div>
   {% endfor %}
   </div>
+</article>
+{% endif %}
+
+{% if summary %}
+<article id="summary" class="summary">
+  <h4>Итог простыми словами <span class="badge v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[summary.level] }}">{{ summary.level }}</span></h4>
+  <p><strong>{{ summary.headline }}</strong></p>
+  {% if summary.reasons %}<p>Главное:</p><ol>{% for r in summary.reasons %}<li>{{ r|ucfirst }}.</li>{% endfor %}</ol>{% if summary.more %}<p class="muted small">Ещё {{ summary.more }} — в блоке «Риски и что делать».</p>{% endif %}{% endif %}
+  {% if summary.price %}<p>{{ summary.price }}</p>{% endif %}
+  {% if summary.steps %}<p>Что делать дальше:</p><ol>{% for st in summary.steps %}<li>{{ st }}.</li>{% endfor %}</ol>{% endif %}
+  <p class="muted small">Это вывод по открытым данным для быстрого решения, не юридическое заключение. Подробности и источники — в разделах выше.</p>
 </article>
 {% endif %}
 

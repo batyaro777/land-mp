@@ -172,6 +172,23 @@ def build_queries(locality_short: str, kind: str) -> list[str]:
 AREA_BAND = 5.0  # сопоставимая площадь: от 1/5 до 5 площадей участка
 
 
+MIN_N = 3  # столько сопоставимых объявлений нужно для рыночного диапазона (web.content)
+
+
+def district_fallback(locality: str | None) -> dict[str, str] | None:
+    """Запасной охват для маленького села: район («Козельский район», основа «козельск»).
+    Рынок деревни Вырск в выдаче есть только на уровне Козельска и района (Клавдий, 06.11)."""
+    from landcheck.region import district_of, district_stem
+
+    if not locality:
+        return None
+    d, stem = district_of(locality), district_stem(locality)
+    if not d or not stem:
+        return None
+    name = re.sub(r"\s*(район|р-н)\s*", " ", d, flags=re.IGNORECASE).strip()
+    return {"place": f"{name} район", "stem": stem, "label": f"{name} район"}
+
+
 def collect_ads(
     locality_short: str,
     kind: str,
@@ -179,9 +196,12 @@ def collect_ads(
     area_m2: float | None = None,
     search_fn=None,
     max_results: int = 10,
+    fallback: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Объявления в локации; при известной площади участка несопоставимые по площади
-    (73 га против 10 соток ИЖС) уходят в off_scale и в медиану не входят."""
+    (73 га против 10 соток ИЖС) уходят в off_scale и в медиану не входят.
+    Если в населённом пункте сопоставимых меньше MIN_N, а задан fallback (район) — добираем
+    объявлениями района с пометкой scope="district"."""
     from landcheck import websearch
 
     search_fn = search_fn or websearch.search
@@ -189,49 +209,58 @@ def collect_ads(
     ads: list[dict[str, Any]] = []
     off_scale: list[dict[str, Any]] = []
     errors: list[str] = []
-    queries = build_queries(locality_short, kind)
-    stem = place_stem(locality_short)
-    for q in queries:
-        res = search_fn(q, max_results=max_results, news=False, recent=True)
-        if res.get("error"):
-            errors.append(res["error"])
-            continue
-        for it in res.get("results") or []:
-            url = (it.get("url") or "").split("#")[0]
-            host = urlparse(url).netloc.lower().removeprefix("www.")
-            if not url or url in seen or any(x in host for x in _LOOKUP):
+    queries: list[str] = []
+
+    def gather(place: str, stem: str | None, scope: str) -> None:
+        for q in build_queries(place, kind):
+            queries.append(q)
+            res = search_fn(q, max_results=max_results, news=False, recent=True)
+            if res.get("error"):
+                errors.append(res["error"])
                 continue
-            title, snippet = it.get("title") or "", it.get("snippet") or ""
-            if stem and stem not in f"{title} {snippet}".lower().replace("ё", "е"):
-                continue
-            if _HOUSE_RE.search(title) or is_catalog(title, snippet, url):
-                continue
-            parsed = parse_ad(title, snippet)
-            if not parsed or slug_mismatch(url, parsed):
-                continue
-            seen.add(url)
-            if (
-                area_m2
-                and area_m2 >= 100
-                and not (area_m2 / AREA_BAND <= parsed["area_m2"] <= area_m2 * AREA_BAND)
-            ):
-                off_scale.append({"title": title[:120], "url": url, "host": host, **parsed})
-                continue
-            twin = next(
-                (
-                    a
-                    for a in ads
-                    if abs(a["price_rub"] - parsed["price_rub"]) < 1
-                    and abs(a["area_m2"] - parsed["area_m2"]) < 1
-                ),
-                None,
-            )
-            if twin is not None:  # то же объявление на другой площадке
-                twin.setdefault("also", []).append(host)
-                continue
-            ads.append(
-                {"title": title[:120], "url": url, "host": host, "date": it.get("date"), **parsed}
-            )
+            for it in res.get("results") or []:
+                url = (it.get("url") or "").split("#")[0]
+                host = urlparse(url).netloc.lower().removeprefix("www.")
+                if not url or url in seen or any(x in host for x in _LOOKUP):
+                    continue
+                title, snippet = it.get("title") or "", it.get("snippet") or ""
+                if stem and stem not in f"{title} {snippet}".lower().replace("ё", "е"):
+                    continue
+                if _HOUSE_RE.search(title) or is_catalog(title, snippet, url):
+                    continue
+                parsed = parse_ad(title, snippet)
+                if not parsed or slug_mismatch(url, parsed):
+                    continue
+                seen.add(url)
+                row = {"title": title[:120], "url": url, "host": host, "scope": scope, **parsed}
+                if (
+                    area_m2
+                    and area_m2 >= 100
+                    and not (area_m2 / AREA_BAND <= parsed["area_m2"] <= area_m2 * AREA_BAND)
+                ):
+                    off_scale.append(row)
+                    continue
+                twin = next(
+                    (
+                        a
+                        for a in ads
+                        if abs(a["price_rub"] - parsed["price_rub"]) < 1
+                        and abs(a["area_m2"] - parsed["area_m2"]) < 1
+                    ),
+                    None,
+                )
+                if twin is not None:  # то же объявление на другой площадке
+                    twin.setdefault("also", []).append(host)
+                    continue
+                ads.append({**row, "date": it.get("date")})
+
+    gather(locality_short, place_stem(locality_short), "locality")
+    n_local = len(ads)
+    scope, scope_label = "locality", locality_short
+    if n_local < MIN_N and fallback:
+        gather(fallback["place"], fallback.get("stem"), "district")
+        if len(ads) > n_local:
+            scope, scope_label = "district", fallback.get("label") or fallback["place"]
     # выбросы: цена за сотку дальше чем в 5 раз от медианы — скорее всего, не тот участок/единица
     if len(ads) >= 4:
         med = _quantile([a["pps"] for a in ads], 0.5)
@@ -242,6 +271,9 @@ def collect_ads(
     return {
         "ads": ads,
         "n": len(ads),
+        "n_local": sum(1 for a in ads if a.get("scope") == "locality"),
+        "scope": scope,
+        "scope_label": scope_label,
         "off_scale": off_scale[:MAX_ADS],
         "median": _quantile(pps, 0.5) if pps else None,
         "p25": _quantile(pps, 0.25) if pps else None,

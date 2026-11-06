@@ -642,15 +642,17 @@ def valuation(
         )
         source, rng = "база Land-MP", (corridor["p25"], corridor["p75"])
     if ads and ads.get("n", 0) >= MIN_MARKET_N:
-        anchors.append(
-            {
-                "label": "объявления в локации",
-                "pps": ads["median"],
-                "note": f"{ads['n']} объявлений с ценой и площадью, цены предложений",
-            }
-        )
+        district = ads.get("scope") == "district"
+        ads_label = "объявления в районе" if district else "объявления в локации"
+        note = f"{ads['n']} объявлений с ценой и площадью, цены предложений"
+        if district:
+            note += (
+                f"; в самом населённом пункте нашлось {ads.get('n_local', 0)}, "
+                f"добрано по району ({ads.get('scope_label')})"
+            )
+        anchors.append({"label": ads_label, "pps": ads["median"], "note": note})
         if rng is None:
-            source, rng = "объявления в локации", (ads["p25"], ads["p75"])
+            source, rng = ads_label, (ads["p25"], ads["p75"])
     if not anchors:
         return None
     verdict = None

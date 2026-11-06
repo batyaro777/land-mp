@@ -32,6 +32,7 @@ from landcheck.models import SOTKA_M2, BatchResult, Purpose
 from landcheck.models import Request as CheckRequest
 from landcheck.rules import classifier
 from landcheck.rules.catalog import is_wide_zone
+from landcheck.summary import merge_documents, plain_summary
 from landcheck.web import jobs
 from landcheck.web.auth import (
     COOKIE,
@@ -791,7 +792,7 @@ def report_evidence(request: Request, user: UserDep, check_id: int, cad_num: str
 @router.get("/checks/{check_id}/items/{cad_num}/ads", response_class=HTMLResponse)
 def report_ads(request: Request, user: UserDep, check_id: int, cad_num: str, refresh: int = 0):
     """Блок «Оценка стоимости» с объявлениями в локации (HTMX): поиск, кэш в item.data."""
-    from landcheck.market_ads import collect_ads
+    from landcheck.market_ads import collect_ads, district_fallback
     from landcheck.region import resolve_locality, short_place
     from landcheck.web.content import land_kind
 
@@ -811,6 +812,7 @@ def report_ads(request: Request, user: UserDep, check_id: int, cad_num: str, ref
                     short_place(locality),
                     land_kind(parcel.get("category"), parcel.get("permitted_use")),
                     area_m2=parcel.get("area_m2"),
+                    fallback=district_fallback(locality),
                 )
                 ads["locality"] = locality
             else:
@@ -896,13 +898,22 @@ def _report_ctx(check: Check, item: CheckItem, public: bool) -> dict[str, Any]:
     use = _check_use(check)
     median = batch_median(check.stats, [i.data for i in check.items])
     loc, region = data.get("location"), data.get("region")
+    goal = goal_summary(data, purpose, use)
+    plan = action_plan(data)
+    corridor = _corridor_for(data)
+    val = _valuation_for(data, corridor, median)
+    ck = checklist_for(data, purpose, use)
     return {
         "check": check,
         "item": item,
         "d": data,
         "by_level": flags_by_level(data),
         "purpose": purpose,
-        "goal": goal_summary(data, purpose, use),
+        "goal": goal,
+        # дубли (чат «МП Земля», 06.11): риск из «Можно ли здесь» в блоке рисков — одной строкой
+        "goal_msgs": {r["text"]: r["title"] for r in (goal or {}).get("rows") or []},
+        "plan_by_msg": {s["message"]: s["actions"] for s in plan["steps"]},
+        "summary": plain_summary(data, goal=goal, valuation=val, gpzu=data.get("gpzu")),
         "use": use,
         "loc": loc,
         "terrain": data.get("terrain"),
@@ -915,7 +926,7 @@ def _report_ctx(check: Check, item: CheckItem, public: bool) -> dict[str, Any]:
         "rights": data.get("rights") or rights.summarize([], data.get("parcel") or {}, purpose),
         "rights_url": f"/checks/{check.id}/items/{item.cad_num}/rights",
         "lk_url": rights.LK_URL,
-        "checklist": (ck := checklist_for(data, purpose, use))["blocks"],
+        "checklist": merge_documents(ck["blocks"], plan["documents"]),
         "checklist_title": ck["title"],
         "pzz_url": _pzz_search_url(data.get("parcel") or {}),
         "earth_url": _earth_url_for(data.get("parcel") or {}),
@@ -931,11 +942,11 @@ def _report_ctx(check: Check, item: CheckItem, public: bool) -> dict[str, Any]:
         "pzz": pzz.links_for(data.get("parcel") or {}),
         "power": pzz.electricity_for(data.get("parcel") or {}),
         "gas": pzz.gas_info(),
-        "plan": action_plan(data),
+        "plan": plan,
         "price": price_orientation(data, (check.stats or {}).get("median_price_per_sotka")),
         "price_pos": price_position(data, median),
-        "corridor": (corridor := _corridor_for(data)),
-        "valuation": _valuation_for(data, corridor, median),
+        "corridor": corridor,
+        "valuation": val,
         "ads_url": f"/checks/{check.id}/items/{item.cad_num}/ads",
         "admin_docs": data.get("admin_docs"),
         "admin_docs_url": f"/checks/{check.id}/items/{item.cad_num}/admin-docs",

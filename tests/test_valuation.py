@@ -354,3 +354,149 @@ def test_slug_mismatch_social_walls_and_settlement_titles():
         }
 
     assert collect_ads("Чепош", "izhs", search_fn=search_fn)["n"] == 0
+
+
+def test_collect_ads_district_fallback_for_small_village():
+    """Маленькая деревня (Вырск, прод 06.11): объявлений с названием нет — добираем по району."""
+    from landcheck.market_ads import district_fallback
+
+    calls: list[str] = []
+
+    def search_fn(q, max_results, news, recent=False):
+        calls.append(q)
+        if q.startswith("Вырск"):
+            return {"results": [], "error": None}
+        return {
+            "results": [
+                {
+                    "title": "Участок 10 сот. ИЖС, Козельск",
+                    "url": "https://www.avito.ru/kozelsk/zemelnye_uchastki/uch_1234567890",
+                    "snippet": "Цена 500 000 ₽",
+                },
+                {
+                    "title": "Продам участок 12 соток, Козельский район",
+                    "url": "https://domclick.ru/card/sale__land__2165263839",
+                    "snippet": "650 тыс. руб",
+                },
+                {
+                    "title": "Участок 8 сот, д. Сосенка Козельского района",
+                    "url": "https://cian.ru/sale/suburban/312345678/",
+                    "snippet": "420 000 руб",
+                },
+                {
+                    "title": "Участок 10 сот, Людиново",  # чужой район — не про «козельск»
+                    "url": "https://cian.ru/sale/suburban/312345999/",
+                    "snippet": "300 000 руб",
+                },
+            ],
+            "error": None,
+        }
+
+    fb = district_fallback("Калужская обл., р-н Козельский, д. Вырск.")
+    assert fb == {"place": "Козельский район", "stem": "козельск", "label": "Козельский район"}
+    r = collect_ads("Вырск", "izhs", area_m2=1000, search_fn=search_fn, fallback=fb)
+    assert r["n"] == 3 and r["scope"] == "district" and r["n_local"] == 0
+    assert r["scope_label"] == "Козельский район"
+    assert all(a["scope"] == "district" for a in r["ads"])
+    assert any(q.startswith("Козельский район") for q in calls)
+    # без запасного охвата — честный ноль, как раньше
+    assert collect_ads("Вырск", "izhs", search_fn=search_fn)["n"] == 0
+    assert district_fallback("Московская область") is None and district_fallback(None) is None
+
+
+def test_collect_ads_fallback_not_used_when_village_has_enough():
+    calls: list[str] = []
+
+    def search_fn(q, max_results, news, recent=False):
+        calls.append(q)
+        return {
+            "results": [
+                {
+                    "title": f"Участок {n} сот, Чепош",
+                    "url": f"https://x.ru/sale/{n}0000001/",
+                    "snippet": f"{n * 100} тыс. руб",
+                }
+                for n in (10, 11, 12)
+            ],
+            "error": None,
+        }
+
+    fb = {"place": "Чемальский район", "stem": "чемальск", "label": "Чемальский район"}
+    r = collect_ads("Чепош", "izhs", search_fn=search_fn, fallback=fb)
+    assert r["n"] == 3 and r["scope"] == "locality" and r["n_local"] == 3
+    assert not any("Чемальский" in q for q in calls)
+
+
+def test_valuation_labels_district_ads():
+    ads = {
+        "n": 4,
+        "median": 50_000,
+        "p25": 40_000,
+        "p75": 60_000,
+        "ads": [],
+        "scope": "district",
+        "scope_label": "Козельский район",
+        "n_local": 1,
+    }
+    v = valuation(_item(pps=50_000), corridor=None, ads=ads, median_batch=None)
+    assert v["range_source"] == "объявления в районе" and v["has_market"]
+    note = v["market_anchors"][-1]["note"]
+    assert "нашлось 1" in note and "Козельский район" in note
+
+
+def test_plain_summary_levels_and_documents_merge():
+    from landcheck.summary import merge_documents, plain_summary
+
+    base = {"parcel": {"found": True}, "price_per_sotka": 50_000}
+    stop = {
+        **base,
+        "verdict": "стоп",
+        "flags": [
+            {
+                "rule_id": "R04",
+                "level": "стоп",
+                "message": "на землях сельхозназначения дом нельзя",
+            },
+            {"rule_id": "R10", "level": "проверить", "message": "ЗОУИТ"},
+        ],
+    }
+    goal = {"level": "стоп", "activity": "Построить жилой дом", "rows": []}
+    s = plain_summary(stop, goal=goal, valuation=None)
+    assert s["headline"].startswith("Для цели «построить жилой дом» участок не подходит")
+    assert s["reasons"][0].startswith("категория земли не подходит")
+    assert any("другой участок" in st for st in s["steps"])
+
+    check = {
+        **base,
+        "verdict": "проверить",
+        "flags": [
+            {"rule_id": "R10", "level": "проверить", "message": "ЗОУИТ"},
+            {"rule_id": "R99", "level": "проверить", "message": "новое правило: длинное пояснение"},
+        ],
+    }
+    val = {"has_market": True, "range": (40_000, 45_000), "range_source": "объявления в районе"}
+    s = plain_summary(check, goal={"level": "ок", "activity": "x"}, valuation=val)
+    assert "закрыть 2 вопроса" in s["headline"] and "новое правило" in s["reasons"][1]
+    assert "выше рынка на 11%" in s["price"] and "в районе" in s["price"]
+    assert any("ГПЗУ" in st for st in s["steps"])
+    near = plain_summary(check, goal=None, valuation={**val, "range": (40_000, 48_000)})
+    assert "у верхней границы рынка" in near["price"]
+
+    ok = plain_summary({**base, "verdict": "ок", "flags": []}, goal=None, valuation=None)
+    assert ok["headline"].startswith("По открытым данным") and ok["reasons"] == []
+    assert plain_summary({"parcel": {"found": False}}, goal=None, valuation=None) is None
+
+    blocks = [
+        {
+            "title": "Документы, которые запросить у продавца",
+            "items": ["Выписка ЕГРН об объекте не старше 30 дней: собственник"],
+        }
+    ]
+    docs = [
+        {"name": "Выписка ЕГРН об объекте не старше 30 дней", "where": "Госуслуги"},
+        {"name": "ГПЗУ — градостроительный план участка", "where": "администрация"},
+    ]
+    merged = merge_documents(blocks, docs)
+    assert merged[0]["items"][-1] == "ГПЗУ — градостроительный план участка — администрация"
+    assert len(merged[0]["items"]) == 2 and len(blocks[0]["items"]) == 1  # исходник не тронут
+    assert merge_documents([], docs)[0]["title"] == "Документы, которые запросить"

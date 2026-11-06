@@ -289,10 +289,36 @@ def test_report_shows_action_plan_for_flags_only(client: TestClient):
     r = client.post("/checks", data={"numbers": "50:09:0060202:104\n50:09:0060202:101"})
     url = r.headers["location"]
     with_lep = client.get(url + "/items/50:09:0060202:104").text
-    assert "План действий по рискам" in with_lep and "Что подтвердить" in with_lep
-    assert "сетевая организация" in with_lep and "Документы к запросу" in with_lep
+    # риск и план действий — один блок (чат «МП Земля», 06.11: дубли между разделами)
+    assert "Риски и что делать" in with_lep and "Что подтвердить" in with_lep
+    assert "План действий по рискам" not in with_lep
+    assert "сетевая организация" in with_lep and "Документы к запросу — в чек-листе" in with_lep
+    # документы из плана — в чек-листе, без повтора выписки ЕГРН
+    assert with_lep.count("Выписка ЕГРН об объекте не старше 30 дней") == 1
     clean = client.get(url + "/items/50:09:0060202:101").text
-    assert "План действий по рискам" not in clean
+    assert "Что подтвердить" not in clean
+
+
+def test_report_without_duplicates_and_with_plain_summary(client: TestClient):
+    login(client)
+    r = client.post(
+        "/checks", data={"numbers": "50:09:0060202:102\n50:09:0060202:101", "purpose": "izhs"}
+    )
+    url = r.headers["location"]
+    rep = client.get(url + "/items/50:09:0060202:102").text
+    # стоп-риск категории — один раз (в «Можно ли здесь»), в блоке рисков — ссылка и шаги
+    assert rep.count("на землях сельхозназначения жилой дом для ИЖС не построить") == 1
+    assert "Категория земель — разобрано выше, в блоке «Можно ли здесь»" in rep
+    assert "ГПЗУ — градостроительный план участка — администрация" in rep  # документ плана
+    # форма собственности — только в «Права и ограничения»
+    assert "<th>Форма собственности</th>" not in rep and "Форма собственности по НСПД" in rep
+    # итог для непрофессионала: ссылка под заголовком и блок в конце
+    assert 'href="#summary"' in rep and 'id="summary"' in rep
+    assert "Итог простыми словами" in rep and "участок не подходит без серьёзных шагов" in rep
+    assert "Категория земли не подходит под вашу цель" in rep
+    assert rep.index('id="summary"') > rep.index("Чек-лист перед сделкой")
+    ok = client.get(url + "/items/50:09:0060202:101").text
+    assert "По открытым данным серьёзных препятствий не видно" in ok
 
 
 def test_telegram_bot_runs_check_from_cad_number(client: TestClient, monkeypatch):
