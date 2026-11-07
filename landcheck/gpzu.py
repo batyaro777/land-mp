@@ -213,8 +213,8 @@ def _vri_items(block: str) -> list[str]:
 
 
 # Код ВРИ отдельной строкой в таблице 2.2; OCR путает 1 с «|», «l», «I» и 3 с «З»
-_CODE_LINE_RE = re.compile(r"^\s*([\dlI|З]{1,2}\.[\dlI|З]{1,2}(?:\.[\dlI|З]{1,2})?)\s*\*?\s*$")
-_OCR_DIGITS = str.maketrans({"l": "1", "I": "1", "|": "1", "З": "3"})
+_CODE_LINE_RE = re.compile(r"^\s*([\dlI|Зз]{1,2}\.[\dlI|Зз]{1,2}(?:\.[\dlI|Зз]{1,2})?)\s*\*?\s*$")
+_OCR_DIGITS = str.maketrans({"l": "1", "I": "1", "|": "1", "З": "3", "з": "3"})
 
 
 def _table_codes(block: str) -> list[str]:
