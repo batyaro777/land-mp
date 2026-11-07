@@ -61,6 +61,9 @@ def test_check_flow(client: TestClient, sample_csv: Path):
     assert page.status_code == 200
     assert "50:09:0060202:101" in page.text and "стоп" in page.text
     assert "Скачать XLSX" in page.text
+    # балл соответствия виден в таблице (чат «МП Земля», сообщение 32: «в процентах какой интереснее»)
+    assert ">Балл</th>" in page.text and "минус 50 за каждый «стоп»" in page.text
+    assert '<td class="num" title="из 100"><strong>' in page.text
     # фильтр и сортировка
     assert "50:09:0060202:102" not in client.get(check_url + "?verdict=ок").text
     assert client.get(check_url + "?sort=price").status_code == 200
