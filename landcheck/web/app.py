@@ -936,9 +936,7 @@ def _report_ctx(check: Check, item: CheckItem, public: bool) -> dict[str, Any]:
             (data.get("parcel") or {}).get("permitted_use"),
             (data.get("parcel") or {}).get("permitted_use_tab"),
         ),
-        "gpzu": data.get("gpzu"),
-        "gpzu_url": f"/checks/{check.id}/items/{item.cad_num}/gpzu",
-        "gpzu_howto": gpzu.ORDER_HOWTO,
+        **_gpzu_ctx(check, item, data),
         "pzz": pzz.links_for(data.get("parcel") or {}),
         "power": pzz.electricity_for(data.get("parcel") or {}),
         "gas": pzz.gas_info(),
@@ -972,6 +970,10 @@ def report_private(request: Request, user: UserDep, check_id: int, cad_num: str)
         _ = check.user  # подгрузить
         from landcheck.web.watch import is_watched
 
+        # торги уже в отчёте, а ГПЗУ из них ещё не брали (проверки до 07.11) — берём сейчас
+        offer = _gpzu_offer(item.data or {})
+        if offer and not (item.data or {}).get("gpzu") and not (item.data or {}).get("gpzu_torgi"):
+            _start_gpzu_torgi(db, check, item, offer)
         return render(
             request,
             "report.html",
@@ -1062,7 +1064,6 @@ async def report_gpzu(
 ):
     """ГПЗУ к участку: PDF с текстовым слоем или вставленный текст → разбор, сверка с НСПД, R20.
     Файл не сохраняем, только разобранные поля (ТЗ v3, п. 3)."""
-    from landcheck.scoring import score as score_of
     from landcheck.web import materials
 
     uploads = await materials.materials_from_uploads(files)
@@ -1097,19 +1098,170 @@ async def report_gpzu(
         )
         if item is None:
             raise HTTPException(404)
-        db.refresh(item)
-        data = gpzu.apply_to_item(dict(item.data), g)
-        try:
-            data["score"] = score_of(result_from_dict(data), request_from_dict(check.request))
-        except Exception as exc:  # noqa: BLE001 — оценка не должна ломать сохранение
-            log.warning("gpzu: score: %s", exc)
-        item.data = data
-        item.verdict = data["verdict"]
-        item.score = float(data.get("score") or item.score)
-        db.flush()
-        _recount(check)
-        db.commit()
+        _save_gpzu(db, check, item, g)
     return RedirectResponse(back + "#gpzu", status_code=303)
+
+
+def _save_gpzu(
+    db, check: Check, item: CheckItem, g: gpzu.Gpzu, extra: dict[str, Any] | None = None
+) -> None:
+    """ГПЗУ в данные участка: сверка с НСПД, флаг R20, пересчёт вердикта и балла, счётчики."""
+    from landcheck.scoring import score as score_of
+
+    db.refresh(item)
+    data = gpzu.apply_to_item(dict(item.data), g)
+    if extra:
+        data["gpzu"] = {**data["gpzu"], **extra}
+    try:
+        data["score"] = score_of(result_from_dict(data), request_from_dict(check.request))
+    except Exception as exc:  # noqa: BLE001 — оценка не должна ломать сохранение
+        log.warning("gpzu: score: %s", exc)
+    item.data = data
+    item.verdict = data["verdict"]
+    item.score = float(data.get("score") or item.score)
+    db.flush()
+    _recount(check)
+    db.commit()
+
+
+# --- ГПЗУ из вложений торгов (чат «МП Земля», сообщение 30) ----------------------------------
+GPZU_TORGI_STALE_MIN = 15  # «берём» дольше — задача потеряна, можно запустить снова
+_gpzu_torgi_running: set[int] = set()
+
+
+def _gpzu_offer(data: dict[str, Any]) -> dict[str, Any] | None:
+    """ГПЗУ во вложениях лота участка на torgi.gov.ru (из блока «Документы и упоминания»)."""
+    from landcheck import torgi
+
+    return torgi.gpzu_doc((data.get("docs") or {}).get("torgi"))
+
+
+def _gpzu_torgi_active(state: dict[str, Any] | None) -> bool:
+    if not state or state.get("state") != "pending":
+        return False
+    try:
+        started = datetime.fromisoformat(state.get("started_at") or "")
+    except ValueError:
+        return False
+    return (datetime.now(UTC) - started).total_seconds() < GPZU_TORGI_STALE_MIN * 60
+
+
+def _gpzu_ctx(check: Check, item: CheckItem, data: dict[str, Any]) -> dict[str, Any]:
+    base = f"/checks/{check.id}/items/{item.cad_num}"
+    state = data.get("gpzu_torgi")
+    return {
+        "gpzu": data.get("gpzu"),
+        "gpzu_url": f"{base}/gpzu",
+        "gpzu_howto": gpzu.ORDER_HOWTO,
+        "gpzu_offer": _gpzu_offer(data),
+        "gpzu_torgi": state,
+        "gpzu_torgi_active": _gpzu_torgi_active(state),
+        "gpzu_torgi_url": f"{base}/gpzu-torgi",
+        "gpzu_block_url": f"{base}/gpzu-block",
+        "p": data.get("parcel") or {},
+    }
+
+
+def _start_gpzu_torgi(db, check: Check, item: CheckItem, offer: dict[str, Any]) -> bool:
+    """Пометить «берём ГПЗУ из торгов» и поставить фоновую задачу (не чаще одной на строку)."""
+    if item.id in _gpzu_torgi_running or _gpzu_torgi_active((item.data or {}).get("gpzu_torgi")):
+        return False
+    _merge_item_data(
+        db,
+        item,
+        gpzu_torgi={
+            "state": "pending",
+            "started_at": datetime.now(UTC).isoformat(timespec="seconds"),
+            **{k: offer.get(k) for k in ("lot_id", "lot_url", "url", "file", "size_mb")},
+        },
+    )
+    _gpzu_torgi_running.add(item.id)
+    jobs.executor().submit(_gpzu_torgi_job, item.id, check.id, item.cad_num, offer)
+    return True
+
+
+def _gpzu_torgi_job(item_id: int, check_id: int, cad_num: str, offer: dict[str, Any]) -> None:
+    """Скачать ГПЗУ с torgi.gov.ru (RU-шлюз), прочитать текст или распознать скан, разобрать,
+    проверить, что он на этот участок, и сохранить как приложенный пользователем."""
+    from landcheck import ruproxy, torgi
+
+    state: dict[str, Any] = {k: offer.get(k) for k in ("lot_id", "lot_url", "url", "file")}
+    g: gpzu.Gpzu | None = None
+    meta: dict[str, Any] = {}
+    try:
+        if not ruproxy.enabled():
+            raise RuntimeError("RU-шлюз не настроен — torgi.gov.ru из-за рубежа закрыт")
+        api = torgi.TorgiClient(ruproxy.client(timeout=120))  # ГПЗУ до 15 МБ, шлюз медленный
+        try:
+            raw = api.file(offer["file_id"])
+        finally:
+            api.close()
+        g, meta = gpzu.from_pdf(raw)
+        if not g.is_gpzu:
+            state["error"] = "в файле из торгов не нашлись заголовок ГПЗУ и раздел 2.2"
+        elif g.cad_num and g.cad_num != cad_num:
+            state["error"] = f"ГПЗУ из торгов выдан на другой участок ({g.cad_num})"
+    except Exception as exc:  # noqa: BLE001 — фон не должен падать молча
+        log.warning("gpzu torgi %s: %s", cad_num, exc)
+        state["error"] = f"не удалось скачать или прочитать ГПЗУ: {type(exc).__name__}"
+    try:
+        with session() as db:
+            item = db.get(CheckItem, item_id)
+            check = db.get(Check, check_id)
+            if item is None or check is None:
+                return
+            done_at = datetime.now(UTC).isoformat(timespec="seconds")
+            if g is not None and not state.get("error"):
+                extra = {
+                    "source": "torgi",
+                    "source_url": offer.get("url"),
+                    "lot_id": offer.get("lot_id"),
+                    "lot_url": offer.get("lot_url"),
+                    "document": offer.get("file"),
+                    "ocr": bool(meta.get("ocr")),
+                    "ocr_note": meta.get("ocr_note"),
+                }
+                _save_gpzu(db, check, item, g, extra)
+                _merge_item_data(
+                    db, item, gpzu_torgi={**state, "state": "done", "done_at": done_at, **meta}
+                )
+            else:
+                _merge_item_data(
+                    db, item, gpzu_torgi={**state, "state": "error", "done_at": done_at}
+                )
+    finally:
+        _gpzu_torgi_running.discard(item_id)
+
+
+@router.post("/checks/{check_id}/items/{cad_num}/gpzu-torgi")
+def report_gpzu_torgi(user: UserDep, check_id: int, cad_num: str):
+    """Кнопка «Взять ГПЗУ из торгов»: фоновая задача, блок ГПЗУ обновится сам."""
+    with session() as db:
+        check = _own_check(db, user, check_id)
+        item = db.scalar(
+            select(CheckItem).where(CheckItem.check_id == check.id, CheckItem.cad_num == cad_num)
+        )
+        if item is None:
+            raise HTTPException(404)
+        offer = _gpzu_offer(item.data or {})
+        if offer is None:
+            raise HTTPException(404)
+        _start_gpzu_torgi(db, check, item, offer)
+    return RedirectResponse(f"/checks/{check_id}/items/{cad_num}#gpzu", status_code=303)
+
+
+@router.get("/checks/{check_id}/items/{cad_num}/gpzu-block", response_class=HTMLResponse)
+def report_gpzu_block(request: Request, user: UserDep, check_id: int, cad_num: str):
+    """Блок ГПЗУ отдельно (HTMX): опрос, пока ГПЗУ из торгов скачивается и разбирается."""
+    with session() as db:
+        check = _own_check(db, user, check_id)
+        item = db.scalar(
+            select(CheckItem).where(CheckItem.check_id == check.id, CheckItem.cad_num == cad_num)
+        )
+        if item is None:
+            raise HTTPException(404)
+        ctx = _gpzu_ctx(check, item, dict(item.data))
+        return render(request, "_gpzu.html", **ctx, public=False, user=user)
 
 
 @router.get("/r/{token}", response_class=HTMLResponse)
@@ -1353,12 +1505,20 @@ def report_docs(request: Request, user: UserDep, check_id: int, cad_num: str, re
             changed = True
         if changed:
             data = _merge_item_data(db, item, docs=docs)
+        # ГПЗУ приложен к торгам, а в проверке его нет — берём сам (чат «МП Земля», сообщение 30)
+        gpzu_oob = False
+        offer = _gpzu_offer(data)
+        if offer and not data.get("gpzu") and not data.get("gpzu_torgi"):
+            gpzu_oob = _start_gpzu_torgi(db, check, item, offer)
+            data = dict(item.data)
         return render(
             request,
             "_docs.html",
             docs=docs,
             public=False,
             docs_url=f"/checks/{check.id}/items/{cad_num}/docs",
+            gpzu_oob=gpzu_oob,
+            **(_gpzu_ctx(check, item, data) if gpzu_oob else {}),
             user=user,
         )
 

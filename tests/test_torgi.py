@@ -450,3 +450,32 @@ def test_parcel_lot_history_filters_neighbours_and_needs_ru_proxy(monkeypatch):
     monkeypatch.delenv("LANDCHECK_RU_PROXY", raising=False)
     r = torgi.parcel_lot("10:20:0060108:281", now=NOW)
     assert not r["found"] and "RU-шлюз не настроен" in r["error"] and r["requests"] == 0
+
+
+def test_gpzu_doc_and_file_download():
+    lot = torgi.own_lot_row(_own_card())
+    doc = torgi.gpzu_doc({"lots": [lot]})
+    assert doc["file_id"] == "f-gpzu" and doc["lot_id"] == "N_1" and doc["size_mb"] == 13.5
+    assert doc["url"].endswith("/file-store/v1/f-gpzu") and doc["file"] == "градплан_281.pdf"
+    # старые записи кэша без file_id: берём из ссылки
+    legacy = {**lot, "docs": [{**lot["docs"][0], "file_id": None}]}
+    assert torgi.gpzu_doc({"lots": [legacy]})["file_id"] == "f-gpzu"
+    assert torgi.gpzu_doc({"lots": []}) is None and torgi.gpzu_doc(None) is None
+
+    calls: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls.append(str(req.url))
+        if len(calls) == 1:
+            return httpx.Response(503)
+        return httpx.Response(200, content=b"%PDF-1.7 gpzu")
+
+    api = torgi.TorgiClient(
+        httpx.Client(transport=httpx.MockTransport(handler)),
+        interval=0,
+        sleep=lambda s: None,
+    )
+    assert api.file("f-gpzu") == b"%PDF-1.7 gpzu" and api.retries == 1
+    assert calls[-1] == "https://torgi.gov.ru/new/file-store/v1/f-gpzu"
+    with pytest.raises(ValueError, match="больше"):
+        api.file("f-gpzu", max_mb=0.000001)

@@ -25,7 +25,7 @@
         {% if lot.appeals or lot.stopped %}<div class="small"><span class="badge mini v-check">проверить</span> {% if lot.appeals %}по торгам подавались жалобы{% endif %}{% if lot.appeals and lot.stopped %}; {% endif %}{% if lot.stopped %}торги приостановлены{% endif %}.</div>{% endif %}
         {% if lot.protocols %}<div class="small">Протоколы: {% for p in lot.protocols %}{{ p.name|ucfirst|truncate(90) }}{% if p.date %} от {{ p.date|day }}{% endif %}{% if not loop.last %}; {% endif %}{% endfor %} — на <a href="{{ lot.url }}" target="_blank" rel="noopener">странице лота</a>{% if lot.etp_url %} и на <a href="{{ lot.etp_url }}" target="_blank" rel="noopener">площадке</a>{% endif %}.</div>{% endif %}
         {% if lot.docs %}<div class="small">Документы: {% for d in lot.docs %}<a href="{{ d.url }}" target="_blank" rel="noopener"{% if d.file %} title="{{ d.file }}"{% endif %}>{% if d.name == 'Иное' and d.file %}{{ d.file|truncate(40) }}{% else %}{{ d.name }}{% endif %}</a>{% if d.size_mb and d.size_mb >= 1 %} <span class="muted">{{ d.size_mb }} МБ</span>{% endif %}{% if not loop.last %} · {% endif %}{% endfor %}</div>
-        {% if lot.docs|selectattr('gpzu')|list %}<div class="muted small">К торгам приложен ГПЗУ — скачайте его и загрузите в проверку (поле «ГПЗУ»): отчёт сверит зону, отступы и ВРИ с НСПД.</div>{% endif %}{% endif %}
+        {% if lot.docs|selectattr('gpzu')|list %}<div class="muted small">К торгам приложен ГПЗУ{% if not public %} — отчёт берёт его сам и сверяет зону, ВРИ и отступы с НСПД: см. блок <a href="#gpzu">«ГПЗУ»</a>{% else %} — в блоке «ГПЗУ» отчёта он сверяется с НСПД{% endif %}.</div>{% endif %}{% endif %}
       </li>
       {% endfor %}
     </ul>
@@ -59,3 +59,4 @@
     <p class="muted small">Совпадение номера в тексте страницы — повод открыть документ, а не вывод. Суды и торги проверяйте по первоисточнику.</p>
   {% endif %}
 </article>
+{% if gpzu_oob is defined and gpzu_oob %}{% with oob=true %}{% include "_gpzu.html" %}{% endwith %}{% endif %}

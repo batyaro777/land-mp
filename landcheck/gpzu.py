@@ -56,6 +56,10 @@ _ZONE_RE = re.compile(
     r"(?<![А-Яа-яA-Za-z\d])((?:Ж|О|П|И|ИТ|Т|С|СХ|Сх|Р|К|Ц|Д|Л|ТЗ|ОД|ПК|ПР|ТР|СН|ЗН|ОЖ|ЖО)"
     r"\s?-\s?\d{1,2}(?:[.\-/]\d{1,2})?|(?:Ж|О|П|Р|Т|С|И)\d{1,2}(?:\.\d{1,2})?)(?![\dА-Яа-я])"
 )
+_ZONE_TEXT_RE = re.compile(
+    r"территориальн\w*\s+зон\w*\s*[«\"„кk(]?\s*"
+    r"([А-ЯЁ]{1,3}(?:\s?-?\s?\d{1,2}(?:[.\-/]\d{1,2})?)?)\s*[-–—]\s*([^»>\"\n)]{3,80})",
+)
 _REG_RE = re.compile(r"\b\d{2}:\d{2}-\d{1,2}\.\d{1,6}\b|\b\d{2}\.\d{2}\.\d\.\d{1,6}\b")
 _ZOUIT_WORDS = (
     "охранная зона",
@@ -75,6 +79,9 @@ _ZOUIT_WORDS = (
     "санитарной охраны",
     "придорожн",
     "охраняем",
+    "противопожарн",
+    "защитное расстояние",
+    "защитном расстоянии",
 )
 _CODE_NOTE_RE = re.compile(
     r"[^\n.;]*(?:привед\w+[^\n.;]{0,80}(?:соответств|классификатор)|классификатор\w*[^\n.;]{0,60}код\w*\s*\d+\.\d+|код\w*\s*\d+\.\d+[^\n.;]{0,60}классификатор)[^\n.;]*",
@@ -84,7 +91,7 @@ _CODE_NOTE_RE = re.compile(
 # Заголовки разделов формы — границы для вырезания блоков.
 _HEADINGS: dict[str, str] = {
     "2.1": r"2\.1\.?\s*реквизиты\s+акта",
-    "2.2": r"2\.2\.?\s*информация\s+о\s+видах\s+разреш",
+    "2.2": r"2\s?\.\s?2\.?\s*информац\w*\s+о\s+вид\w*\s+р\w{0,3}реш",
     "2.3": r"2\.3\.?\s*предельные",
     "2.4": r"2\.4\.?\s*требования\s+к\s+назначению",
     "2.5": r"2\.5\.?\s*",
@@ -99,10 +106,11 @@ _HEADINGS: dict[str, str] = {
     "11": r"(?<!\d\.)11\.\s*информация\s+о\s+красных",
     "12": r"(?<!\d\.)12\.\s*информация\s+о\s+требованиях",
 }
+# OCR сканов портит «разрешённого» («ршрешенного», «рЕврешенного» — ГПЗУ Карелии, 07.11)
 _SUB_22 = {
-    "main": r"основные\s+виды\s+разреш\w+\s+использования",
-    "conditional": r"условно\s+разреш\w+\s+виды",
-    "aux": r"вспомогательные\s+виды",
+    "main": r"основн\w*\s+вид\w*\s+р\w{0,3}реш\w*\s+использовани\w*",
+    "conditional": r"условно\s+р\w{0,3}реш\w*\s+вид",
+    "aux": r"вспомогательн\w*\s+вид",
 }
 
 
@@ -204,6 +212,40 @@ def _vri_items(block: str) -> list[str]:
     return items[:40]
 
 
+# Код ВРИ отдельной строкой в таблице 2.2; OCR путает 1 с «|», «l», «I» и 3 с «З»
+_CODE_LINE_RE = re.compile(r"^\s*([\dlI|З]{1,2}\.[\dlI|З]{1,2}(?:\.[\dlI|З]{1,2})?)\s*\*?\s*$")
+_OCR_DIGITS = str.maketrans({"l": "1", "I": "1", "|": "1", "З": "3"})
+
+
+def _table_codes(block: str) -> list[str]:
+    """Коды ВРИ, стоящие в таблице отдельными строками (колонка «Код вида»)."""
+    out: list[str] = []
+    known = classifier.by_code()
+    for line in block.split("\n"):
+        m = _CODE_LINE_RE.match(line)
+        if not m:
+            continue
+        code = m.group(1).translate(_OCR_DIGITS)
+        if code in known and code not in out:
+            out.append(code)
+    return out
+
+
+def _coded_items(codes: list[str]) -> list[str]:
+    known = classifier.by_code()
+    return [f"{known[c].name} ({c})" for c in codes if c in known]
+
+
+def _vri_part(chunk: str) -> list[str]:
+    """Строки ВРИ раздела; таблица «наименование — описание — код» (сканы) даёт мусор из
+    описаний, поэтому при двух и больше кодах отдельными строками берём коды и названия
+    из классификатора."""
+    codes = _table_codes(chunk)
+    if len(codes) >= 2:
+        return _coded_items(codes)
+    return _vri_items(chunk)
+
+
 def _split_22(block: str) -> dict[str, list[str]]:
     hits: list[tuple[int, str]] = []
     for key, rx in _SUB_22.items():
@@ -215,13 +257,13 @@ def _split_22(block: str) -> dict[str, list[str]]:
     if not hits:
         # подзаголовков нет — всё считаем основными
         body = re.sub(_HEADINGS["2.2"] + r"[^\n]*", "", block, count=1, flags=re.I)
-        out["main"] = _vri_items(body)
+        out["main"] = _vri_part(body)
         return out
     for i, (start, key) in enumerate(hits):
         end = hits[i + 1][0] if i + 1 < len(hits) else len(block)
         chunk = block[start:end]
         chunk = re.sub(_SUB_22[key] + r"[^\n]*", "", chunk, count=1, flags=re.I)
-        out[key] = _vri_items(chunk)
+        out[key] = _vri_part(chunk)
     return out
 
 
@@ -242,6 +284,8 @@ def _zouit(blocks: list[str]) -> list[dict[str, str | None]]:
             regs = _REG_RE.findall(line)
             if not regs and not any(w in lo for w in _ZOUIT_WORDS):
                 continue
+            if not regs and len(line) < 20:
+                continue  # обрывок ячейки таблицы скана («противопожарное») — не зона
             if re.match(r"^(информация|наименование зоны|обозначение|x\b|y\b)", lo):
                 continue
             if re.fullmatch(r"[\d\s.,XYxy-]+", line):
@@ -292,8 +336,15 @@ def parse(text: str) -> Gpzu:
     if "2.1" in secs:
         body = re.sub(_HEADINGS["2.1"] + r"[^\n]*", "", secs["2.1"], count=1, flags=re.I)
         g.pzz_act = re.sub(r"\s+", " ", body).strip(" ,;:—-")[:400] or None
+    if "2.2" not in secs and (m := re.search(_SUB_22["main"], t, re.I)):
+        # заголовок 2.2 не распознан (скан) — блок ВРИ от «Основные виды…» до раздела 2.3
+        end = t.find(secs["2.3"][:60]) if "2.3" in secs else -1
+        secs["2.2"] = t[m.start() : end if end > m.start() else m.start() + 8000]
     zone_src = (secs.get("2.1", "") + "\n" + secs.get("2.2", "")[:600]) or t[:4000]
-    if m := _ZONE_RE.search(zone_src):
+    if m := _ZONE_TEXT_RE.search(t):
+        g.zone_code = re.sub(r"\s+", "", m.group(1))
+        g.zone_name = m.group(2).strip(" .;,")[:160] or None
+    elif m := _ZONE_RE.search(zone_src):
         g.zone_code = re.sub(r"\s+", "", m.group(1)).replace("-", "-")
         tail = zone_src[m.end() : m.end() + 160].split("\n")[0]
         name = re.sub(r"^[\s—–:.\-)«»\"]+", "", tail).strip(" .;,")
@@ -312,6 +363,14 @@ def parse(text: str) -> Gpzu:
         )
         g.height = _param(b, r"высот\w*[^\n]{0,80}?(\d{1,3}(?:[.,]\d)?\s*м(?:етр\w*)?)(?![а-яё])")
         g.coverage_pct = _param(b, r"процент\w*\s+застройки[^\d\n]{0,80}?(\d{1,3}\s*%?)")
+    # предельные параметры бывают только в примечании на чертеже (таблица 2.3 скана пустая)
+    g.floors = g.floors or _param(
+        t, r"(?:количество\s+этажей|этажност\w*)[^\d]{0,40}?(\d{1,2})(?:\s|$|[^\d.,])"
+    )
+    g.height = g.height or _param(
+        t, r"(?:предельн\w*|максимальн\w*)\s+высот\w*.{0,80}?(\d{1,3}(?:[.,]\d)?\s*м)(?![а-яё])"
+    )
+    g.coverage_pct = g.coverage_pct or _param(t, r"процент\w*\s+застройки[^\d]{0,40}?(\d{1,3}\s*%)")
     g.zouit = _zouit([secs.get("5", ""), secs.get("6", "")])
     if "7" in secs:
         b = secs["7"].lower()
@@ -319,6 +378,8 @@ def parse(text: str) -> Gpzu:
             g.public_servitudes = False
         elif re.search(r"\d+[.,]\d{2}\s+\d+[.,]\d{2}|сервитут", b.split("\n", 1)[-1]):
             g.public_servitudes = True
+    if re.search(r"красн\w*\s+лини\w*\s*[-–—:]?\s*не\s+установлен", t, re.I):
+        g.red_lines = False
     if "11" in secs:
         b = secs["11"].lower()
         if re.search(r"отсутств|не установлен|не предусмотр|нет", b):
@@ -330,6 +391,25 @@ def parse(text: str) -> Gpzu:
         for m in _CODE_NOTE_RE.finditer(secs.get("2.2", "") or t)
     ][:5]
     return g
+
+
+OCR_MIN_TEXT = 300  # меньше — считаем PDF сканом и распознаём
+
+
+def from_pdf(
+    raw: bytes, *, ocr_pages: int = 20, ocr_deadline_s: float = 180.0
+) -> tuple[Gpzu, dict[str, Any]]:
+    """ГПЗУ из PDF: текстовый слой, а если его нет (скан) — OCR первых страниц. Второе значение —
+    как читали: {"ocr": bool, "ocr_note": пометка о нераспознанных страницах}."""
+    from landcheck import intake, ocr
+
+    text = intake.pdf_text(raw, max_pages=40)
+    meta: dict[str, Any] = {"ocr": False, "ocr_note": None}
+    if len(text.strip()) < OCR_MIN_TEXT and ocr.available():
+        pages, partial = ocr.pdf_ocr_pages(raw, max_pages=ocr_pages, deadline_s=ocr_deadline_s)
+        text = "\n".join(p["text"] for p in pages)
+        meta.update(ocr=True, ocr_note=partial)
+    return parse(text), meta
 
 
 def _codes(items: list[str]) -> list[str]:

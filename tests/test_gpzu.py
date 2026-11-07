@@ -156,3 +156,43 @@ def test_public_servitudes_section_7():
         "7. Информация о границах публичных сервитутов\nПубличный сервитут для прохода и проезда (реестровый номер 39:00-6.900)\n1 354512.11 1182011.45",
     )
     assert gpzu.parse(with_serv).public_servitudes is True
+
+
+def test_parse_scanned_gpzu_with_ocr_errors_karelia():
+    """ГПЗУ из торгов (Карелия, 07.11): текстовый слой скана — «М» вместо №, «кЖ … >» вместо
+    кавычек, «ршрешенного», таблица ВРИ построчно, параметры только в примечании на чертеже."""
+    from pathlib import Path
+
+    text = (Path(__file__).parent / "fixtures" / "gpzu_scan_ocr_karelia.txt").read_text("utf-8")
+    g = gpzu.parse(text)
+    assert g.is_gpzu and g.cad_num == "10:20:0060108:281" and g.area_m2 == 904.0
+    assert (g.zone_code, g.zone_name) == ("Ж", "Жилая зона")
+    assert g.codes_main == ["2.1", "2.2", "2.3", "13.1"]  # «2.|» распознан как 2.1
+    assert g.vri_main[0] == "Для индивидуального жилищного строительства (2.1)"
+    assert (g.floors, g.height, g.coverage_pct) == ("3", "9,6 м", "60%")
+    assert g.red_lines is False
+    assert len(g.zouit) == 1 and "противопожарн" in g.zouit[0]["name"]  # без обрывков ячеек
+    assert g.filled >= 5
+
+
+def test_from_pdf_uses_text_layer_or_ocr(monkeypatch):
+    from landcheck import intake, ocr
+
+    text = GPZU_TEXT
+    monkeypatch.setattr(intake, "pdf_text", lambda raw, max_pages=40: text)
+    g, meta = gpzu.from_pdf(b"%PDF-1.7")
+    assert g.is_gpzu and meta == {"ocr": False, "ocr_note": None}
+
+    # скан без текстового слоя → OCR страниц
+    monkeypatch.setattr(intake, "pdf_text", lambda raw, max_pages=40: "")
+    monkeypatch.setattr(ocr, "available", lambda: True)
+    monkeypatch.setattr(
+        ocr,
+        "pdf_ocr_pages",
+        lambda raw, max_pages, deadline_s: ([{"n": 1, "text": text}], "распознаны OCR первые 1"),
+    )
+    g, meta = gpzu.from_pdf(b"%PDF-1.7")
+    assert g.is_gpzu and meta["ocr"] and meta["ocr_note"].startswith("распознаны")
+    monkeypatch.setattr(ocr, "available", lambda: False)
+    g, meta = gpzu.from_pdf(b"%PDF-1.7")
+    assert not g.is_gpzu and not meta["ocr"]

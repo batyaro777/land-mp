@@ -31,6 +31,7 @@ log = logging.getLogger(__name__)
 
 API = "https://torgi.gov.ru/new/api/public"
 LOT_URL = "https://torgi.gov.ru/new/public/lots/lot/{lot_id}"
+FILE_URL = "https://torgi.gov.ru/new/file-store/v1/{file_id}"
 SEARCH_URL = "https://torgi.gov.ru/new/public/lots/reg"
 SOURCE = (
     "ГИС «Торги» torgi.gov.ru: земельные участки (catCode=2), электронные аукционы (EA), "
@@ -53,6 +54,7 @@ STATUS_ACTIVE = "PUBLISHED,APPLICATIONS_SUBMISSION,DETERMINING_WINNER"
 STATUS_SUCCEED = "SUCCEED"
 STATUS_FAILED = "FAILED"
 MIN_AREA_M2 = 50.0  # меньше — не участок, а опечатка в карточке
+MAX_FILE_MB = 40.0  # ГПЗУ со сканами чертежей бывают по 15 МБ (Карелия, 07.11)
 
 _CAD_RE = re.compile(r"\b(\d{2}):(\d{2}):\d{6,7}:\d+\b")
 
@@ -150,6 +152,23 @@ class TorgiClient:
 
     def lot(self, lot_id: str) -> dict[str, Any]:
         return self._get(f"{API}/lotcards/{lot_id}")
+
+    def file(self, file_id: str, *, max_mb: float = MAX_FILE_MB) -> bytes:
+        """Вложение лота из file-store (ГПЗУ, проект договора) — тот же троттлинг и повторы."""
+        url = FILE_URL.format(file_id=file_id)
+        for attempt in range(len(self._retry_delays) + 1):
+            _wait_turn(self._interval, self._sleep)
+            self.requests += 1
+            r = self._c.get(url)
+            if r.status_code in (429, 503) and attempt < len(self._retry_delays):
+                self.retries += 1
+                self._sleep(self._retry_delays[attempt])
+                continue
+            r.raise_for_status()
+            if len(r.content) > max_mb * 1_048_576:
+                raise ValueError(f"файл больше {max_mb:.0f} МБ")
+            return r.content
+        raise httpx.HTTPError("torgi: исчерпаны повторы")  # pragma: no cover
 
 
 # --- разбор карточки --------------------------------------------------------------------
@@ -403,7 +422,6 @@ STATUS_RU = {
 ACTIVE = {"PUBLISHED", "APPLICATIONS_SUBMISSION", "DETERMINING_WINNER"}
 LOT_MONTHS = 36
 MAX_OWN_LOTS = 4  # карточек на участок: каждая — запрос раз в 6 с
-FILE_URL = "https://torgi.gov.ru/new/file-store/v1/{file_id}"
 OWN_LOT_SCHEMA = 2
 
 
@@ -430,6 +448,7 @@ def _docs_of(card: dict[str, Any]) -> list[dict[str, Any]]:
                 {
                     "name": a.get("attachmentTypeName") or a.get("fileName") or "документ",
                     "file": a.get("fileName"),
+                    "file_id": fid,
                     "url": FILE_URL.format(file_id=fid),
                     "date": _day(a.get("uploadDate")),
                     "size_mb": round(a["fileSize"] / 1_048_576, 1)
@@ -573,6 +592,27 @@ def own_lot_row(card: dict[str, Any]) -> dict[str, Any]:
     }
     lot["outcome"], lot["meaning"] = outcome_of(lot)
     return lot
+
+
+def gpzu_doc(own: dict[str, Any] | None) -> dict[str, Any] | None:
+    """ГПЗУ среди вложений лотов участка (свежий лот первым): чат «МП Земля», сообщение 30 —
+    «к торгам приложен ГПЗУ», а блок ГПЗУ в отчёте пишет «не приложен»."""
+    for lot in (own or {}).get("lots") or []:
+        for d in lot.get("docs") or []:
+            if not d.get("gpzu"):
+                continue
+            fid = d.get("file_id") or (d.get("url") or "").rstrip("/").rsplit("/", 1)[-1]
+            if fid:
+                return {
+                    "file_id": fid,
+                    "url": d.get("url") or FILE_URL.format(file_id=fid),
+                    "file": d.get("file"),
+                    "size_mb": d.get("size_mb"),
+                    "lot_id": lot.get("id"),
+                    "lot_url": lot.get("url"),
+                    "published": lot.get("published"),
+                }
+    return None
 
 
 def history_note(lots: list[dict[str, Any]]) -> str | None:
