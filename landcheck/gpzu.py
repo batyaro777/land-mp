@@ -275,6 +275,17 @@ def _param(block: str, rx: str) -> str | None:
     return val[:120] or None
 
 
+# Строки абзаца о зоне, которые сами зоной не являются (прод 07.11: одна противопожарная зона
+# давала пять «ЗОУИТ» — «Согласно п. 4.14 СП…», «Сокращение противопожарных расстояний…»)
+_ZOUIT_NOT_START = re.compile(
+    r"^(согласно|в\s+соответствии|сокращени|допускается|при\s+условии|требовани|"
+    r"в\s+целях|для\s+обеспечения)",
+    re.I,
+)
+# Зоны одного вида без реестрового номера — считаем одной
+_ZOUIT_SINGLE = ("противопожарн", "защитное расстояние", "защитном расстоянии")
+
+
 def _zouit(blocks: list[str]) -> list[dict[str, str | None]]:
     out: list[dict[str, str | None]] = []
     seen: set[str] = set()
@@ -286,6 +297,13 @@ def _zouit(blocks: list[str]) -> list[dict[str, str | None]]:
                 continue
             if not regs and len(line) < 20:
                 continue  # обрывок ячейки таблицы скана («противопожарное») — не зона
+            if not regs and (not line[:1].isupper() or _ZOUIT_NOT_START.match(line)):
+                continue  # продолжение абзаца или ссылка на норматив, а не новая зона
+            root = next((r for r in _ZOUIT_SINGLE if r in lo), None)
+            if not regs and root:
+                if root in seen:
+                    continue  # одна и та же зона, абзац порезан на строки (ГПЗУ Карелии)
+                seen.add(root)
             if re.match(r"^(информация|наименование зоны|обозначение|x\b|y\b)", lo):
                 continue
             if re.fullmatch(r"[\d\s.,XYxy-]+", line):
