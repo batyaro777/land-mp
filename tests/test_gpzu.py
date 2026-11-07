@@ -167,7 +167,8 @@ def test_parse_scanned_gpzu_with_ocr_errors_karelia():
     g = gpzu.parse(text)
     assert g.is_gpzu and g.cad_num == "10:20:0060108:281" and g.area_m2 == 904.0
     assert (g.zone_code, g.zone_name) == ("Ж", "Жилая зона")
-    assert g.codes_main == ["2.1", "2.2", "2.3", "13.1"]  # OCR «2.|» → 2.1, «2.з» → 2.3
+    # OCR: «2.|» → 2.1, «2.з» → 2.3, «з.4» → 3.4 (так в реальном ГПЗУ Карелии, прод 07.11)
+    assert g.codes_main == ["2.1", "2.2", "2.3", "3.4", "13.1"]
     assert g.vri_main[0] == "Для индивидуального жилищного строительства (2.1)"
     assert (g.floors, g.height, g.coverage_pct) == ("3", "9,6 м", "60%")
     assert g.red_lines is False
