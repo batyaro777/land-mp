@@ -426,10 +426,11 @@ def fetch_auctions(cad_num: str, *, refresh: bool = False) -> dict[str, Any]:
 
 
 def fetch_parcel_lot(cad_num: str, *, refresh: bool = False) -> dict[str, Any]:
-    """Лот самого участка на torgi.gov.ru (кэш на сутки → RU-шлюз, 2 запроса)."""
+    """Лоты самого участка на torgi.gov.ru: история, итог, протоколы, документы (кэш → RU-шлюз,
+    поиск + до 4 карточек). Ключ с версией схемы: старые записи без истории не берём."""
     from landcheck import torgi
 
-    key = f"torgi-lot:{cad_num}"
+    key = f"torgi-lot{torgi.OWN_LOT_SCHEMA}:{cad_num}"
     cache = ParcelCache(settings.cache_path, ttl_days=settings.torgi_ttl_days)
     try:
         if not refresh:

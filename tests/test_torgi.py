@@ -288,3 +288,165 @@ def test_parcel_lot_found_and_not_found():
     r = torgi.parcel_lot("40:13:120101:22", client=down, now=NOW, interval=0, sleep=lambda s: None)
     assert not r["found"] and r["error"] and "недоступен" in r["error"]
     assert torgi.parcel_lot("нет-номера", client=empty)["error"] == "кадастровый номер без региона"
+
+
+# --- лоты самого участка: итог, протоколы, документы (чат «МП Земля», сообщение 27) ---------
+SECRET_NAME = "Иванов Иван Иванович"
+
+
+def _own_card(**over) -> dict:
+    """Карточка как у лота 22000154380000002227_1 (Карелия, 07.11): аренда, состоялся."""
+    card = _card("N_1", "10:20:0060108:281", area=904, start=36_880.47, fin=368_800.47, kind="rent")
+    card.update(
+        noticeNumber="N",
+        priceStep=1844.0,
+        deposit=36_000.0,
+        auctionStartDate="2026-10-23T07:00:00Z",
+        biddEndTime="2026-10-20T06:00:00Z",
+        noticeFirstVersionPublicationDate="2026-09-22T09:12:06.025Z",
+        etpUrl="https://178fz.roseltorg.ru/#com/procedure/view/procedure/655375",
+        isAnnulled=False,
+        isStopped=False,
+        hasAppeals=False,
+        lotAttachments=[
+            {
+                "fileId": "f-gpzu",
+                "fileName": "градплан_281.pdf",
+                "fileSize": 14_122_063,
+                "uploadDate": "2026-09-22T09:06:12.470+00:00",
+                "attachmentTypeCode": "Plan_lands",
+                "attachmentTypeName": "Градостроительный план земельного участка",
+            },
+        ],
+        noticeAttachments=[
+            {"fileId": "f-gpzu", "fileName": "градплан_281.pdf"},  # дубль — не повторяем
+            {
+                "fileId": "f-dog",
+                "fileName": "ПРОЕКТ договора аренды.docx",
+                "attachmentTypeName": "Проект договора",
+            },
+            {"fileId": "f-old", "fileName": "старое.doc", "inactive": True},
+        ],
+        protocols=[
+            {
+                "type": {
+                    "code": "AUCTION_RESULTS_ZK",
+                    "name": "Протокол о результатах аукциона",
+                },
+                "publishDate": "2026-10-23T11:03:02.156Z",
+                "protocolNumber": "P2",
+                "participantAdmissions": [
+                    {
+                        "orderNumber": "1",
+                        "lastName": "Иванов",
+                        "firstName": "Иван",
+                        "middleName": "Иванович",
+                        "admissionStatus": "ADMITTED",
+                        "orgType": "INDIVIDUAL_PERSON",
+                    },
+                    {"orderNumber": "2", "admissionStatus": "ADMITTED"},
+                    {"orderNumber": "3", "admissionStatus": "NOT_ADMITTED"},
+                ],
+                "results": [
+                    {
+                        "isFirst": True,
+                        "participantPrice": 368_800.47,
+                        "lastName": "Иванов",
+                        "firstName": "Иван",
+                        "middleName": "Иванович",
+                        "orgType": "INDIVIDUAL_PERSON",
+                    },
+                    {"isSecond": True, "participantPrice": 366_956.47},
+                ],
+            },
+            {
+                "type": {
+                    "name": "Результаты рассмотрения заявок претендентов по электронному "
+                    "аукциону для размещения в ГИС Торги"
+                },
+                "publishDate": "2026-10-22T12:03:04.039Z",
+                "protocolNumber": "P1",
+            },
+        ],
+    )
+    card.update(over)
+    return card
+
+
+def test_own_lot_row_outcome_protocols_docs_without_names():
+    lot = torgi.own_lot_row(_own_card())
+    assert lot["outcome"] == "торги состоялись" and lot["kind"] == "аренда"
+    assert "арендатор" in lot["meaning"] and "переуступка" in lot["meaning"]
+    assert (lot["price_start"], lot["price_fin"], lot["ratio"]) == (36_880.47, 368_800.47, 10.0)
+    assert (lot["applied"], lot["admitted"]) == (3, 2)
+    assert (lot["winner_price"], lot["second_price"], lot["winner_type"]) == (
+        368_800.47,
+        366_956.47,
+        "физлицо",
+    )
+    # протоколы по дате; приписка «для размещения в ГИС Торги» убрана
+    assert [p["number"] for p in lot["protocols"]] == ["P1", "P2"]
+    assert not lot["protocols"][0]["name"].endswith("ГИС Торги")
+    # документы: ГПЗУ один раз, неактивный файл выброшен, ссылки на file-store
+    assert [d["name"] for d in lot["docs"]] == [
+        "Градостроительный план земельного участка",
+        "Проект договора",
+    ]
+    assert lot["docs"][0]["gpzu"] and lot["docs"][0]["size_mb"] == 13.5
+    assert lot["docs"][1]["url"] == "https://torgi.gov.ru/new/file-store/v1/f-dog"
+    assert lot["auction_start"] == "2026-10-23" and lot["etp_url"].startswith("https://178fz")
+    # имена участников и победителя не попадают никуда
+    dumped = json.dumps(lot, ensure_ascii=False)
+    assert "Иванов" not in dumped and "Иванович" not in dumped
+
+
+def test_own_lot_outcomes_failed_canceled_sale_and_history():
+    one = torgi.own_lot_row(
+        _own_card(
+            lotStatus="FAILED",
+            priceFin=None,
+            protocols=[{"participantAdmissions": [{"admissionStatus": "ADMITTED"}]}],
+        )
+    )
+    assert one["outcome"] == "торги не состоялись (одна заявка)"
+    assert "единственным участником" in one["meaning"]
+    none_ = torgi.own_lot_row(_own_card(lotStatus="FAILED", priceFin=None, protocols=[]))
+    assert none_["outcome"] == "торги не состоялись" and "в протоколе" in none_["meaning"]
+    canceled = torgi.own_lot_row(_own_card(lotStatus="CANCELED", priceFin=None))
+    assert canceled["outcome"] == "торги отменены"
+    sale = torgi.own_lot_row(_own_card(typeTransaction="sale"))
+    assert sale["kind"] == "продажа" and "выписке ЕГРН" in sale["meaning"]
+    annulled = torgi.own_lot_row(_own_card(isAnnulled=True))
+    assert annulled["outcome"] == "извещение аннулировано"
+    active = torgi.own_lot_row(_own_card(lotStatus="APPLICATIONS_SUBMISSION", priceFin=None))
+    assert active["outcome"] == "идут: приём заявок"
+
+    assert torgi.history_note([sale]) is None
+    note = torgi.history_note([active, sale])
+    assert "2 раза" in note and "2026-10-23" in note and "снова" in note
+    assert "5 раз" in torgi.history_note([active] * 5)
+
+
+def test_parcel_lot_history_filters_neighbours_and_needs_ru_proxy(monkeypatch):
+    own_new = _own_card()
+    own_old = _own_card(id="OLD_1", lotStatus="FAILED", priceFin=None, protocols=[])
+    neighbour = _card("N_2", "10:20:0060108:282")
+    other_notice = _card("M_3", "10:20:0060108:280")
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        path = urlparse(str(req.url)).path
+        if path.endswith("/lotcards/search"):
+            return httpx.Response(200, json=_page([own_new, neighbour, other_notice, own_old], 4))
+        lot_id = path.rsplit("/", 1)[-1]
+        return httpx.Response(200, json={"N_1": own_new, "OLD_1": own_old}[lot_id])
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    r = torgi.parcel_lot("10:20:0060108:281", client=client, now=NOW, interval=0)
+    assert r["found"] and r["schema"] == torgi.OWN_LOT_SCHEMA and r["requests"] == 3
+    assert [lot["id"] for lot in r["lots"]] == ["N_1", "OLD_1"] and r["lot"]["id"] == "N_1"
+    assert r["history_note"] and "2 раза" in r["history_note"] and r["more"] == 0
+    assert SECRET_NAME.split()[0] not in json.dumps(r, ensure_ascii=False)
+
+    monkeypatch.delenv("LANDCHECK_RU_PROXY", raising=False)
+    r = torgi.parcel_lot("10:20:0060108:281", now=NOW)
+    assert not r["found"] and "RU-шлюз не настроен" in r["error"] and r["requests"] == 0

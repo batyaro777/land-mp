@@ -1312,6 +1312,22 @@ def _terrain_for(
     )
 
 
+TORGI_RETRY_MIN = 60  # сбой torgi.gov.ru не запоминаем навсегда: через час спросим снова
+
+
+def _torgi_lot_stale(lot: dict[str, Any] | None) -> bool:
+    """Лотов участка ещё не спрашивали или прошлый раз torgi.gov.ru не ответил больше часа назад."""
+    if not lot:
+        return True
+    if not lot.get("error"):
+        return False
+    try:
+        asked = datetime.fromisoformat(lot.get("as_of") or "")
+    except ValueError:
+        return True
+    return (datetime.now(UTC) - asked).total_seconds() > TORGI_RETRY_MIN * 60
+
+
 @router.get("/checks/{check_id}/items/{cad_num}/docs", response_class=HTMLResponse)
 def report_docs(request: Request, user: UserDep, check_id: int, cad_num: str, refresh: int = 0):
     """Блок «Документы и упоминания» (HTMX): поиск по кадастровому номеру, результат в item.data."""
@@ -1326,8 +1342,16 @@ def report_docs(request: Request, user: UserDep, check_id: int, cad_num: str, re
             raise HTTPException(404)
         data = dict(item.data)
         docs = data.get("docs")
+        changed = False
         if docs is None or refresh:
             docs = search_documents(cad_num)
+            changed = True
+        # Торги самого участка — по первоисточнику torgi.gov.ru, а не по агрегаторам из поиска
+        # (чат «МП Земля», сообщение 27: «показать, что участок был на торгах, итог и документы»)
+        if refresh or _torgi_lot_stale(docs.get("torgi")):
+            docs = {**docs, "torgi": jobs.fetch_parcel_lot(cad_num, refresh=bool(refresh))}
+            changed = True
+        if changed:
             data = _merge_item_data(db, item, docs=docs)
         return render(
             request,

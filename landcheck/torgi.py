@@ -385,7 +385,12 @@ def nearby_auctions(
     return result
 
 
-# --- лот самого участка (ТЗ v3, п. 1.12: цели «торги», «инвестиция», «у муниципалитета») -----
+# --- лоты самого участка (ТЗ v3, п. 1.12; чат «МП Земля», сообщение 27) ------------------
+# Эксперт 07.11: веб-поиск находит участок на агрегаторах торгов, а итог нужен по
+# первоисточнику — состоялись или нет, за сколько ушёл, какие документы. Карточка лота
+# torgi.gov.ru отдаёт статус, итоговую цену, протоколы (без файлов: тип, номер, дата) и
+# вложения лота и извещения (ГПЗУ, проект договора, форма заявки). Победителя и участников
+# публичный API не отдаёт — они в протоколе на площадке (`etpUrl`).
 ALL_STATUSES = "PUBLISHED,APPLICATIONS_SUBMISSION,DETERMINING_WINNER,SUCCEED,FAILED,CANCELED"
 STATUS_RU = {
     "PUBLISHED": "опубликован",
@@ -395,11 +400,196 @@ STATUS_RU = {
     "FAILED": "не состоялся",
     "CANCELED": "отменён",
 }
-LOT_MONTHS = 24
+ACTIVE = {"PUBLISHED", "APPLICATIONS_SUBMISSION", "DETERMINING_WINNER"}
+LOT_MONTHS = 36
+MAX_OWN_LOTS = 4  # карточек на участок: каждая — запрос раз в 6 с
+FILE_URL = "https://torgi.gov.ru/new/file-store/v1/{file_id}"
+OWN_LOT_SCHEMA = 2
 
 
 def _num(v: Any) -> float | None:
     return float(v) if isinstance(v, int | float) else None
+
+
+def _day(v: Any) -> str | None:
+    return v[:10] if isinstance(v, str) and len(v) >= 10 else None
+
+
+def _docs_of(card: dict[str, Any]) -> list[dict[str, Any]]:
+    """Вложения лота и извещения: ГПЗУ, проект договора, форма заявки, извещение. Без
+    неактивных и без повторов (одни и те же файлы бывают и у лота, и у извещения)."""
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for key in ("lotAttachments", "noticeAttachments"):
+        for a in card.get(key) or []:
+            fid = a.get("fileId")
+            if not fid or fid in seen or a.get("inactive"):
+                continue
+            seen.add(fid)
+            out.append(
+                {
+                    "name": a.get("attachmentTypeName") or a.get("fileName") or "документ",
+                    "file": a.get("fileName"),
+                    "url": FILE_URL.format(file_id=fid),
+                    "date": _day(a.get("uploadDate")),
+                    "size_mb": round(a["fileSize"] / 1_048_576, 1)
+                    if isinstance(a.get("fileSize"), int | float)
+                    else None,
+                    "gpzu": a.get("attachmentTypeCode") == "Plan_lands",
+                }
+            )
+    return out
+
+
+ORG_TYPE_RU = {
+    "INDIVIDUAL_PERSON": "физлицо",
+    "INDIVIDUAL_ENTREPRENEUR": "ИП",
+    "LEGAL_ENTITY": "юрлицо",
+    "LEGAL_PERSON": "юрлицо",
+}
+
+
+def _protocols_of(card: dict[str, Any]) -> list[dict[str, Any]]:
+    """Протоколы лота: тип, дата, номер. Имена участников и победителя (у физлиц — ФИО) не
+    берём вовсе: только число заявок, допущенных и цены первого и второго места."""
+    out = []
+    for p in card.get("protocols") or []:
+        typ = p.get("type") if isinstance(p.get("type"), dict) else {}
+        name = (typ.get("name") or "протокол").replace(" для размещения в ГИС Торги", "")
+        out.append(
+            {"name": name, "date": _day(p.get("publishDate")), "number": p.get("protocolNumber")}
+        )
+    out.sort(key=lambda p: p.get("date") or "")
+    return out
+
+
+def _result_of(card: dict[str, Any]) -> dict[str, Any]:
+    """Итог из протоколов: заявок, допущено, цена победителя и второго места, кто победил
+    (физлицо / ИП / юрлицо). Без имён."""
+    applied = admitted = None
+    first = second = None
+    winner = None
+    for p in card.get("protocols") or []:
+        adm = p.get("participantAdmissions")
+        if isinstance(adm, list) and adm:
+            applied = len(adm)
+            admitted = sum(1 for a in adm if (a or {}).get("admissionStatus") == "ADMITTED")
+        for r in p.get("results") or []:
+            price = _num((r or {}).get("participantPrice"))
+            if r.get("isFirst"):
+                first = price
+                winner = ORG_TYPE_RU.get(r.get("orgType") or "")
+            elif r.get("isSecond"):
+                second = price
+    return {
+        "applied": applied,
+        "admitted": admitted,
+        "winner_price": first,
+        "second_price": second,
+        "winner_type": winner,
+    }
+
+
+def outcome_of(lot: dict[str, Any]) -> tuple[str, str]:
+    """(итог, что это значит) простыми словами — по статусу лота и ценам."""
+    status = lot.get("status")
+    rent = lot.get("kind") == "аренда"
+    if lot.get("annulled"):
+        return "извещение аннулировано", "торги отменены целиком — итога нет"
+    if lot.get("notice_3918"):
+        if status == "CANCELED":
+            return "отменено", "извещение о предоставлении отозвано"
+        return (
+            "извещение о предоставлении (ст. 39.18 ЗК)",
+            "участок предлагали конкретному заявителю; если за 30 дней пришли заявки других "
+            "желающих — назначают аукцион",
+        )
+    if status == "SUCCEED":
+        fin, start = lot.get("price_fin"), lot.get("price_start")
+        raised = bool(fin and start and fin > start)
+        if rent:
+            note = "право аренды ушло победителю" if raised else "аренда — по начальной цене"
+            note += (
+                "; у участка есть арендатор по итогам аукциона: если участок вам предлагают, "
+                "продавец должен быть этим арендатором (переуступка права аренды)"
+            )
+        else:
+            note = "участок продан победителю" if raised else "продан по начальной цене"
+            note += "; сверьте по выписке ЕГРН, что продавец — победитель торгов или его преемник"
+        return "торги состоялись", note
+    if status == "FAILED":
+        if lot.get("applied") == 0 or lot.get("admitted") == 0:
+            return "торги не состоялись", "допущенных заявок не было — участок может выйти снова"
+        if lot.get("applied") == 1 or lot.get("admitted") == 1:
+            return (
+                "торги не состоялись (одна заявка)",
+                "договор заключают с единственным участником по начальной цене (ст. 39.12 ЗК) — "
+                "у участка, скорее всего, уже есть арендатор или покупатель",
+            )
+        return (
+            "торги не состоялись",
+            "заявок не было или подана одна — тогда договор заключают с единственным участником "
+            "по начальной цене (ст. 39.12 ЗК); что именно — в протоколе",
+        )
+    if status == "CANCELED":
+        return "торги отменены", "организатор отменил торги — участок может выйти на торги снова"
+    if status in ACTIVE:
+        return f"идут: {STATUS_RU.get(status, status)}", "итога ещё нет"
+    return STATUS_RU.get(status or "", status or "—"), ""
+
+
+def own_lot_row(card: dict[str, Any]) -> dict[str, Any]:
+    form = _code(card.get("biddForm"))
+    status = card.get("lotStatus")
+    start, fin = _num(card.get("priceMin")), _num(card.get("priceFin"))
+    etp = card.get("etpUrl")
+    lot = {
+        "id": card.get("id"),
+        "url": LOT_URL.format(lot_id=card.get("id")),
+        "notice": card.get("noticeNumber"),
+        "status": status,
+        "status_ru": STATUS_RU.get(status or "", status or "—"),
+        "form": form,
+        "notice_3918": form == "IPS",
+        "kind": "аренда" if card.get("typeTransaction") == "rent" else "продажа",
+        "price_start": start,
+        "price_step": _num(card.get("priceStep")),
+        "deposit": _num(card.get("deposit")),
+        "price_fin": fin,
+        "ratio": round(fin / start, 1) if fin and start else None,
+        "area_m2": area_of(card),
+        "bidd_end": _day(card.get("biddEndTime")),
+        "auction_start": _day(card.get("auctionStartDate")),
+        "published": _day(card.get("noticeFirstVersionPublicationDate")),
+        "vri": vri_of(card),
+        "address": card.get("estateAddress"),
+        "annulled": bool(card.get("isAnnulled")),
+        "stopped": bool(card.get("isStopped")),
+        "appeals": bool(card.get("hasAppeals")),
+        "etp_url": etp if isinstance(etp, str) and etp.startswith("https://") else None,
+        "protocols": _protocols_of(card),
+        "docs": _docs_of(card),
+        **_result_of(card),
+    }
+    lot["outcome"], lot["meaning"] = outcome_of(lot)
+    return lot
+
+
+def history_note(lots: list[dict[str, Any]]) -> str | None:
+    """Участок выставляли не один раз — на что смотреть."""
+    if len(lots) < 2:
+        return None
+    n = len(lots)
+    times = f"{n} раза" if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else f"{n} раз"
+    done = [lot for lot in lots[1:] if lot.get("status") == "SUCCEED"]
+    if done:
+        when = done[0].get("auction_start") or done[0].get("published") or "ранее"
+        return (
+            f"участок выставлялся на торги {times}: торги {when} уже состоялись, но его выставили "
+            "снова — выясните по протоколам почему (например, победитель не заключил договор "
+            "или договор расторгнут)"
+        )
+    return f"участок выставлялся на торги {times} — предыдущие торги без итога (см. статусы)"
 
 
 def parcel_lot(
@@ -410,22 +600,30 @@ def parcel_lot(
     interval: float = REQUEST_INTERVAL_S,
     sleep=time.sleep,
 ) -> dict[str, Any]:
-    """Извещения torgi.gov.ru по самому участку за два года: аукцион (EA) или извещение о
-    предоставлении по ст. 39.18 ЗК (IPS). Два запроса через общий троттлинг; ошибки — в
-    результате, исключений наружу нет."""
+    """Все извещения torgi.gov.ru по самому участку за три года: аукционы (EA) и извещения о
+    предоставлении (IPS) — итог, цены, протоколы, документы. Поиск + до `MAX_OWN_LOTS`
+    карточек через общий троттлинг; ошибки — в результате, исключений наружу нет.
+    `lot` — самый свежий лот (для блока «Торги рядом»), `lots` — вся история."""
     now = now or datetime.now(UTC)
     region = region_of(cad_num)
     out: dict[str, Any] = {
+        "schema": OWN_LOT_SCHEMA,
         "cad_num": cad_num,
         "found": False,
         "lot": None,
+        "lots": [],
+        "history_note": None,
         "months": LOT_MONTHS,
         "as_of": now.isoformat(timespec="seconds"),
         "search_url": SEARCH_URL,
         "error": None,
+        "requests": 0,
     }
     if region is None:
         out["error"] = "кадастровый номер без региона"
+        return out
+    if client is None and not ruproxy.enabled():
+        out["error"] = "RU-шлюз не настроен — torgi.gov.ru из-за рубежа закрыт"
         return out
     pub_from = (now - timedelta(days=LOT_MONTHS * 30)).date().isoformat()
     api = TorgiClient(client, interval=interval, sleep=sleep)
@@ -433,36 +631,19 @@ def parcel_lot(
         page = api.search(
             region=region, text=cad_num, statuses=ALL_STATUSES, pub_from=pub_from, form=None
         )
+        # поиск по номеру нечёткий: соседние участки того же извещения отбрасываем
         cards = [c for c in page.get("content") or [] if cad_num_of(c) == cad_num]
-        if not cards:
-            return out
-        card = cards[0]  # сортировка по дате публикации, свежее первым
-        try:
-            card = {**card, **api.lot(card.get("id"))}
-        except Exception as exc:  # noqa: BLE001 — карточка не критична: есть данные поиска
-            log.info("torgi lot %s: %s", card.get("id"), exc)
-        form = _code(card.get("biddForm"))
-        status = card.get("lotStatus")
-        out["found"] = True
-        out["lot"] = {
-            "id": card.get("id"),
-            "url": LOT_URL.format(lot_id=card.get("id")),
-            "status": status,
-            "status_ru": STATUS_RU.get(status or "", status or "—"),
-            "form": form,
-            "notice_3918": form == "IPS",
-            "kind": "аренда" if card.get("typeTransaction") == "rent" else "продажа",
-            "price_start": _num(card.get("priceMin")),
-            "price_step": _num(card.get("priceStep")),
-            "deposit": _num(card.get("deposit")),
-            "price_fin": _num(card.get("priceFin")),
-            "area_m2": area_of(card),
-            "bidd_end": (card.get("biddEndTime") or "")[:10] or None,
-            "auction_start": (card.get("auctionStartDate") or "")[:10] or None,
-            "published": (card.get("noticeFirstVersionPublicationDate") or "")[:10] or None,
-            "vri": vri_of(card),
-            "address": card.get("estateAddress"),
-        }
+        lots = []
+        for hit in cards[:MAX_OWN_LOTS]:  # сортировка по дате публикации, свежее первым
+            card = hit
+            try:
+                card = {**hit, **api.lot(hit.get("id"))}
+            except Exception as exc:  # noqa: BLE001 — карточка не критична: есть данные поиска
+                log.info("torgi lot %s: %s", hit.get("id"), exc)
+            lots.append(own_lot_row(card))
+        if lots:
+            out.update(found=True, lot=lots[0], lots=lots, history_note=history_note(lots))
+            out["more"] = max(0, len(cards) - len(lots))
     except Exception as exc:  # noqa: BLE001
         log.warning("torgi parcel_lot %s: %s", cad_num, exc)
         out["error"] = f"torgi.gov.ru недоступен: {type(exc).__name__}"
