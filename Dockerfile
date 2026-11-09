@@ -12,10 +12,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends openssl libengi
     && rm -rf /var/lib/apt/lists/*
 
 ARG ASR_LOCAL=0
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md constraints.txt ./
 COPY landcheck ./landcheck
-RUN if [ "$ASR_LOCAL" = "1" ]; then pip install --no-cache-dir ".[asr-local]"; \
-    else pip install --no-cache-dir .; fi
+# constraints.txt: версии, с которыми принят прод — сборка без правок кода не тянет новые пакеты
+RUN if [ "$ASR_LOCAL" = "1" ]; then pip install --no-cache-dir -c constraints.txt ".[asr-local]"; \
+    else pip install --no-cache-dir -c constraints.txt .; fi
 
 ENV LANDCHECK_DB=/data/landcheck.sqlite \
     LANDCHECK_CACHE=/data/nspd-cache.sqlite \
