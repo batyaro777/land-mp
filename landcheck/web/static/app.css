@@ -117,3 +117,16 @@ article.rights textarea { font-size: 0.85em; }
 article.gpzu { border-left: 4px solid #2E75B6; }
 article.gpzu textarea { font-size: 0.85em; }
 article.pzz ul { margin: 0.2em 0 0.6em 1.1em; }
+/* Загрузка файлов перетягиванием (dropzone.js): прозрачный input лежит поверх зоны,
+   поэтому клик, фокус и проверка required остаются родными. */
+.dropzone { position: relative; border: 2px dashed var(--pico-muted-border-color); border-radius: 8px; padding: 0.9rem 1rem; margin: 0.25rem 0 0.75rem; background: var(--pico-card-background-color); transition: border-color .15s, background .15s; }
+.dropzone.over { border-color: #2E75B6; background: #eef4fb; }
+.dropzone.has-files { border-style: solid; border-color: #1f6b2a; }
+.dropzone .dz-input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; opacity: 0; cursor: pointer; z-index: 1; }
+.dropzone .dz-hint { font-size: 0.9em; color: var(--pico-muted-color); pointer-events: none; }
+.dropzone .dz-hint::before { content: '⇩ '; }
+.dropzone .dz-files { list-style: none; margin: 0.4rem 0 0; padding: 0; position: relative; z-index: 2; font-size: 0.9em; }
+.dropzone .dz-files li { display: flex; align-items: center; gap: 0.5rem; padding: 0.15rem 0; }
+.dropzone .dz-rm { width: auto; margin: 0; padding: 0 0.5rem; line-height: 1.3; font-size: 1em; background: transparent; color: #b42318; border: 1px solid transparent; }
+.dropzone .dz-rm:hover { border-color: #b42318; }
+.dropzone .dz-note { position: relative; z-index: 2; margin-top: 0.3rem; }

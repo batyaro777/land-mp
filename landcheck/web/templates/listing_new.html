@@ -9,7 +9,7 @@
   {% if error %}<p class="err" role="alert">{{ error }}</p>{% endif %}
   <form method="post" action="/listing" enctype="multipart/form-data">
     <label>Материалы участка <small class="muted">(фото, электронная выписка ЕГРН в PDF или XML с .sig, архив из Росреестра, договор, описание txt/docx — любые файлы, до 25 штук по 10 МБ; фото документов в подтверждение не идут)</small>
-      <input type="file" name="files" multiple>
+      <input type="file" name="files" multiple data-dz-text="Перетащите сюда фото участка, выписку, договор, описание — всё разом, можно папкой; или нажмите, чтобы выбрать">
     </label>
     <label>Ссылка на папку в облаке <small class="muted">(публичная папка Яндекс.Диска: disk.yandex.ru/d/…)</small>
       <input name="cloud_url" type="url" value="{{ f.get('cloud_url', '') }}" placeholder="https://disk.yandex.ru/d/XXXXXXXX"></label>

@@ -42,7 +42,7 @@
         <select name="proof_kind">{% for k, v in PROOF_KINDS.items() %}<option value="{{ k }}"{% if row.proof_kind == k %} selected{% endif %}>{{ v }}</option>{% endfor %}</select>
       </label>
       <label>Электронная выписка <small class="muted">(PDF или XML, рядом файл .sig, если есть; можно архивом; до 3 документов по 10 МБ)</small>
-        <input type="file" name="proofs" accept=".pdf,.xml,.sig,.p7s,.zip" multiple required></label>
+        <input type="file" name="proofs" accept=".pdf,.xml,.sig,.p7s,.zip" multiple required data-dz-text="Перетащите сюда выписку ЕГРН (PDF или XML с .sig, можно архивом) или нажмите, чтобы выбрать"></label>
       <button type="submit" class="outline sm">{{ button }}</button>
     </form>
 {% endmacro %}
