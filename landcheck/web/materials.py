@@ -106,8 +106,7 @@ def proof_materials(uploads: list[intake.Material]) -> tuple[list[intake.Materia
             queue[:0] = inner
             skipped.extend(errs)
         elif m.kind in intake.DOC_KINDS:
-            if m.kind == "pdf":
-                m.text = intake.pdf_text(m.raw)
+            intake.fill_pdf_text(m)
             docs.append(m)
         elif m.kind == "sig":
             sigs.append(m)
@@ -136,8 +135,7 @@ def materials_from_proof_files(listing_id: int) -> list[intake.Material]:
             continue
         raw = p.read_bytes()
         m = intake.Material(name=name, raw=raw, kind=intake.kind_of(raw, name))
-        if m.kind == "pdf":
-            m.text = intake.pdf_text(raw)
+        intake.fill_pdf_text(m)
         sig_path = files.get(name.rsplit(".", 1)[0] + ".sig")
         if sig_path is not None:
             m.sig = sig_path.read_bytes()
@@ -206,6 +204,10 @@ def proof_check(
     ).to_dict()
     res["source"] = ex.source
     res["document"] = doc.name
+    if doc.ocr:
+        # скан: номер и площадь читаются, но подлинность по картинке не установить
+        res["ocr"] = True
+        res["label"] = "Скан, текст распознан автоматически (возможны ошибки): " + res["label"]
     return res
 
 

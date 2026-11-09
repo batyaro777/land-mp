@@ -1814,13 +1814,39 @@ async def listing_create(
     документов; фото отделяются от сканов; сканы уходят на подтверждение права с автосверкой."""
     from datetime import UTC, datetime
 
+    from starlette.concurrency import run_in_threadpool
+
     from landcheck.inputs import parse_number
-    from landcheck.listing import ParcelFacts, build_draft
+    from landcheck.listing import AVITO_OBJECT_TYPES, ParcelFacts, build_draft
     from landcheck.web import materials
     from landcheck.web.db import Listing as ListingRow
 
+    form = {
+        "cad_num": cad_num,
+        "notes": notes,
+        "price": price,
+        "object_type": object_type,
+        "phone": phone,
+        "cloud_url": cloud_url,
+        "proof_kind": proof_kind,
+    }
+
+    def again(error: str, status_code: int = 400):
+        # прод 09.11: две подряд 400 «номер не найден» на error.html — форма терялась целиком
+        return render(
+            request,
+            "listing_new.html",
+            cad_num=cad_num,
+            form=form,
+            error=error,
+            object_types=AVITO_OBJECT_TYPES,
+            user=user,
+            status_code=status_code,
+        )
+
     uploads = await materials.materials_from_uploads([*(photos or []), *(files or [])])
-    taken, sources = materials.gather(uploads, cloud_url)
+    # приём с OCR сканов и разбором фото моделью — секунды; не держим цикл событий
+    taken, sources = await run_in_threadpool(materials.gather, uploads, cloud_url)
     auto: dict[str, bool] = {}
     m = CAD_RE.search(cad_num)
     if m:
@@ -1829,14 +1855,24 @@ async def listing_create(
         cn = taken.facts.cad_nums[0]
         auto["cad_num"] = True
     else:
-        msg = "Кадастровый номер не указан и не найден в материалах."
+        log.info(
+            "listing_create: номер не найден (файлов %d, документов %d, OCR %d)",
+            len(uploads),
+            len(taken.documents),
+            sum(1 for d in taken.documents if d.ocr),
+        )
+        msg = "Кадастровый номер не указан и не найден в материалах — впишите его в поле ниже."
         if taken.errors:
             msg += " " + "; ".join(taken.errors)
-        return render(request, "error.html", message=msg, user=user, status_code=400)
+        if uploads:
+            msg += " Файлы браузер не сохраняет: прикрепите их заново."
+        return again(msg)
     parcel, errors = _fetch_parcel_now(cn)
     if not parcel.found:
-        msg = "Участок в НСПД не найден." + (" " + "; ".join(errors) if errors else "")
-        return render(request, "error.html", message=msg, user=user)
+        msg = f"Участок {cn} в НСПД не найден — проверьте номер." + (
+            " " + "; ".join(errors) if errors else ""
+        )
+        return again(msg, status_code=200)
     price_v = parse_number(price) if price.strip() else None
     if price_v is not None and price_v < 1000:
         price_v *= 1_000_000
@@ -1907,6 +1943,8 @@ async def listing_create(
                     "gpzu": materials.gpzu_of(taken.documents),
                 }
         row.data = _compose_with_ai(dict(row.data))
+        if row.status == "pending":
+            _notify_moderators(db, row)
         db.commit()
         listing_id = row.id
     return RedirectResponse(f"/listing/{listing_id}", status_code=303)
@@ -2126,8 +2164,10 @@ async def listing_verify(
 
     if proof_kind not in PROOF_KINDS:
         proof_kind = "owner"
+    from starlette.concurrency import run_in_threadpool
+
     uploads = await materials.materials_from_uploads(proofs)
-    docs, skipped = materials.proof_materials(uploads)
+    docs, skipped = await run_in_threadpool(materials.proof_materials, uploads)
     with session() as db:
         row = _own_listing(db, user, listing_id)
         if row.status == "verified":
@@ -2153,6 +2193,7 @@ async def listing_verify(
         data["proof_check"] = _proof_check(row, user, proof_kind, docs=docs)
         data["gpzu"] = materials.gpzu_of(docs) or data.get("gpzu")
         row.data = data
+        _notify_moderators(db, row)
         db.commit()
     return RedirectResponse(f"/listing/{listing_id}", status_code=303)
 
@@ -2210,6 +2251,27 @@ def listing_publish(user: UserDep, listing_id: int, action: Annotated[str, Form(
         db.commit()
     suffix = f"?err={err}" if err else ""
     return RedirectResponse(f"/listing/{listing_id}{suffix}", status_code=303)
+
+
+def _notify_moderators(db, row) -> int:
+    """Объявление ушло на проверку права — уведомление модераторам (в кабинет; почта и Telegram,
+    если подключены). Прод 09.11: объявление №3 ждало модерации, о которой никто не знал."""
+    from landcheck.web.notify import notify
+
+    data = row.data or {}
+    verdict = (data.get("proof_check") or {}).get("verdict")
+    check = {"ok": "совпадает", "mismatch": "расхождение", "unknown": "не сверено"}.get(
+        verdict or "", "нечего сверять"
+    )
+    title = data.get("title") or row.cad_num
+    msg = f"Объявление на проверке: «{title}» ({row.cad_num}). Автосверка выписки: {check}."
+    sent = 0
+    for admin in db.scalars(select(User).where(User.is_admin.is_(True))).all():
+        if admin.id == row.user_id:
+            continue
+        notify(db, admin.id, "moderation", msg, "/admin/listings")
+        sent += 1
+    return sent
 
 
 def _notify_buyers_about(db, row) -> int:

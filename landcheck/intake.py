@@ -62,6 +62,7 @@ class Material:
     is_document: bool | None = None  # для картинок: скан документа (True) или фото (False)
     score: int = 0  # качество фото 1–5 по оценке модели; 0 — не оценивалось
     sig: bytes | None = None  # открепленная подпись .sig, подобранная к документу
+    ocr: bool = False  # текст PDF получен распознаванием скана (возможны ошибки)
 
     @property
     def is_image(self) -> bool:
@@ -113,6 +114,7 @@ class Intake:
             "photos": len(self.photos),
             "documents": [m.name for m in self.documents],
             "signed": [m.name for m in self.documents if m.sig],
+            "ocr": [m.name for m in self.documents if m.ocr],
             "scans": [m.name for m in self.scans],
             "notes": [m.name for m in self.notes],
             "facts": self.facts.to_dict(),
@@ -242,6 +244,38 @@ def pdf_text(raw: bytes, max_pages: int = 20) -> str:
         log.info("pdf_text: %s: %s", type(e).__name__, e)
         return ""
     return _clean("\n".join(parts))
+
+
+OCR_SCAN_PAGES = 4  # выписка ЕГРН и свидетельство — 1–4 страницы
+OCR_SCAN_DEADLINE_S = 45.0
+OCR_SCAN_DOCS = 3  # сканов на одну загрузку: 25 сканов не должны держать запрос минутами
+
+
+def pdf_scan_text(raw: bytes) -> str:
+    """Скан PDF без текстового слоя → текст через OCR (tesseract), если он есть в окружении.
+    Продавцы присылают выписку сканом (прод 09.11, объявление №3): без этого номер участка
+    не находился и форма отвечала «номер не указан»."""
+    from landcheck import ocr
+
+    if not ocr.available():
+        return ""
+    try:
+        pages, _ = ocr.pdf_ocr_pages(raw, max_pages=OCR_SCAN_PAGES, deadline_s=OCR_SCAN_DEADLINE_S)
+    except Exception as e:  # noqa: BLE001 — битый скан не должен валить приём
+        log.info("pdf_scan_text: %s: %s", type(e).__name__, e)
+        return ""
+    return _clean("\n".join(p["text"] for p in pages))
+
+
+def fill_pdf_text(m: Material, *, ocr: bool = True) -> None:
+    """Текст PDF: текстовый слой, а для скана — OCR с пометкой m.ocr (если ocr=True)."""
+    if m.kind != "pdf" or m.text.strip():
+        return
+    m.text = pdf_text(m.raw)
+    if not m.text.strip() and ocr:
+        scanned = pdf_scan_text(m.raw)
+        if scanned.strip():
+            m.text, m.ocr = scanned, True
 
 
 def text_of(m: Material) -> str:
@@ -667,7 +701,7 @@ def process(
         if m.is_image:
             images.append(m)
         elif m.kind == "pdf":
-            m.text = m.text or text_of(m)
+            fill_pdf_text(m, ocr=sum(d.ocr for d in res.documents) < OCR_SCAN_DOCS)
             res.documents.append(m)
         elif m.kind == "xml":
             res.documents.append(m)  # поля читает egrn_xml, текст не нужен
