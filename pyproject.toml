@@ -25,6 +25,7 @@ dependencies = [
     "pypdfium2>=4",
     "pillow>=10",
     "defusedxml>=0.7",
+    "gdown>=5",
 ]
 
 [project.optional-dependencies]

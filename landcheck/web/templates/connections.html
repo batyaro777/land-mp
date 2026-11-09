@@ -20,6 +20,7 @@
     {% elif c.status == 'accepted' and f %}
     <div class="small">Контакт: {{ f.contact or '—' }}{% if f.email %} · {{ f.email }}{% endif %}</div>
     {% endif %}
+    {% if c.status != 'declined' %}<div class="small"><a href="/connections/{{ c.id }}">Переписка{% if counts.get(c.id) %} ({{ counts[c.id] }}{% if unread.get(c.id) %}, <strong>новых {{ unread[c.id] }}</strong>{% endif %}){% endif %}</a></div>{% endif %}
   </div>
   {% endfor %}
 </article>
@@ -31,6 +32,7 @@
   <div class="check-card">
     По объявлению <a href="/l/{{ c.listing_id }}"><code>{{ l.cad_num if l else c.listing_id }}</code></a> → <strong>{{ (t.brand or t.name) if t else '—' }}</strong>
     <div class="small muted">{{ c.created_at|dt }} · <span class="badge {{ {'new':'v-check','accepted':'v-ok','declined':'v-stop'}[c.status] }}">{{ {'new':'ждёт ответа','accepted':'принят','declined':'отклонён'}[c.status] }}</span></div>
+    {% if c.status != 'declined' %}<div class="small"><a href="/connections/{{ c.id }}">Переписка{% if counts.get(c.id) %} ({{ counts[c.id] }}{% if unread.get(c.id) %}, <strong>новых {{ unread[c.id] }}</strong>{% endif %}){% endif %}</a></div>{% endif %}
     {% if c.status == 'accepted' and t %}{% set has = t.contact or t.email or (l and l.data.phone) %}<div class="small">Контакт: {% if has %}{{ t.contact or '' }}{% if t.email %}{% if t.contact %} · {% endif %}{{ t.email }}{% endif %}{% if l and l.data.phone %} · {{ l.data.phone }}{% endif %}{% else %}<span class="muted">владелец не указал контакт в профиле — мы попросили его заполнить</span>{% endif %}</div>{% endif %}
   </div>
   {% endfor %}

@@ -117,6 +117,10 @@ article.rights textarea { font-size: 0.85em; }
 article.gpzu { border-left: 4px solid #2E75B6; }
 article.gpzu textarea { font-size: 0.85em; }
 article.pzz ul { margin: 0.2em 0 0.6em 1.1em; }
+/* Переписка по запросу контакта */
+.thread { display: flex; flex-direction: column; gap: 0.5rem; margin: 0.5rem 0 1rem; }
+.thread .msg { max-width: 85%; padding: 0.5rem 0.75rem; border-radius: 10px; background: #f1f3f5; }
+.thread .msg.mine { align-self: flex-end; background: #e3eefb; }
 /* Загрузка файлов перетягиванием (dropzone.js): прозрачный input лежит поверх зоны,
    поэтому клик, фокус и проверка required остаются родными. */
 .dropzone { position: relative; border: 2px dashed var(--pico-muted-border-color); border-radius: 8px; padding: 0.9rem 1rem; margin: 0.25rem 0 0.75rem; background: var(--pico-card-background-color); transition: border-color .15s, background .15s; }

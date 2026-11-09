@@ -18,6 +18,7 @@ import struct
 import zipfile
 from collections import Counter
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -33,6 +34,7 @@ logging.getLogger("pypdf").setLevel(logging.ERROR)  # битые PDF от про
 
 YANDEX_API = "https://cloud-api.yandex.net/v1/disk/public/resources"
 CLOUD_HOSTS = ("disk.yandex.", "yadi.sk", "disk.360.yandex.")
+GOOGLE_HOSTS = ("drive.google.com", "docs.google.com")  # публичные папки и файлы Google Диска
 MAX_CLOUD_FILES = 30
 MAX_FILE_BYTES = 10 * 1024 * 1024
 MIN_PHOTO_BYTES = 15 * 1024  # мельче — иконки, превью, обрезки
@@ -408,9 +410,62 @@ def extract_facts(text: str) -> Facts:
 
 
 # --- Яндекс.Диск: публичная папка --------------------------------------------------------------
+def is_google_url(url: str) -> bool:
+    host = (urlparse(url.strip()).hostname or "").lower()
+    return any(host == h or host.endswith("." + h) for h in GOOGLE_HOSTS)
+
+
 def is_cloud_url(url: str) -> bool:
     host = (urlparse(url.strip()).hostname or "").lower()
-    return bool(url.strip()) and any(host.startswith(h) or h in host for h in CLOUD_HOSTS)
+    if not url.strip():
+        return False
+    return is_google_url(url) or any(host.startswith(h) or h in host for h in CLOUD_HOSTS)
+
+
+GOOGLE_HINT = (
+    "Google Диск: папка или файл недоступны. Нужен доступ «Все, у кого есть ссылка» "
+    "(Поделиться → Общий доступ) и ссылка вида drive.google.com/drive/folders/…"
+)
+
+
+def _google_download(url: str, out_dir: str) -> None:
+    """Скачать публичную папку или файл Google Диска в каталог (gdown, без ключа API)."""
+    import gdown
+
+    if "/folders/" in url or "folderview" in url:
+        gdown.download_folder(
+            url=url, output=out_dir, quiet=True, use_cookies=False, remaining_ok=True
+        )
+    else:
+        gdown.download(url=url, output=out_dir.rstrip("/") + "/", quiet=True, fuzzy=True)
+
+
+def google_fetch(url: str) -> tuple[list[Material], list[str]]:
+    """Файлы публичной папки Google Диска как материалы (зум 09.11: «попробуй с Google Диска»)."""
+    import tempfile
+
+    out: list[Material] = []
+    errors: list[str] = []
+    with tempfile.TemporaryDirectory() as d:
+        try:
+            _google_download(url, d)
+        except Exception as e:  # noqa: BLE001 — закрытая папка, лимит, сеть: текстом, не падаем
+            log.info("google drive: %s: %s", type(e).__name__, e)
+            return [], [GOOGLE_HINT]
+        paths = sorted(p for p in Path(d).rglob("*") if p.is_file())
+        if not paths:
+            return [], [GOOGLE_HINT]
+        for p in paths[:MAX_CLOUD_FILES]:
+            raw = p.read_bytes()
+            if len(raw) > MAX_FILE_BYTES:
+                errors.append(f"{p.name} — больше 10 МБ, пропущен")
+                continue
+            out.append(Material(name=p.name, raw=raw, kind=kind_of(raw, p.name), source="cloud"))
+        if len(paths) > MAX_CLOUD_FILES:
+            errors.append(
+                f"в папке больше {MAX_CLOUD_FILES} файлов: взяли первые {MAX_CLOUD_FILES}"
+            )
+    return out, errors
 
 
 def _client(timeout: float) -> httpx.Client:
@@ -512,7 +567,12 @@ def fetch_cloud(
     """Все файлы публичной папки как материалы. Ошибки — текстом, без исключений."""
     url = public_url.strip()
     if not is_cloud_url(url):
-        return [], ["Ссылка не похожа на публичную папку Яндекс.Диска (disk.yandex.ru/d/…)"]
+        return [], [
+            "Ссылка не похожа на публичную папку Яндекс.Диска (disk.yandex.ru/d/…) "
+            "или Google Диска (drive.google.com/drive/folders/…)"
+        ]
+    if is_google_url(url):
+        return google_fetch(url)
     own = client is None
     c = client or _client(timeout)
     try:

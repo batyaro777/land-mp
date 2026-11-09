@@ -1955,10 +1955,15 @@ async def listing_create(
                     "gpzu": materials.gpzu_of(taken.documents),
                 }
         row.data = _compose_with_ai(dict(row.data))
+        auto = False
         if row.status == "pending":
-            _notify_moderators(db, row)
+            auto = _auto_verify(db, row, user)
+            if not auto:
+                _notify_moderators(db, row)
         db.commit()
         listing_id = row.id
+    if auto:
+        _delete_proofs(listing_id)
     return RedirectResponse(f"/listing/{listing_id}", status_code=303)
 
 
@@ -2205,8 +2210,12 @@ async def listing_verify(
         data["proof_check"] = _proof_check(row, user, proof_kind, docs=docs)
         data["gpzu"] = materials.gpzu_of(docs) or data.get("gpzu")
         row.data = data
-        _notify_moderators(db, row)
+        auto = _auto_verify(db, row, user)
+        if not auto:
+            _notify_moderators(db, row)
         db.commit()
+    if auto:
+        _delete_proofs(listing_id)  # как после решения модератора: в базе остаётся только итог
     return RedirectResponse(f"/listing/{listing_id}", status_code=303)
 
 
@@ -2270,6 +2279,44 @@ def listing_publish(user: UserDep, listing_id: int, action: Annotated[str, Form(
         db.commit()
     suffix = f"?err={err}" if err else ""
     return RedirectResponse(f"/listing/{listing_id}{suffix}", status_code=303)
+
+
+def _auto_verify(db, row, user: User) -> bool:
+    """Автосверка совпала (номер, правообладатель, подпись — где есть) — право подтверждается без
+    модератора (зум 09.11: «проверять должна система сама»); модераторы получают уведомление и
+    могут отклонить. Файлы подтверждения удаляет вызывающий код после commit."""
+    from landcheck.egrn import summary_only
+    from landcheck.web.notify import notify
+
+    pc = (row.data or {}).get("proof_check") or {}
+    if not settings.auto_verify or pc.get("verdict") != "ok" or row.proof_kind == "agent":
+        # представитель: номер совпадает по любой выписке, а договор с собственником система
+        # не видит — только модератор
+        return False
+    row.status = "verified"
+    row.verified_at = datetime.now(UTC)
+    row.moderation_note = "подтверждено автоматически: выписка совпала с объявлением и продавцом"
+    row.data = {**row.data, "proof_check": summary_only(pc)}
+    title = (row.data or {}).get("title") or row.cad_num
+    notify(
+        db,
+        row.user_id,
+        "moderation",
+        f"Право на участок «{title}» подтверждено автоматически: выписка совпала с объявлением "
+        "и вашим именем. Можно публиковать в базу.",
+        f"/listing/{row.id}",
+    )
+    for admin in db.scalars(select(User).where(User.is_admin.is_(True))).all():
+        if admin.id != row.user_id:
+            notify(
+                db,
+                admin.id,
+                "moderation",
+                f"Автоподтверждение права: «{title}» ({row.cad_num}) — выписка совпала с "
+                "объявлением и продавцом, файлы удалены. При сомнении отклоните в модерации.",
+                "/admin/listings?status=verified",
+            )
+    return True
 
 
 def _notify_moderators(db, row) -> int:
@@ -2983,14 +3030,20 @@ def connection_create(user: UserDep, listing_id: int, note: Annotated[str, Form(
             )
         )
         if exists is None:
-            db.add(
-                Connection(
-                    listing_id=listing_id,
-                    from_user_id=user.id,
-                    to_user_id=row.user_id,
-                    note=note.strip()[:1000],
-                )
+            from landcheck.web.db import Message
+
+            conn = Connection(
+                listing_id=listing_id,
+                from_user_id=user.id,
+                to_user_id=row.user_id,
+                note=note.strip()[:1000],
             )
+            db.add(conn)
+            db.flush()
+            if note.strip():  # первое сообщение переписки — из запроса (зум 09.11)
+                db.add(
+                    Message(connection_id=conn.id, from_user_id=user.id, text=note.strip()[:1000])
+                )
             from landcheck.web.notify import notify
 
             who = user.brand or user.name
@@ -3002,11 +3055,88 @@ def connection_create(user: UserDep, listing_id: int, note: Annotated[str, Form(
                 "connect",
                 f"{who} запрашивает контакт по объявлению «{title}»"
                 + (f": «{note_clean}»" if note_clean else "")
-                + ". Примите или отклоните в разделе «Запросы контакта».",
-                "/connections",
+                + ". Примите или отклоните в разделе «Запросы контакта», "
+                + "ответить можно в переписке.",
+                f"/connections/{conn.id}",
             )
             db.commit()
     return RedirectResponse(f"/l/{listing_id}", status_code=303)
+
+
+def _own_connection(db, user: User, conn_id: int):
+    from landcheck.web.db import Connection
+
+    conn = db.get(Connection, conn_id)
+    if conn is None or user.id not in (conn.from_user_id, conn.to_user_id):
+        raise HTTPException(404)
+    return conn
+
+
+@router.get("/connections/{conn_id}", response_class=HTMLResponse)
+def connection_thread(request: Request, user: UserDep, conn_id: int, sent: int = 0):
+    """Переписка по запросу контакта (зум 09.11: «чат нужен обязательно»): обе стороны пишут
+    здесь, чужие сообщения помечаются прочитанными при открытии; контакты — по решению владельца."""
+    from landcheck.web.db import Listing as ListingRow
+    from landcheck.web.db import Message
+
+    with session() as db:
+        conn = _own_connection(db, user, conn_id)
+        msgs = db.scalars(
+            select(Message)
+            .where(Message.connection_id == conn.id)
+            .order_by(Message.created_at, Message.id)
+        ).all()
+        now = datetime.now(UTC)
+        for m in msgs:
+            if m.from_user_id != user.id and m.read_at is None:
+                m.read_at = now
+        db.commit()
+        other_id = conn.to_user_id if conn.from_user_id == user.id else conn.from_user_id
+        other = db.get(User, other_id)
+        lst = db.get(ListingRow, conn.listing_id)
+        return render(
+            request,
+            "connection_thread.html",
+            conn=conn,
+            msgs=msgs,
+            other=other,
+            listing=lst,
+            is_owner=conn.to_user_id == user.id,
+            sent=sent,
+            user=user,
+        )
+
+
+@router.post("/connections/{conn_id}/messages")
+def connection_message(user: UserDep, conn_id: int, text: Annotated[str, Form()] = ""):
+    from landcheck.web.db import Listing as ListingRow
+    from landcheck.web.db import Message
+    from landcheck.web.notify import notify
+
+    body = text.strip()[:2000]
+    if not body:
+        return RedirectResponse(f"/connections/{conn_id}", status_code=303)
+    with session() as db:
+        conn = _own_connection(db, user, conn_id)
+        if conn.status == "declined":
+            raise HTTPException(403, "Запрос контакта отклонён — переписка закрыта")
+        db.add(Message(connection_id=conn.id, from_user_id=user.id, text=body))
+        other_id = conn.to_user_id if conn.from_user_id == user.id else conn.from_user_id
+        lst = db.get(ListingRow, conn.listing_id)
+        title = ((lst.data or {}).get("title") if lst else None) or (
+            lst.cad_num if lst else f"#{conn.listing_id}"
+        )
+        who = user.brand or user.name
+        preview = body[:120].rstrip(".!?… ")
+        notify(
+            db,
+            other_id,
+            "message",
+            f"{who} пишет по объявлению «{title}»: «{preview}»",
+            f"/connections/{conn.id}",
+        )
+        db.commit()
+    return RedirectResponse(f"/connections/{conn_id}?sent=1", status_code=303)
 
 
 @router.post("/connections/{conn_id}/decide")
@@ -3217,6 +3347,16 @@ def connections_page(request: Request, user: UserDep):
         ).all()
         users = {u.id: u for u in db.scalars(select(User)).all()}
         listings = {r.id: r for r in db.scalars(select(ListingRow)).all()}
+        from landcheck.web.db import Message
+
+        ids = [c.id for c in (*incoming, *outgoing)]
+        counts: dict[int, int] = {}
+        unread: dict[int, int] = {}
+        if ids:
+            for m in db.scalars(select(Message).where(Message.connection_id.in_(ids))).all():
+                counts[m.connection_id] = counts.get(m.connection_id, 0) + 1
+                if m.from_user_id != user.id and m.read_at is None:
+                    unread[m.connection_id] = unread.get(m.connection_id, 0) + 1
         return render(
             request,
             "connections.html",
@@ -3224,6 +3364,8 @@ def connections_page(request: Request, user: UserDep):
             outgoing=outgoing,
             users=users,
             listings=listings,
+            counts=counts,
+            unread=unread,
             user=user,
         )
 

@@ -235,6 +235,20 @@ class Connection(Base):
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class Message(Base):
+    """Переписка по запросу контакта (зум 09.11: «чат нужен обязательно»): сообщения сторон
+    в рамках одной связки; телефоны и email по-прежнему открываются решением владельца."""
+
+    __tablename__ = "messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    connection_id: Mapped[int] = mapped_column(ForeignKey("connections.id"), index=True)
+    from_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    text: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class Offer(Base):
     """Спрос (R11): отклик продавца или брокера на запрос покупателя — «предложить участок под
     запрос». Покупатель видит вердикт под свою цель и решает, открывать ли контакты."""

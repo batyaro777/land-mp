@@ -56,6 +56,10 @@ class Settings:
         default_factory=lambda: float(os.environ.get("LANDCHECK_WATCH_DOCS_HOURS", "168"))
     )
     debug: bool = field(default_factory=lambda: os.environ.get("LANDCHECK_DEBUG", "") == "1")
+    # Автоподтверждение права при совпадении выписки (зум 09.11); LANDCHECK_AUTO_VERIFY=0 — выкл.
+    auto_verify: bool = field(
+        default_factory=lambda: os.environ.get("LANDCHECK_AUTO_VERIFY", "1") != "0"
+    )
     # RU-шлюз (ТЗ v3, п. 9): SOCKS5 на российский сервер для torgi.gov.ru и набор
     # сертификатов с корнем Минцифры. Пусто — слой торгов честно пишет «не настроен».
     ru_proxy: str | None = field(

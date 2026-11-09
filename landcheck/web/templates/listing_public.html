@@ -51,7 +51,7 @@
 <article>
   <h4>Связаться через платформу</h4>
   {% if my_conn %}
-    <p>Запрос контакта отправлен {{ my_conn.created_at|dt }}: <span class="badge {{ {'new':'v-check','accepted':'v-ok','declined':'v-stop'}[my_conn.status] }}">{{ {'new':'ждёт ответа','accepted':'принят','declined':'отклонён'}[my_conn.status] }}</span>. Статус и контакты — в <a href="/connections">запросах контакта</a>.</p>
+    <p>Запрос контакта отправлен {{ my_conn.created_at|dt }}: <span class="badge {{ {'new':'v-check','accepted':'v-ok','declined':'v-stop'}[my_conn.status] }}">{{ {'new':'ждёт ответа','accepted':'принят','declined':'отклонён'}[my_conn.status] }}</span>. Статус и контакты — в <a href="/connections">запросах контакта</a>, <a href="/connections/{{ my_conn.id }}">написать продавцу</a>.</p>
   {% else %}
     <form method="post" action="/l/{{ row.id }}/connect">
       <label>Сообщение продавцу или его брокеру <small class="muted">(кто вы, для кого ищете, условия сотрудничества между брокерами)</small>

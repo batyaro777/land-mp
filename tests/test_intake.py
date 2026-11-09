@@ -281,6 +281,7 @@ def _row(listing_url: str):
 
 
 def test_listing_from_materials_with_auto_verification(client, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(settings, "auto_verify", False)  # здесь проверяем детали сверки
     monkeypatch.setattr(settings, "gemini_api_key", None)
     monkeypatch.setattr(intake, "pdf_text", lambda raw, max_pages=20: EXTRACT)
     _register_named(client, "ivanov@example.com", "Иванов Иван Иванович")
@@ -429,6 +430,7 @@ def test_verify_rejects_scans_requires_electronic(client, monkeypatch):  # noqa:
 
 
 def test_verify_zip_with_xml_and_sig(client, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(settings, "auto_verify", False)  # детали подписи видны до решения
     """Архив Росреестра: XML читается структурно, подпись проверяется, свежесть и НСПД сходятся."""
     from datetime import UTC, datetime, timedelta
 

@@ -11,8 +11,8 @@
     <label>Материалы участка <small class="muted">(фото, электронная выписка ЕГРН в PDF или XML с .sig, архив из Росреестра, договор, описание txt/docx — любые файлы, до 25 штук по 10 МБ; фото документов в подтверждение не идут)</small>
       <input type="file" name="files" multiple data-dz-text="Перетащите сюда фото участка, выписку, договор, описание — всё разом, можно папкой; или нажмите, чтобы выбрать">
     </label>
-    <label>Ссылка на папку в облаке <small class="muted">(публичная папка Яндекс.Диска: в Диске нажмите «Поделиться» → «Скопировать ссылку», получится disk.yandex.ru/d/…; «Настроить доступ» с приглашением по почте не подойдёт)</small>
-      <input name="cloud_url" type="url" value="{{ f.get('cloud_url', '') }}" placeholder="https://disk.yandex.ru/d/XXXXXXXX"></label>
+    <label>Ссылка на папку в облаке <small class="muted">(Яндекс.Диск: «Поделиться» → «Скопировать ссылку», получится disk.yandex.ru/d/…; «Настроить доступ» с приглашением по почте не подойдёт. Google Диск: папка с доступом «Все, у кого есть ссылка», drive.google.com/drive/folders/…)</small>
+      <input name="cloud_url" type="url" value="{{ f.get('cloud_url', '') }}" placeholder="https://disk.yandex.ru/d/… или https://drive.google.com/drive/folders/…"></label>
     <label>Кто размещает <small class="muted">(важно, если среди материалов есть выписка или договор: они сразу уйдут на подтверждение права)</small>
       <select name="proof_kind">{% for k, v in PROOF_KINDS.items() %}<option value="{{ k }}"{% if f.get('proof_kind') == k %} selected{% endif %}>{{ v }}</option>{% endfor %}</select>
     </label>
