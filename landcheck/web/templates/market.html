@@ -14,10 +14,13 @@
   <input name="price_max" value="{{ f.price_max }}" placeholder="Цена до, ₽ (3 млн)">
   <input name="area_min" value="{{ f.area_min }}" placeholder="Соток от">
   <input name="area_max" value="{{ f.area_max }}" placeholder="Соток до">
+  <select name="sort" title="Сортировка">{% for k, label in sorts.items() %}<option value="{{ k }}" {{ 'selected' if sort == k else '' }}>{{ label }}</option>{% endfor %}</select>
+  <input type="hidden" name="applied" value="1">
   <button type="submit" class="sm">Показать</button>
 </form>
 <p class="muted small">Найдено: {{ cards|length }}.{% if not user %} Проверить любой участок под свою цель можно <a href="/login?tab=register">после регистрации</a>.{% endif %}</p>
-{% if not cards %}<p class="muted">Пока ничего нет: база только наполняется. Разместить свой участок — <a href="/login?tab=register">регистрация продавца</a>.</p>{% endif %}
+{% if not cards %}<p class="muted">Пока ничего нет{% if f.region %} по «{{ f.region }}»{% endif %}: в базе только объявления с подтверждённым правом, и она наполняется.{% if f.region %} <a href="/market?applied=1">Показать все регионы</a>.{% endif %}</p>
+<p class="small">Оставьте <a href="{{ '/search' if user else '/login?tab=register' }}">запрос покупателя</a> — продавцы и брокеры увидят ваш спрос и предложат участок напрямую, а вы получите уведомление о новых объявлениях. Разместить свой участок — <a href="{{ '/listing/new' if user else '/login?tab=register' }}">объявление с проверкой права</a>.</p>{% endif %}
 <div class="cards">
 {% for c in cards %}
   <article class="card">

@@ -31,6 +31,22 @@
   {% if d.images %}<div class="photos">{% for img in d.images %}<img src="{{ img }}" alt="">{% endfor %}</div>{% endif %}
 </article>
 </div>
+{% if nearby %}
+<article>
+  <h4>Рядом продаётся <small class="muted">· другие участки из базы в этой местности</small></h4>
+  <div class="cards">
+  {% for c in nearby %}
+    <article class="card">
+      {% if c.image %}<a href="/l/{{ c.id }}"><img src="{{ c.image }}" alt="" class="card-img"></a>{% endif %}
+      <h5><a href="/l/{{ c.id }}">{{ c.title }}</a></h5>
+      <p class="small muted">{{ c.locality }}</p>
+      <p><strong>{{ c.price_rub|money if c.price_rub else 'цена по запросу' }}</strong>{% if c.area_sotka %} · {{ c.area_sotka }} сот.{% endif %}{% if c.price_per_sotka %} · {{ c.price_per_sotka|money }}/сот.{% endif %}</p>
+      <p class="small">{% if c.test %}<span class="badge v-check">тест</span>{% else %}<span class="badge v-ok">право подтверждено</span>{% endif %}</p>
+    </article>
+  {% endfor %}
+  </div>
+</article>
+{% endif %}
 {% if user and not is_owner %}
 <article>
   <h4>Связаться через платформу</h4>

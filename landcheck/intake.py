@@ -436,6 +436,13 @@ def yandex_list(
     except httpx.HTTPError as e:
         return files, [f"Яндекс.Диск недоступен: {type(e).__name__}"]
     if r.status_code != 200:
+        if r.status_code in (403, 404):
+            # зум 09.11: продавец дал ссылку «Настроить доступ» (по приглашению), а не публичную
+            return files, [
+                "Яндекс.Диск: папка не найдена или доступ закрыт. Нужна публичная ссылка: "
+                "в Яндекс.Диске нажмите «Поделиться» → «Скопировать ссылку» "
+                "(вида disk.yandex.ru/d/…); «Настроить доступ» с приглашением не подойдёт"
+            ]
         try:
             msg = r.json().get("message") or r.json().get("description") or str(r.status_code)
         except ValueError:

@@ -41,6 +41,7 @@
   {% for r in reqs %}
   <div class="check-card">
     <a href="/search/{{ r.id }}"><strong>{{ r.text or Purpose(r.purpose).activity }}</strong></a>
+    <form method="post" action="/search/{{ r.id }}/delete" class="inline" style="float:right"><button class="outline secondary sm" title="Удалить запрос из списка">убрать</button></form>
     <div class="muted small">{{ Purpose(r.purpose).activity }}{% if r.budget_rub %} · до {{ r.budget_rub|money }}{% endif %}{% if r.region %} · {{ r.region }}{% endif %} · {{ r.created_at|dt }}</div>
   </div>
   {% endfor %}

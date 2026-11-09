@@ -17,7 +17,7 @@
     {% endfor %}
     <div class="grid">
       <button type="submit">Показать подборку</button>
-      <a href="/search/{{ req.id }}" role="button" class="outline secondary" onclick="document.querySelectorAll('input[type=radio]').forEach(r=>r.checked=false)">Пропустить вопросы</a>
+      <button type="submit" name="skip" value="1" class="outline secondary" formnovalidate>Пропустить вопросы</button>
     </div>
   </form>
 </article>

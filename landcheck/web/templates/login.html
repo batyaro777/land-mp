@@ -26,6 +26,8 @@
       <small class="muted">Покупатель — проверка участков под свою цель. Продавец — объявление с проверкой права. Брокер — всё сразу и подборки до 300 участков.</small>
     </label>
     <label>Название компании или бренда <small class="muted">(необязательно, для шапки отчётов)</small><input name="brand_name"></label>
+    <label>Регион интереса <small class="muted">(необязательно: база участков и поиск откроются по нему)</small><input name="region" list="region-names" placeholder="Ставропольский край"></label>
+    <datalist id="region-names">{% for r in REGION_NAMES %}<option value="{{ r }}">{% endfor %}</datalist>
     <button type="submit">Зарегистрироваться</button>
   </form>
   {% elif tab == 'code' %}

@@ -140,7 +140,10 @@
   {% if d.skipped_photos %}<p class="small err">Не приняты файлы (не изображение или больше 10 МБ): {{ d.skipped_photos|join(', ') }}</p>{% endif %}
   <p>{% if d.warnings %}<button class="sm" disabled title="Сначала уберите противоречия">Скачать Avito XML</button>{% else %}<a href="/listing/{{ row.id }}/avito.xml" role="button" class="sm">Скачать Avito XML</a>{% endif %}
      <button class="outline sm" onclick="navigator.clipboard.writeText(document.querySelector('textarea[name=description]').value);this.textContent='Текст скопирован'">Скопировать текст</button></p>
-  <p class="muted small">Файл для автозагрузки Avito: нужен подключённый тариф, перед первой загрузкой прогоните файл через проверку XML в кабинете автозагрузки. Фото попадут в XML только при публичном адресе сервиса.</p>
+  <details class="small">
+    <summary>Что такое Avito XML и нужен ли он мне</summary>
+    <p class="muted">Если вы размещаете объявление на Авито вручную — файл не нужен: нажмите «Скопировать текст», вставьте заголовок, описание и цену в форму Авито и добавьте фото. XML — для автозагрузки: агентства и продавцы с подключённым тарифом Avito Pro загружают объявления файлом, сразу пачкой и без ручного ввода. Перед первой загрузкой прогоните файл через проверку XML в кабинете автозагрузки Авито.</p>
+  </details>
   <p class="small"><a href="/single">Полный отчёт по этому участку</a></p>
 </article>
 </div>

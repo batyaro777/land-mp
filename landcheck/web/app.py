@@ -26,10 +26,11 @@ from sqlalchemy import func, select
 from landcheck import __version__, gpzu, intake, pzz, rights
 from landcheck.actions import action_plan
 from landcheck.export import DISCLAIMER, to_csv, to_markdown, to_xlsx
-from landcheck.inputs import CAD_RE, load_listings, parse_csv, parse_xlsx
+from landcheck.inputs import CAD_RE, load_listings, normalize_cad, parse_csv, parse_xlsx
 from landcheck.intent import parse_request
 from landcheck.models import SOTKA_M2, BatchResult, Purpose
 from landcheck.models import Request as CheckRequest
+from landcheck.regions import CADASTRAL_REGIONS
 from landcheck.rules import classifier
 from landcheck.rules.catalog import is_wide_zone
 from landcheck.summary import merge_documents, plain_summary
@@ -155,6 +156,7 @@ templates.env.globals.update(
     PUBLIC_ROLES_MAP={k: ROLES[k] for k in PUBLIC_ROLES},
     PROOF_KINDS=PROOF_KINDS,
     LISTING_STATUSES=LISTING_STATUSES,
+    REGION_NAMES=sorted(set(CADASTRAL_REGIONS.values())),
 )
 
 
@@ -362,6 +364,7 @@ def register(
     role: Annotated[str, Form()] = "buyer",
     brand_name: Annotated[str, Form()] = "",
     ref: Annotated[str, Form()] = "",
+    region: Annotated[str, Form()] = "",
 ):
     """Регистрация без кода (ТЗ v2, R3): email, пароль, имя, роль; партнёрский код из формы
     или cookie привязывает пришедшего к инфопартнёру (К4)."""
@@ -371,7 +374,14 @@ def register(
     with session() as db:
         partner = user_by_ref(db, code)
         user, error = register_user(
-            db, email, password, name, role, brand_name, referred_by=partner.id if partner else None
+            db,
+            email,
+            password,
+            name,
+            role,
+            brand_name,
+            referred_by=partner.id if partner else None,
+            region=region,
         )
     if user is None:
         record_failed_attempt(request.client.host if request.client else "?")
@@ -1590,6 +1600,7 @@ async def profile_save(
     brand_name: Annotated[str, Form()] = "",
     contact: Annotated[str, Form()] = "",
     role: Annotated[str, Form()] = "",
+    region: Annotated[str, Form()] = "",
     email: Annotated[str, Form()] = "",
     password: Annotated[str, Form()] = "",
     remove_logo: Annotated[str, Form()] = "",
@@ -1619,6 +1630,7 @@ async def profile_save(
         u.name = name.strip()[:120] or u.name
         u.brand = brand_name.strip()[:120] or None
         u.contact = contact.strip()[:200] or None
+        u.region = region.strip()[:120] or None
         if role in PUBLIC_ROLES:
             u.role = role  # права администратора остаются (is_admin), меняется только режим
         if telegram_chat_id.strip():  # ручной ввод остаётся запасным путём
@@ -1661,10 +1673,10 @@ def single_create(
     area: Annotated[str, Form()] = "",
     use: Annotated[str, Form()] = "any",
 ):
-    m = CAD_RE.search(cad_num)
-    if not m:
+    cn = normalize_cad(cad_num)  # «50.09.0060202.101» и с пробелами — тоже номер (зум 09.11)
+    if not cn:
         raise HTTPException(400, "Не похоже на кадастровый номер")
-    parts = [m.group(0)]
+    parts = [cn]
     if price.strip():
         parts.append(price.strip() + " руб")
     if area.strip():
@@ -1678,7 +1690,7 @@ def single_create(
     with session() as db:
         check = Check(
             user_id=user.id,
-            title=f"Разовая проверка {m.group(0)}",
+            title=f"Разовая проверка {cn}",
             request=request_to_dict(req),
             input_text="; ".join(parts),
             total=1,
@@ -1848,9 +1860,9 @@ async def listing_create(
     # приём с OCR сканов и разбором фото моделью — секунды; не держим цикл событий
     taken, sources = await run_in_threadpool(materials.gather, uploads, cloud_url)
     auto: dict[str, bool] = {}
-    m = CAD_RE.search(cad_num)
-    if m:
-        cn = re.sub(r"\s+", "", m.group(0))
+    cn_form = normalize_cad(cad_num)
+    if cn_form:
+        cn = cn_form
     elif taken.facts.cad_nums:
         cn = taken.facts.cad_nums[0]
         auto["cad_num"] = True
@@ -2392,6 +2404,26 @@ def _public_listings(
     return cards
 
 
+MARKET_SORTS: dict[str, str] = {
+    "": "сначала новые",
+    "price_asc": "дешевле",
+    "price_desc": "дороже",
+    "sotka_asc": "дешевле за сотку",
+    "area_desc": "больше площадь",
+}
+
+
+def sort_cards(cards: list[dict[str, Any]], sort: str) -> list[dict[str, Any]]:
+    """Сортировка витрины (зум 09.11, Влад: «сортировка нужна»); карточки без значения — в конец."""
+    key = {
+        "price_asc": lambda c: (c["price_rub"] is None, c["price_rub"] or 0),
+        "price_desc": lambda c: (c["price_rub"] is None, -(c["price_rub"] or 0)),
+        "sotka_asc": lambda c: (c["price_per_sotka"] is None, c["price_per_sotka"] or 0),
+        "area_desc": lambda c: (c["area_sotka"] is None, -(c["area_sotka"] or 0)),
+    }.get(sort)
+    return sorted(cards, key=key) if key else cards
+
+
 @router.get("/market", response_class=HTMLResponse)
 def market(
     request: Request,
@@ -2401,6 +2433,8 @@ def market(
     area_min: str = "",
     area_max: str = "",
     ref: str = "",
+    sort: str = "",
+    applied: int = 0,
 ):
     """Витрина: только объявления с подтверждённым правом, публично, без входа."""
     from landcheck.inputs import parse_number
@@ -2413,6 +2447,10 @@ def market(
     if pm is not None and pm < 1000:
         pm *= 1_000_000
     me = current_user(request)
+    if not applied and not region.strip() and me is not None and me.region:
+        region = me.region  # регион из профиля по умолчанию (зум 09.11, Влад)
+    if sort not in MARKET_SORTS:
+        sort = ""
     with session() as db:
         cards = _public_listings(
             db,
@@ -2423,11 +2461,14 @@ def market(
             area_max=num(area_max),
             include_test=bool(me is not None and (me.is_admin or me.test_mode)),
         )
+    cards = sort_cards(cards, sort)
     resp = render(
         request,
         "market.html",
         cards=cards,
         kinds=list(AVITO_OBJECT_TYPES.values()),
+        sorts=MARKET_SORTS,
+        sort=sort,
         f={
             "region": region,
             "kind": kind,
@@ -2470,7 +2511,51 @@ def listing_public(request: Request, listing_id: int):
             logo_url=logo_url(row.user_id) if owner else None,
             my_conn=my_conn,
             is_owner=bool(me is not None and me.id == row.user_id),
+            nearby=_nearby_listings(db, row),
         )
+
+
+def _nearby_listings(db, row, limit: int = 6) -> list[dict[str, Any]]:
+    """Другие объявления из базы рядом (зум 09.11, Влад: «выбирать среди участков массива —
+    этот 2,5, этот 2,7»): сначала тот же населённый пункт, потом район, потом регион —
+    по адресу НСПД, без геокодера."""
+    from landcheck.web.db import Listing as ListingRow
+
+    def parts(addr: str | None) -> list[str]:
+        return [p.strip().lower() for p in re.split(r"[,;]", addr or "") if p.strip()]
+
+    mine = parts((row.data or {}).get("address"))
+    if not mine:
+        return []
+    statuses = ("verified", "test") if row.status == "test" else ("verified",)
+    rows = db.scalars(
+        select(ListingRow)
+        .where(
+            ListingRow.status.in_(statuses),
+            ListingRow.published.is_(True),
+            ListingRow.id != row.id,
+        )
+        .order_by(ListingRow.id.desc())
+        .limit(500)
+    ).all()
+    owners = {u.id: u for u in db.scalars(select(User)).all()}
+    scored = []
+    for r in rows:
+        theirs = parts((r.data or {}).get("address"))
+        common = 0
+        for a, b in zip(mine, theirs, strict=False):
+            if a != b:
+                break
+            common += 1
+        if common:
+            scored.append((-common, -r.id, r))
+    scored.sort(key=lambda t: t[:2])
+    out = []
+    for _, _, r in scored[:limit]:
+        c = _market_card(r, owners.get(r.user_id))
+        c["locality"] = ", ".join(parts((r.data or {}).get("address"))[:3])
+        out.append(c)
+    return out
 
 
 # --- кабинет покупателя (К1, М4): запрос → уточняющие вопросы → подборка из базы -----------
@@ -2565,7 +2650,12 @@ def search_create(
     from landcheck.regions import region_from_cadnum
 
     # Кадастровый номер в запросе надёжнее слова с заглавной буквы: 90:… — Крым, а не «Терраграндэ»
-    reg = region.strip() or region_from_cadnum(query) or (region_from_text(query) or "")
+    reg = (
+        region.strip()
+        or region_from_cadnum(query)
+        or region_from_text(query)
+        or (user.region or "")  # регион из профиля, если в запросе его нет (зум 09.11)
+    )
     with session() as db:
         row = BuyerRequest(
             user_id=user.id,
@@ -2637,10 +2727,11 @@ async def search_answers(request: Request, user: UserDep, rid: int):
             q["key"]: {v for v, _ in q["options"]} for q in questions_for(_purpose_of(req.purpose))
         }
         answers = {}
-        for key, values in allowed.items():
-            v = form.get(key)
-            if isinstance(v, str) and v in values:
-                answers[key] = v
+        if not form.get("skip"):  # «Пропустить вопросы» (зум 09.11: ссылка возвращала к вопросам)
+            for key, values in allowed.items():
+                v = form.get(key)
+                if isinstance(v, str) and v in values:
+                    answers[key] = v
         req.answers = answers or {"skipped": "1"}
         from landcheck.web import demand
 
@@ -2993,11 +3084,18 @@ def demand_public(request: Request, region: str = "", purpose: str = ""):
 
 @router.get("/demand", response_class=HTMLResponse)
 def demand_page(
-    request: Request, user: UserDep, region: str = "", purpose: str = "", offered: int = 0
+    request: Request,
+    user: UserDep,
+    region: str = "",
+    purpose: str = "",
+    offered: int = 0,
+    applied: int = 0,
 ):
     from landcheck.web import demand
     from landcheck.web.db import Offer
 
+    if not applied and not region.strip() and user.region:
+        region = user.region  # регион из профиля по умолчанию (зум 09.11)
     with session() as db:
         reqs = demand.active_requests(
             db, exclude_user_id=user.id, region=region.strip(), purpose=purpose.strip()
@@ -3016,11 +3114,31 @@ def demand_page(
             (o.request_id, o.listing_id)
             for o in db.scalars(select(Offer).where(Offer.from_user_id == user.id)).all()
         }
+        # зум 09.11: у продавца объявление «на проверке» — кнопки «Предложить» не было и
+        # непонятно почему; показываем все его объявления со статусом и что сделать
+        from landcheck.web.db import Listing as ListingRow
+
+        my_all = [
+            {
+                "id": r.id,
+                "title": (r.data or {}).get("title") or r.cad_num,
+                "status": r.status_label,
+                "public": r.is_public,
+                "test": r.is_test,
+                "verified": r.status == "verified",
+            }
+            for r in db.scalars(
+                select(ListingRow)
+                .where(ListingRow.user_id == user.id)
+                .order_by(ListingRow.id.desc())
+            ).all()
+        ]
         return render(
             request,
             "demand.html",
             cards=cards,
             mine=[(lst.id, my_cards[lst.id]["title"]) for lst in mine],
+            my_all=my_all,
             offered_pairs=offered_pairs,
             my_offers=demand.my_offers(db, user),
             purposes=PURPOSES,

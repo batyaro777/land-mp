@@ -15,6 +15,9 @@
       <input name="brand_name" value="{{ user.brand or '' }}" placeholder="Например, Земля Подмосковья"></label>
     <label>Контакт <small class="muted">(телефон или Telegram; в отчёты пока не выводится)</small>
       <input name="contact" value="{{ user.contact or '' }}" placeholder="@username"></label>
+    <label>Регион интереса <small class="muted">(база участков, поиск и спрос открываются по нему; можно очистить)</small>
+      <input name="region" value="{{ user.region or '' }}" list="region-names" placeholder="Ставропольский край"></label>
+    <datalist id="region-names">{% for r in REGION_NAMES %}<option value="{{ r }}">{% endfor %}</datalist>
     <label>Роль
       <select name="role">
         {% for key, label in PUBLIC_ROLES_MAP.items() %}<option value="{{ key }}" {{ 'selected' if user.role == key else '' }}>{{ label }}</option>{% endfor %}

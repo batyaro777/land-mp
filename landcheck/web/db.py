@@ -88,6 +88,8 @@ class User(Base):
     # Тестовый режим (Тони, 09.11): публикация объявления без проверки права — на витрине
     # его видят только администраторы и тестовые аккаунты, покупателям не рассылается.
     test_mode: Mapped[bool] = mapped_column(default=False, server_default="0")
+    # Регион интереса (зум 09.11, Влад): витрина и поиск открываются по нему, а не пустыми.
+    region: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
     checks: Mapped[list[Check]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
@@ -335,6 +337,7 @@ _NEW_COLUMNS: dict[str, dict[str, str]] = {
         "notify_email": "BOOLEAN NOT NULL DEFAULT 1",
         "api_key": "VARCHAR(64)",
         "test_mode": "BOOLEAN NOT NULL DEFAULT 0",
+        "region": "VARCHAR(120)",
     },
     "invites": {"role": "VARCHAR(16)"},
     "watches": {"docs": "JSON", "docs_checked_at": "DATETIME"},
@@ -476,6 +479,7 @@ def register_user(
     role: str,
     brand: str | None = None,
     referred_by: int | None = None,
+    region: str | None = None,
 ) -> tuple[User | None, str | None]:
     """Новый пользователь по email: (user, None) или (None, текст ошибки)."""
     email = normalize_email(email)
@@ -495,6 +499,7 @@ def register_user(
         password_hash=hash_password(password),
         role=role,
         referred_by=referred_by,
+        region=(region or "").strip()[:120] or None,
     )
     db.add(user)
     db.commit()

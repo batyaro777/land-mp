@@ -515,5 +515,7 @@ def test_cloud_api_error_is_reported(client, monkeypatch):  # noqa: F811
         intake, "_client", lambda timeout: httpx.Client(transport=httpx.MockTransport(handler))
     )
     mats, errors = intake.fetch_cloud("https://disk.yandex.ru/d/missing")
-    assert mats == [] and errors == ["Яндекс.Диск: Ресурс не найден. (404)"]
+    assert mats == [] and len(errors) == 1
+    assert errors[0].startswith("Яндекс.Диск: папка не найдена или доступ закрыт")
+    assert "«Поделиться» → «Скопировать ссылку»" in errors[0]  # зум 09.11: подсказка, не код
     assert json.dumps(errors, ensure_ascii=False)

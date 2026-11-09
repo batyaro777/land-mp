@@ -17,6 +17,25 @@ from landcheck.models import SOTKA_M2, Listing
 AreaUnit = Literal["sotka", "m2"]
 
 CAD_RE = re.compile(r"\d{1,2}\s*:\s*\d{1,2}\s*:\s*\d{1,7}\s*:\s*\d{1,9}")
+# Номер, набранный с точками, запятыми или пробелами вместо двоеточий (зум 09.11: «точку
+# поставил — не найден»): только для отдельного поля формы, в свободном тексте это цены и даты.
+_CAD_LOOSE_RE = re.compile(
+    r"^\s*(\d{1,2})\s*[:.,;/ ]\s*(\d{1,2})\s*[:.,;/ ]\s*(\d{6,7})\s*[:.,;/ ]\s*(\d{1,9})\s*$"
+)
+
+
+def normalize_cad(text: str) -> str | None:
+    """Кадастровый номер из поля формы: с двоеточиями — как есть (без пробелов), с другими
+    разделителями — приводим к «AA:BB:CCCCCCC:DD». None — номера нет."""
+    m = CAD_RE.search(text or "")
+    if m:
+        return re.sub(r"\s+", "", m.group(0))
+    m = _CAD_LOOSE_RE.match(text or "")
+    if m:
+        return ":".join(m.groups())
+    return None
+
+
 _NUM_RE = re.compile(r"[-+]?\d[\d\s ]*(?:[.,]\d+)?")
 _URL_RE = re.compile(r"https?://\S+")
 
