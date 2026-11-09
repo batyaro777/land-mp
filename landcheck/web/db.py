@@ -85,6 +85,9 @@ class User(Base):
     telegram_chat_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     notify_email: Mapped[bool] = mapped_column(default=True, server_default="1")
     api_key: Mapped[str | None] = mapped_column(String(64), nullable=True)  # R10: ключ API
+    # Тестовый режим (Тони, 09.11): публикация объявления без проверки права — на витрине
+    # его видят только администраторы и тестовые аккаунты, покупателям не рассылается.
+    test_mode: Mapped[bool] = mapped_column(default=False, server_default="0")
 
     checks: Mapped[list[Check]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
@@ -154,6 +157,7 @@ LISTING_STATUSES: dict[str, str] = {
     "pending": "на проверке",
     "verified": "право подтверждено",
     "rejected": "отклонено",
+    "test": "тест: без проверки права",
 }
 PROOF_KINDS: dict[str, str] = {
     "owner": "Я собственник: выписка ЕГРН или свидетельство о праве",
@@ -188,7 +192,11 @@ class Listing(Base):
 
     @property
     def is_public(self) -> bool:
-        return self.status == "verified" and bool(self.published)
+        return self.status in ("verified", "test") and bool(self.published)
+
+    @property
+    def is_test(self) -> bool:
+        return self.status == "test"
 
 
 class BuyerRequest(Base):
@@ -326,6 +334,7 @@ _NEW_COLUMNS: dict[str, dict[str, str]] = {
         "telegram_chat_id": "VARCHAR(32)",
         "notify_email": "BOOLEAN NOT NULL DEFAULT 1",
         "api_key": "VARCHAR(64)",
+        "test_mode": "BOOLEAN NOT NULL DEFAULT 0",
     },
     "invites": {"role": "VARCHAR(16)"},
     "watches": {"docs": "JSON", "docs_checked_at": "DATETIME"},
@@ -406,6 +415,12 @@ def grant_admin(db: Session, user: User, on: bool = True) -> None:
     """Права администратора вместе с ролью: обзор системы, пользователи, модерация, чужие данные."""
     user.is_admin = on
     user.role = "admin" if on else ("broker" if user.role == "admin" else user.role)
+    db.commit()
+
+
+def set_test_mode(db: Session, user: User, on: bool = True) -> None:
+    """Тестовый аккаунт: публикует объявления без подтверждения права (статус «тест»)."""
+    user.test_mode = on
     db.commit()
 
 

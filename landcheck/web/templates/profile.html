@@ -19,7 +19,7 @@
       <select name="role">
         {% for key, label in PUBLIC_ROLES_MAP.items() %}<option value="{{ key }}" {{ 'selected' if user.role == key else '' }}>{{ label }}</option>{% endfor %}
       </select>
-      <small class="muted">Брокер видит всё: подборки, отчёты, объявления. Роль можно менять.</small>
+      <small class="muted">Брокер видит всё: подборки, отчёты, объявления. Роль можно менять в любой момент — здесь или в меню под именем; права администратора при этом сохраняются.</small>
     </label>
     <div class="grid">
       <label>Email для входа<input type="email" name="email" value="{{ user.email or '' }}" placeholder="you@example.com"></label>

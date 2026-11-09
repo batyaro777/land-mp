@@ -26,7 +26,7 @@
     <p class="small">{{ c.address or '' }}</p>
     <p><strong>{{ c.price_rub|money if c.price_rub else 'цена по запросу' }}</strong>{% if c.area_sotka %} · {{ c.area_sotka }} сот.{% endif %}{% if c.price_per_sotka %} · {{ c.price_per_sotka|money }}/сот.{% endif %}</p>
     <p class="small muted">{{ c.category or '' }}{% if c.permitted_use %} · {{ c.permitted_use|truncate(60) }}{% endif %}</p>
-    <p class="small"><span class="badge v-ok">право подтверждено {{ c.verified_at|day }}</span> <code class="small">{{ c.cad_num }}</code></p>
+    <p class="small">{% if c.test %}<span class="badge v-check">тест: право не проверялось</span>{% else %}<span class="badge v-ok">право подтверждено {{ c.verified_at|day }}</span>{% endif %} <code class="small">{{ c.cad_num }}</code></p>
   </article>
 {% endfor %}
 </div>

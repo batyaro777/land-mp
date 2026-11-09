@@ -3,15 +3,19 @@
 {% block content %}
 <div class="report-brand">
   <div class="brand-line">{% if logo_url %}<img src="{{ logo_url }}" alt="" class="brand-logo">{% endif %}<strong>{{ card.seller or 'Продавец' }}</strong></div>
-  <span class="muted small">Объявление с подтверждённым правом · {{ brand }}</span>
+  <span class="muted small">{% if row.is_test %}Тестовое объявление · {{ brand }}{% else %}Объявление с подтверждённым правом · {{ brand }}{% endif %}</span>
 </div>
 <hgroup>
   <h2>{{ d.title }}</h2>
   <p>{{ d.address or '' }}</p>
 </hgroup>
+{% if row.is_test %}
+<p class="err"><span class="badge v-check">тестовое объявление</span> Право на участок не проверялось: объявление размещено тестовым аккаунтом для проверки сервиса. Сделок по нему нет.</p>
+{% else %}
 <p><span class="badge v-ok">право подтверждено {{ row.verified_at|day }}</span>
   <span class="badge">{{ PROOF_KINDS[row.proof_kind].split(':')[0] if row.proof_kind else 'документ проверен' }}</span>
   <span class="badge">текст сверен с кадастром</span></p>
+{% endif %}
 {% if d.gpzu %}<p class="small"><span class="badge v-ok">ГПЗУ приложен</span>{% if d.gpzu.issued %} от {{ d.gpzu.issued }}{% endif %}{% if d.gpzu.zone_code %}: зона {{ d.gpzu.zone_code }}{% endif %}{% if d.gpzu.vri_main %}; основные ВРИ: {{ d.gpzu.vri_main|join('; ')|truncate(160) }}{% endif %}.</p>{% endif %}
 <div class="grid two">
 <article>

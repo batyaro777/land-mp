@@ -6,7 +6,7 @@
   <p>Все аккаунты системы: роль, контакты, активность, кто кого привёл. Видно только администратору.</p>
 </hgroup>
 <table class="small">
-  <thead><tr><th>№</th><th>Имя / бренд</th><th>Роль</th><th>Email</th><th>Контакт</th><th>Зарегистрирован</th><th>Как вошёл</th><th>Проверок</th><th>Объявлений</th><th>Запросов</th><th>Привёл</th></tr></thead>
+  <thead><tr><th>№</th><th>Имя / бренд</th><th>Роль</th><th>Email</th><th>Контакт</th><th>Зарегистрирован</th><th>Как вошёл</th><th>Проверок</th><th>Объявлений</th><th>Запросов</th><th>Привёл</th><th>Тест</th></tr></thead>
   <tbody>
   {% for u in users %}
   <tr>
@@ -21,9 +21,10 @@
     <td>{{ listings.get(u.id, 0) }}</td>
     <td>{{ requests.get(u.id, 0) }}</td>
     <td>{{ referred.get(u.id, 0) }}</td>
+    <td><form method="post" action="/admin/users/{{ u.id }}/test-mode" class="inline">{% if u.test_mode %}<input type="hidden" name="action" value="off"><button class="outline sm" title="Тестовый режим: публикует объявления без проверки права со статусом «тест». Нажмите, чтобы выключить.">тест ✓</button>{% else %}<input type="hidden" name="action" value="on"><button class="outline secondary sm" title="Включить тестовый режим: объявления без проверки права, статус «тест», на витрине только для админов и тестовых аккаунтов.">выкл</button>{% endif %}</form></td>
   </tr>
   {% endfor %}
   </tbody>
 </table>
-<p class="small muted">Права администратора выдаются только из командной строки сервера: <code>landcheck admin &lt;email&gt;</code> или код приглашения <code>landcheck invite --admin</code>.</p>
+<p class="small muted">Права администратора выдаются только из командной строки сервера: <code>landcheck admin &lt;email&gt;</code> или код приглашения <code>landcheck invite --admin</code>. Тестовый режим — кнопкой в колонке «Тест» или <code>landcheck test-mode &lt;email&gt;</code>: объявления такого аккаунта публикуются без проверки права со статусом «тест» и видны на витрине только администраторам и тестовым аккаунтам.</p>
 {% endblock %}

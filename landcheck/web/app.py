@@ -391,7 +391,7 @@ def logout():
 # --- dashboard & checks -------------------------------------------------------------------
 @router.get("/", response_class=HTMLResponse)
 def dashboard(request: Request, user: UserDep):
-    if user.is_admin:
+    if user.is_admin and user.role == "admin":
         return RedirectResponse("/admin", status_code=303)
     if user.role == "seller":
         return RedirectResponse("/listings", status_code=303)
@@ -1619,8 +1619,8 @@ async def profile_save(
         u.name = name.strip()[:120] or u.name
         u.brand = brand_name.strip()[:120] or None
         u.contact = contact.strip()[:200] or None
-        if role in PUBLIC_ROLES and not u.is_admin:
-            u.role = role  # администратор роль в профиле не меняет: только через CLI
+        if role in PUBLIC_ROLES:
+            u.role = role  # права администратора остаются (is_admin), меняется только режим
         if telegram_chat_id.strip():  # ручной ввод остаётся запасным путём
             u.telegram_chat_id = re.sub(r"[^\d-]", "", telegram_chat_id)[:32] or None
         u.notify_email = bool(notify_email)
@@ -2239,12 +2239,19 @@ def listing_publish(user: UserDep, listing_id: int, action: Annotated[str, Form(
     err = None
     with session() as db:
         row = _own_listing(db, user, listing_id)
+        me = db.get(User, user.id)
+        test_ok = bool(me is not None and me.test_mode) and row.status != "verified"
         if action == "off":
             row.published = False
-        elif row.status != "verified":
+        elif row.status != "verified" and not test_ok:
             err = "not_verified"
         elif _listing_warnings(row.data):
             err = "warnings"
+        elif test_ok:
+            # тестовый аккаунт (Тони, 09.11): публикация без проверки права, статус «тест» —
+            # на витрине видят только администраторы и тестовые аккаунты, рассылки покупателям нет
+            row.status = "test"
+            row.published = True
         else:
             row.published = True
             _notify_buyers_about(db, row)
@@ -2337,6 +2344,7 @@ def _market_card(row, owner: User | None) -> dict[str, Any]:
         "image": (d.get("images") or [None])[0],
         "verified_at": row.verified_at,
         "proof_kind": row.proof_kind,
+        "test": row.status == "test",
         "seller": (owner.brand or owner.name) if owner else None,
         "price_per_sotka": (
             round(d["price_rub"] / d["land_area_sotka"])
@@ -2354,12 +2362,14 @@ def _public_listings(
     price_max: float | None = None,
     area_min: float | None = None,
     area_max: float | None = None,
+    include_test: bool = False,
 ):
     from landcheck.web.db import Listing as ListingRow
 
+    statuses = ("verified", "test") if include_test else ("verified",)
     rows = db.scalars(
         select(ListingRow)
-        .where(ListingRow.status == "verified", ListingRow.published.is_(True))
+        .where(ListingRow.status.in_(statuses), ListingRow.published.is_(True))
         .order_by(ListingRow.verified_at.desc(), ListingRow.id.desc())
         .limit(500)
     ).all()
@@ -2402,6 +2412,7 @@ def market(
     pm = num(price_max)
     if pm is not None and pm < 1000:
         pm *= 1_000_000
+    me = current_user(request)
     with session() as db:
         cards = _public_listings(
             db,
@@ -2410,6 +2421,7 @@ def market(
             price_max=pm,
             area_min=num(area_min),
             area_max=num(area_max),
+            include_test=bool(me is not None and (me.is_admin or me.test_mode)),
         )
     resp = render(
         request,
@@ -2777,6 +2789,34 @@ async def telegram_webhook(request: Request, secret: str):
     return {"ok": True}
 
 
+@router.post("/profile/role")
+def profile_role(user: UserDep, role: Annotated[str, Form()] = ""):
+    """Переключение режима из меню (Тони, 09.11): один аккаунт — любая роль, в том числе у
+    администратора. Домашняя страница и навигация меняются сразу."""
+    allowed = (*PUBLIC_ROLES, "admin") if user.is_admin else PUBLIC_ROLES
+    if role not in allowed:
+        raise HTTPException(400)
+    with session() as db:
+        u = db.get(User, user.id)
+        assert u is not None
+        u.role = role
+        db.commit()
+    return RedirectResponse("/", status_code=303)
+
+
+@router.post("/admin/users/{user_id}/test-mode")
+def admin_user_test_mode(admin: AdminDep, user_id: int, action: Annotated[str, Form()] = "on"):
+    """Тестовый режим аккаунта: объявления публикуются без проверки права со статусом «тест»."""
+    from landcheck.web.db import set_test_mode
+
+    with session() as db:
+        u = db.get(User, user_id)
+        if u is None:
+            raise HTTPException(404)
+        set_test_mode(db, u, on=action != "off")
+    return RedirectResponse("/admin/users", status_code=303)
+
+
 @router.post("/profile/api-key")
 def profile_api_key(user: UserDep):
     """Выпустить (или перевыпустить) ключ API; старый перестаёт работать."""
@@ -3009,7 +3049,8 @@ def demand_offer(
         if req is None or req.user_id == user.id:
             raise HTTPException(404)
         lst = db.get(ListingRow, listing_id)
-        if lst is None or lst.user_id != user.id or not lst.is_public:
+        if lst is None or lst.user_id != user.id or not lst.is_public or lst.is_test:
+            # тестовое объявление настоящим покупателям не предлагается
             raise HTTPException(404, "Предлагать можно только своё опубликованное объявление")
         demand.create_offer(db, req, lst, user, note, _market_card(lst, user))
         db.commit()

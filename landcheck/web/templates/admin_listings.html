@@ -15,7 +15,7 @@
 {% for r in rows %}
 {% set o = owners.get(r.user_id) %}
 <article>
-  <h4><code>{{ r.cad_num }}</code> — {{ r.data.title or 'без заголовка' }} <span class="badge {{ {'draft':'','pending':'v-check','verified':'v-ok','rejected':'v-stop'}[r.status] }}">{{ r.status_label }}</span></h4>
+  <h4><code>{{ r.cad_num }}</code> — {{ r.data.title or 'без заголовка' }} <span class="badge {{ {'draft':'','pending':'v-check','verified':'v-ok','rejected':'v-stop','test':'v-check'}.get(r.status, '') }}">{{ r.status_label }}</span></h4>
   <p class="small">Размещает: {{ o.name if o else r.user_id }}{% if o and o.email %} · {{ o.email }}{% endif %}{% if o and o.contact %} · {{ o.contact }}{% endif %} · роль: {{ o.role_label if o else '—' }}
     · {{ PROOF_KINDS.get(r.proof_kind, '—') }}{% if r.submitted_at %} · отправлено {{ r.submitted_at|dt }}{% endif %}</p>
   <p class="small">{{ r.data.address or '' }}{% if r.data.price_rub %} · {{ r.data.price_rub|money }}{% endif %}{% if r.data.land_area_sotka %} · {{ r.data.land_area_sotka }} сот.{% endif %}

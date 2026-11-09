@@ -55,7 +55,7 @@ def test_demand_offer_flow(client):  # noqa: F811
     _login(client, "s1@example.com")
     page = _norm(client.get("/demand").text)
     assert "Жилой дом" in page and "до 3 000 000" in page and "синтетический" in page
-    assert "buyer" not in page and "подходит 1 из моих" in page and "Газ" in page
+    assert "buyer@" not in page and "подходит 1 из моих" in page and "Газ" in page
     page = client.get(url).text
     assert "Подходит под 1 запрос" in page and "Предложить" in page
     # фильтр по цели: сельхоз — пусто, ИЖС — есть
@@ -174,7 +174,7 @@ def test_public_demand_page_seller_mailing_and_listing_counter(client):  # noqa:
         )
     client.post("/logout")
     page = _norm(client.get("/spros?purpose=izhs").text)
-    assert "Жилой дом" in page and "до 3 000 000" in page and "buyer" not in page
+    assert "Жилой дом" in page and "до 3 000 000" in page and "buyer@" not in page
     assert "Активных запросов нет" in client.get("/spros?region=Крым").text
     # у продавца в списке объявлений бейдж спроса
     _login(client, "s1@example.com")

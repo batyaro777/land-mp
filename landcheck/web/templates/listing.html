@@ -48,7 +48,7 @@
 {% endmacro %}
 <article class="verify">
   <h4>Подтверждение права
-    <span class="badge {{ {'draft':'','pending':'v-check','verified':'v-ok','rejected':'v-stop'}[row.status] }}">{{ row.status_label }}</span>
+    <span class="badge {{ {'draft':'','pending':'v-check','verified':'v-ok','rejected':'v-stop','test':'v-check'}.get(row.status, '') }}">{{ row.status_label }}</span>
   </h4>
   {% if row.status == 'verified' %}
     <p>Право подтверждено {{ row.verified_at|dt }} ({{ PROOF_KINDS[row.proof_kind] if row.proof_kind else 'документ' }}). Файлы подтверждения удалены после проверки.</p>
@@ -62,6 +62,12 @@
       <form method="post" action="/listing/{{ row.id }}/publish" class="inline"><input type="hidden" name="action" value="on"><button class="sm">Опубликовать в базе</button></form>
       <span class="small muted">Объявление появится на витрине <a href="/market" target="_blank">/market</a> и по публичной ссылке.</span>
     {% endif %}
+  {% elif row.status == 'test' %}
+    <p><span class="badge v-check">тест: без проверки права</span> Опубликовано в тестовом режиме: на витрине его видят только администраторы и тестовые аккаунты, покупателям не рассылается.
+      Публичная страница: <a href="/l/{{ row.id }}" target="_blank">{{ public_url }}</a></p>
+    <form method="post" action="/listing/{{ row.id }}/publish" class="inline"><input type="hidden" name="action" value="off"><button class="outline secondary sm">Снять с публикации</button></form>
+    <p class="small muted">Для настоящей публикации подтвердите право — электронная выписка ЕГРН (PDF с Госуслуг или XML с .sig), сформированная после {{ row.created_at|dt }}.</p>
+    {{ proof_form("Отправить на проверку") }}
   {% elif row.status == 'pending' %}
     <p>Отправлено на проверку {{ row.submitted_at|dt }}: {{ PROOF_KINDS[row.proof_kind] if row.proof_kind else '' }}. Файлы ({{ proofs|length }}): {% for f in proofs %}<a href="/listing/{{ row.id }}/proof/{{ f }}" target="_blank">{{ f }}</a>{% if not loop.last %}, {% endif %}{% endfor %}. Их видит только модератор, после решения они удаляются.</p>
     {% set pc = d.proof_check or {} %}
@@ -77,6 +83,12 @@
     {% if row.status == 'rejected' %}<p class="err">Отклонено{% if row.moderation_note %}: {{ row.moderation_note }}{% endif %}. Загрузите документы заново.</p>{% endif %}
     <p class="small muted">Без подтверждения объявление не публикуется в базе: так в ней нет «фонарей». Принимаем только электронную выписку ЕГРН: PDF с Госуслуг (собственнику бесплатно, 1 минута, раздел «Недвижимость» → «Онлайн-выписка») или XML с файлом подписи .sig из Росреестра; архив из личного кабинета тоже подходит. Фото и сканы не принимаются: их нельзя проверить без ошибок. Закажите выписку сейчас: принимаем сформированные после {{ row.created_at|dt }}. Подпись Росреестра, номер, площадь, правообладатель и дата сверяются автоматически. ФИО из документа в базе не сохраняются, файлы удаляются после проверки.</p>
     {{ proof_form("Отправить на проверку") }}
+  {% endif %}
+  {% if user.test_mode and row.status in ('draft', 'pending', 'rejected') and not row.published %}
+    <p class="small"><span class="badge v-check">тестовый аккаунт</span>
+      {% if d.warnings %}Тестовая публикация откроется, когда в тексте не останется противоречий с кадастром.{% else %}
+      <form method="post" action="/listing/{{ row.id }}/publish" class="inline"><input type="hidden" name="action" value="on"><button class="outline sm">Опубликовать как тест (без проверки права)</button></form>
+      Объявление получит статус «тест»: видно только администраторам и тестовым аккаунтам.{% endif %}</p>
   {% endif %}
   {% if d.skipped_proofs %}<p class="small err">Не приняты файлы: {{ d.skipped_proofs|join(', ') }}</p>{% endif %}
   {% if d.proof_check and row.status != 'draft' %}{% include "_proof_check.html" %}{% endif %}

@@ -44,7 +44,11 @@ def test_admin_sees_overview_and_users(client):  # noqa: F811
     nav = client.get("/profile").text
     assert 'href="/admin"' in nav and 'href="/admin/users"' in nav
     assert "· администратор" in nav  # grant_admin выставил и роль
-    client.post("/profile", data={"name": "boss", "role": "buyer"})  # роль админа не меняется
+    # Тони, 09.11: один аккаунт переключает любую роль, у администратора права остаются
+    client.post("/profile", data={"name": "boss", "role": "buyer"})
+    page = client.get("/profile").text
+    assert "· покупатель" in page and 'href="/admin/users"' in page
+    client.post("/profile/role", data={"role": "admin"})
     assert "· администратор" in client.get("/profile").text
 
 

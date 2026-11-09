@@ -48,9 +48,13 @@
       {% endif %}
       <li><a href="/notifications" title="Уведомления">🔔{% if unread %} <span class="badge v-check">{{ unread }}</span>{% endif %}</a></li>
       <li><details class="dropdown">
-        <summary>{{ user.brand or user.name }} <small class="muted">· {{ user.role_label|lower }}</small></summary>
+        <summary>{{ user.brand or user.name }} <small class="muted">· {{ user.role_label|lower }}{% if user.test_mode %} · тест{% endif %}</small></summary>
         <ul dir="rtl">
           <li><a href="/profile">Профиль и логотип</a></li>
+          {% set switch_roles = dict(PUBLIC_ROLES_MAP, admin=ROLES['admin']) if user.is_admin else PUBLIC_ROLES_MAP %}
+          {% for key, label in switch_roles.items() %}
+          <li>{% if user.role == key %}<span class="muted">● {{ label }}</span>{% else %}<form method="post" action="/profile/role" class="inline"><input type="hidden" name="role" value="{{ key }}"><button class="outline secondary sm">→ {{ label }}</button></form>{% endif %}</li>
+          {% endfor %}
           <li><a href="/partner">Партнёрская ссылка</a></li>
           <li><a href="/connections">Запросы контакта</a></li>
           <li><a href="/notifications">Уведомления</a></li>

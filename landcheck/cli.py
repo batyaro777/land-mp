@@ -538,5 +538,32 @@ def admin(
         print(f"{user.id} {user.name} ({user.email or user.invite_code}): admin={user.is_admin}")
 
 
+@app.command("test-mode")
+def test_mode(
+    who: Annotated[str, typer.Argument(help="email или id пользователя")],
+    off: Annotated[bool, typer.Option("--off", help="Выключить тестовый режим")] = False,
+):
+    """Тестовый аккаунт: публикует объявления без проверки права со статусом «тест» (видны
+    на витрине только администраторам и тестовым аккаунтам, покупателям не рассылаются)."""
+    from sqlalchemy import select
+
+    from landcheck.web.config import settings
+    from landcheck.web.db import User, init_db, normalize_email, session, set_test_mode
+
+    init_db(settings.db_path)
+    with session() as db:
+        user = (
+            db.get(User, int(who))
+            if who.isdigit()
+            else db.scalar(select(User).where(User.email == normalize_email(who)))
+        )
+        if user is None:
+            print("пользователь не найден")
+            raise typer.Exit(code=1)
+        set_test_mode(db, user, on=not off)
+        who_s = user.email or user.invite_code
+        print(f"{user.id} {user.name} ({who_s}): test_mode={user.test_mode}")
+
+
 if __name__ == "__main__":  # pragma: no cover
     sys.exit(app())
