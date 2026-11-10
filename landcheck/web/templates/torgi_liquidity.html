@@ -30,7 +30,7 @@
 {% else %}
 {% include "_torgi_sync.html" %}
 {% if total and total.closed %}
-<p class="small">По выборке: завершено {{ total.closed }}, с борьбой {{ total.sold }}, единственному участнику {{ total.single }}, без заявок {{ total.none }}{% if total.failed_unknown %}, не состоялись без прочитанной карточки {{ total.failed_unknown }}{% endif %}; нашли хозяина {{ (total.sell_through * 100)|round|int if total.sell_through is not none else '—' }} %; рост цены к старту ×{{ total.growth_median or '—' }}; индекс {{ total.index if total.index is not none else '—' }}.</p>
+<p class="small">По выборке: завершено {{ total.closed }}, с борьбой {{ total.sold }}, единственному участнику {{ total.single }}, не ушли {{ total.none }}{% if total.failed_unknown %}, не состоялись без прочитанной карточки {{ total.failed_unknown }}{% endif %}; нашли хозяина {{ (total.sell_through * 100)|round|int if total.sell_through is not none else '—' }} %; рост цены к старту: аренда {% if total.rent.growth_median %}×{{ total.rent.growth_median }} ({{ total.rent.growth_n }} лот.){% else %}—{% endif %}, продажа {% if total.sale.growth_median %}×{{ total.sale.growth_median }} ({{ total.sale.growth_n }} лот.){% else %}—{% endif %}; индекс {{ total.index if total.index is not none else '—' }}.</p>
 {% endif %}
 {% if rows %}
 <div class="table-wrap">
@@ -40,10 +40,10 @@
     <th class="num" title="Индекс 0–100: доля участков, нашедших хозяина (60), заявок на лот (20), рост цены к старту (20)">Индекс</th>
     <th class="num">Завершено</th>
     <th class="num" title="Состоялись: была борьба, цена выросла">С борьбой</th>
-    <th class="num" title="Одна заявка: договор с единственным участником по начальной цене (ст. 39.12 ЗК)">Одному</th>
-    <th class="num">Без заявок</th>
+    <th class="num" title="Торги не состоялись, но участок ушёл: договор с единственным участником по начальной цене (ст. 39.12 ЗК) — у лота есть цена договора">Одному</th>
+    <th class="num" title="Не состоялись, и участок не ушёл: заявок не было либо договор не заключили (в карточке лота нет ни цены договора, ни единственной заявки)">Не ушли</th>
     <th class="num" title="Доля участков, которые нашли хозяина">Продано</th>
-    <th class="num" title="Во сколько раз цена победителя выше начальной, медиана">Рост</th>
+    <th class="num" title="Во сколько раз цена победителя выше начальной, медиана; аренда и продажа отдельно — годовую плату на аукционах аренды разгоняют сильнее">Рост</th>
     <th class="num">Заявок на лот</th>
     <th class="num" title="Медиана итоговой цены состоявшихся торгов продажи">Продажа, ₽/сот.</th>
     <th class="num" title="Медиана итоговой годовой платы">Аренда, ₽/сот. в год</th>
@@ -58,7 +58,7 @@
     <td class="num">{{ r.closed }}</td><td class="num">{{ r.sold }}</td><td class="num">{{ r.single }}</td>
     <td class="num">{{ r.none }}{% if r.failed_unknown %}<div class="small muted" title="Не состоялись, карточка ещё не прочитана: число заявок неизвестно">+{{ r.failed_unknown }} ?</div>{% endif %}</td>
     <td class="num">{% if r.sell_through is not none %}{{ (r.sell_through * 100)|round|int }} %{% else %}—{% endif %}</td>
-    <td class="num">{% if r.growth_median %}×{{ r.growth_median }}{% else %}—{% endif %}</td>
+    <td class="num small">{% if r.rent.growth_median %}аренда ×{{ r.rent.growth_median }}{% endif %}{% if r.rent.growth_median and r.sale.growth_median %}<br>{% endif %}{% if r.sale.growth_median %}продажа ×{{ r.sale.growth_median }}{% endif %}{% if not r.rent.growth_median and not r.sale.growth_median %}—{% endif %}</td>
     <td class="num">{{ r.applied_median if r.applied_median is not none else '—' }}</td>
     <td class="num">{% if r.sale.median_m2 %}{{ (r.sale.median_m2 * sotka)|money }}<div class="small muted">{{ r.sale.n }} лот.</div>{% else %}—{% endif %}</td>
     <td class="num">{% if r.rent.median_m2 %}{{ (r.rent.median_m2 * sotka)|money }}<div class="small muted">{{ r.rent.n }} лот.</div>{% else %}—{% endif %}</td>

@@ -250,7 +250,6 @@ def torgi_note(lot: dict[str, Any]) -> dict[str, Any]:
     """Что значит для «свободности» последний лот участка в базе торгов."""
     status, kind = lot.get("status"), lot.get("kind")
     date = lot.get("auction_date") or lot.get("bidd_end") or lot.get("published")
-    applied = lot.get("admitted") if lot.get("admitted") is not None else lot.get("applied")
     if torgi_scan.is_notice(lot):
         # Извещение о предоставлении (ст. 39.18 ЗК): участок уже просит заявитель.
         if status in torgi_scan.ACTIVE:
@@ -270,16 +269,19 @@ def torgi_note(lot: dict[str, Any]) -> dict[str, Any]:
             "kind": kind,
             "final": status not in torgi_scan.ACTIVE,
         }
+    outcome = torgi_scan._outcome(lot)
     if status in torgi_scan.ACTIVE:
         text, busy = "идут торги", True
     elif status == "SUCCEED":
         text = "сдан в аренду с торгов" if kind == "rent" else "продан с торгов"
         busy = True
-    elif status == "FAILED" and applied == 1:
+    elif outcome == "single":
         text = "торги с одной заявкой: договор с единственным участником — скорее всего, занят"
         busy = True
+    elif outcome == "none":
+        text, busy = "выставлялся на торги и не ушёл", False
     elif status == "FAILED":
-        text, busy = "выставлялся на торги, заявок не было", False
+        text, busy = "торги не состоялись, итог не прочитан", False
     else:
         text, busy = "торги отменены", False
     return {

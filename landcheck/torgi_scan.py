@@ -299,10 +299,15 @@ def _rub_m2(lot: dict[str, Any], price_key: str = "price_fin") -> float | None:
 
 
 def _outcome(lot: dict[str, Any]) -> str:
-    """Чем кончились торги для ликвидности: `sold` — была борьба; `single` — одна заявка,
-    договор с единственным участником по старту (ст. 39.12 ЗК): участок нашёл хозяина;
-    `none` — заявок не было; `failed` — не состоялись, число заявок неизвестно (карточка
-    не прочитана); `active`, `canceled`; `notice` — извещение о предоставлении, не торги."""
+    """Чем кончились торги для ликвидности: `sold` — была борьба; `single` — договор с
+    единственным участником по старту (ст. 39.12 ЗК): участок нашёл хозяина; `none` — участок
+    не ушёл; `failed` — не состоялись, итог неизвестен (карточка не прочитана); `active`,
+    `canceled`; `notice` — извещение о предоставлении, не торги.
+
+    Как узнаём итог не состоявшихся (прод, Карелия, 10.11.2026: из 222 таких лотов протокол с
+    заявками есть у 20, а цена договора — у 88): есть цена договора — участок ушёл единственному
+    участнику; карточка прочитана, а в ней ни цены договора, ни единственной заявки — не ушёл
+    (заявок не было либо договор не заключили)."""
     if is_notice(lot):
         return "notice"
     status = lot.get("status")
@@ -310,9 +315,9 @@ def _outcome(lot: dict[str, Any]) -> str:
         return "sold"
     if status == "FAILED":
         applied = lot.get("admitted") if lot.get("admitted") is not None else lot.get("applied")
-        if applied == 1:
+        if applied == 1 or lot.get("price_fin"):
             return "single"
-        if applied == 0:
+        if applied == 0 or lot.get("card"):
             return "none"
         return "failed"
     if status in ACTIVE:
@@ -364,7 +369,19 @@ def stats_of(lots: list[dict[str, Any]]) -> dict[str, Any]:
             if lot.get("kind") == kind and (v := _rub_m2(lot))
         ]
         per_m2 = [v for v, _, _ in samples]
+        # Рост цены и доля торгов с борьбой — отдельно по сделке: годовую плату на аукционах
+        # аренды разгоняют в разы (Карелия, 10.11.2026: медиана ×6), на продаже — нет.
+        k_sold = [lot for lot in sold if lot.get("kind") == kind]
+        k_growth = [
+            lot["price_fin"] / lot["price_start"]
+            for lot in k_sold
+            if lot.get("price_fin") and lot.get("price_start")
+        ]
         out[kind] = {
+            "closed": sum(1 for lot in sold + single + none + failed if lot.get("kind") == kind),
+            "sold": len(k_sold),
+            "growth_n": len(k_growth),
+            "growth_median": _median(k_growth),
             "n": len(per_m2),
             "median_m2": _median(per_m2),
             "p25_m2": torgi._quantile(per_m2, 0.25),
@@ -413,10 +430,10 @@ def liquidity(
 
 
 def index_by(lots: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """Сводки по району и кварталу, а внутри района — по группе назначения. Ключи:
-    `40:13`, `40:13:120101`, `40:13|housing`. Для оценки лота берём самую узкую выборку,
-    в которой хватает данных."""
-    buckets: dict[str, list[dict[str, Any]]] = {}
+    """Сводки по району и кварталу, а внутри района — по группе назначения, плюс весь
+    регион. Ключи: `40:13`, `40:13:120101`, `40:13|housing`, `*`. Для оценки лота берём самую
+    узкую выборку, в которой хватает данных."""
+    buckets: dict[str, list[dict[str, Any]]] = {REGION_KEY: list(lots)}
     for lot in lots:
         d, q, g = lot.get("district"), lot.get("quarter"), lot.get("vri_group")
         if d:
@@ -426,6 +443,35 @@ def index_by(lots: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         if q:
             buckets.setdefault(q, []).append(lot)
     return {key: stats_of(items) for key, items in buckets.items()}
+
+
+REGION_KEY = "*"
+
+
+def growth_for(
+    lot: dict[str, Any], stats: dict[str, dict[str, Any]]
+) -> tuple[float | None, float | None, str | None]:
+    """Типичный рост цены к старту и доля торгов с борьбой для лота: (рост, доля, где взяли).
+    Только торги той же сделки (продажа или аренда); квартал → район → регион, не меньше
+    `MIN_SAMPLE` торгов с ценой. Меньше — роста не знаем: один лот с ростом в 25 раз не
+    повод ждать такого же."""
+    kind = lot.get("kind") or "sale"
+    for where, key in (
+        ("квартал", lot.get("quarter")),
+        ("район", lot.get("district")),
+        ("регион", REGION_KEY),
+    ):
+        ks = ((stats.get(key or "") or {}).get(kind)) or {}
+        if (ks.get("growth_n") or 0) >= MIN_SAMPLE and ks.get("closed"):
+            return ks["growth_median"], ks["sold"] / ks["closed"], where
+    return None, None, None
+
+
+def times_ru(n: int) -> str:
+    """«1 раз», «2 раза», «5 раз»."""
+    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        return f"{n} раза"
+    return f"{n} раз"
 
 
 def repeats_of(lots: list[dict[str, Any]]) -> dict[str, int]:
@@ -667,13 +713,10 @@ def score_lot(
     stop: list[str] = []
     ask: list[str] = []
 
-    growth = liq.get("growth_median") or d_stats.get("growth_median")
     sell_through = liq.get("sell_through")
     # Ожидаемая цена победителя: старт × рост, взвешенный долей торгов с борьбой. Где лоты
     # чаще уходят единственному участнику по старту, ждать кратного роста не из чего.
-    fought = None
-    if liq.get("closed"):
-        fought = liq["sold"] / liq["closed"]
+    growth, fought, growth_where = growth_for(lot, stats)
     expected = start
     if start and growth and growth > 1 and fought:
         expected = round(start * (1 + (growth - 1) * min(fought * 1.5, 1.0)))
@@ -739,14 +782,14 @@ def score_lot(
     elif idx >= p.min_liquidity:
         minus.append(f"ликвидность района средняя: индекс {idx}")
     else:
-        minus.append(f"район неликвидный: индекс {idx}, большинство торгов без заявок")
+        minus.append(f"район неликвидный: индекс {idx}, большинство участков с торгов не уходит")
     if mk and mk.get("liquid") == "illiquid":
         minus.append("в слое рынка локация помечена как неликвид")
     elif mk and mk.get("liquid") == "liquid":
         plus.append("в слое рынка локация помечена как ликвид")
     n_rep = (repeats or {}).get(lot.get("cad_num") or "", 0)
     if n_rep:
-        minus.append(f"участок уже выставляли без результата: {n_rep} раз")
+        minus.append(f"участок уже выставляли без результата: {times_ru(n_rep)}")
     if lot.get("has_gpzu"):
         plus.append("к лоту приложен ГПЗУ — параметры застройки известны")
     if lot.get("appeals"):
@@ -851,6 +894,7 @@ def score_lot(
             "label": liq.get("label"),
             "sell_through": sell_through,
             "growth": growth,
+            "growth_where": growth_where,
             "applied": liq.get("applied_median"),
             "closed": liq.get("closed"),
         },

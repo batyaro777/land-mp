@@ -400,7 +400,9 @@ class TorgiLot(Base):
     ).split()
 
     def to_dict(self) -> dict[str, Any]:
-        return {f: getattr(self, f) for f in self.FIELDS}
+        # `card` — карточка лота прочитана: для не состоявшихся торгов это отличает «участок
+        # не ушёл» от «ещё не знаем» (в базу поле не пишется, см. `torgi_sync.upsert`)
+        return {**{f: getattr(self, f) for f in self.FIELDS}, "card": self.card_at is not None}
 
 
 class TorgiSync(Base):

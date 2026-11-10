@@ -489,3 +489,62 @@ def test_rent_lot_priced_as_share_of_ownership_price_when_ratio_given():
     # только кадастр: нижний ориентир, вердикт не выше «на грани»
     low = ts.score_lot(rent | {"cad_cost": 300_000}, {}, p, today=TODAY)
     assert low["sale"] == {"min": 150_000, "mid": None, "max": None} and low["verdict"] == "edge"
+
+
+def test_failed_auction_outcome_by_contract_price_and_card():
+    """Не состоявшиеся торги (прод, Карелия: протокол есть у 20 лотов из 222, цена договора —
+    у 88): цена договора значит «ушёл единственному участнику»; карточка прочитана и пуста —
+    «не ушёл»; карточка не прочитана — «не знаем»."""
+    base = _lot("F1", "40:13:120103:1", fin=None, status="FAILED")
+    assert ts._outcome(base) == "failed"
+    assert ts._outcome(base | {"card": True}) == "none"
+    assert ts._outcome(base | {"price_fin": 100_000.0}) == "single"
+    assert ts._outcome(base | {"card": True, "applied": 2, "admitted": 1}) == "single"
+    assert ts._outcome(base | {"applied": 3, "admitted": 0}) == "none"
+    lots = _district(sold=4, single=0, none=0) + [
+        base | {"id": f"C{i}", "price_fin": 100_000.0, "card": True} for i in range(3)
+    ]
+    lots += [base | {"id": f"E{i}", "card": True} for i in range(3)]
+    s = ts.stats_of(lots)
+    assert (s["closed"], s["sold"], s["single"], s["none"], s["failed_unknown"]) == (10, 4, 3, 3, 0)
+    assert s["sell_through"] == 0.7
+    # в повторы идут только лоты, которые не ушли
+    assert ts.repeats_of(lots) == {"40:13:120103:1": 3}
+
+
+def test_expected_price_uses_growth_of_same_deal_kind_with_enough_lots():
+    """Годовую плату на аукционах аренды разгоняют в разы, продажу — нет: рост берём только по
+    той же сделке; меньше трёх торгов с ценой в квартале и районе — по региону; нет и там —
+    роста не знаем и ждём старт."""
+    rent = [
+        _lot(f"R{i}", f"40:13:120101:{i + 1}", start=10_000, fin=80_000, kind="rent")
+        for i in range(6)
+    ]
+    sale = [_lot(f"S{i}", f"40:13:120102:{i + 1}", start=100_000, fin=120_000) for i in range(3)]
+    stats = ts.index_by(rent + sale)
+    assert stats["40:13"]["rent"]["growth_median"] == 8.0 and stats["40:13"]["rent"]["sold"] == 6
+    assert stats["40:13"]["sale"]["growth_median"] == 1.2 and stats["*"]["sale"]["growth_n"] == 3
+    live_sale = _lot("A1", "40:13:120105:1", start=200_000, fin=None, status="PUBLISHED")
+    live_rent = _lot(
+        "A2", "40:13:120105:2", start=20_000, fin=None, kind="rent", status="PUBLISHED"
+    )
+    assert ts.growth_for(live_sale, stats) == (1.2, 1.0, "район")
+    assert ts.growth_for(live_rent, stats) == (8.0, 1.0, "район")
+    s = ts.score_lot(live_sale, stats, today=TODAY)
+    assert s["expected_price"] == 240_000 and s["liquidity"]["growth_where"] == "район"
+    assert ts.score_lot(live_rent, stats, today=TODAY)["expected_price"] == 160_000
+    # другой район: своих торгов нет — берём регион; продаж в регионе меньше трёх — рост не знаем
+    far = live_sale | {"district": "40:99", "quarter": "40:99:000001"}
+    assert ts.growth_for(far, stats) == (1.2, 1.0, "регион")
+    thin = ts.index_by(rent + sale[:2])
+    assert ts.growth_for(live_sale, thin) == (None, None, None)
+    assert ts.score_lot(live_sale, thin, today=TODAY)["expected_price"] == 200_000
+    assert [ts.times_ru(n) for n in (1, 2, 4, 5, 11, 12, 22)] == [
+        "1 раз",
+        "2 раза",
+        "4 раза",
+        "5 раз",
+        "11 раз",
+        "12 раз",
+        "22 раза",
+    ]

@@ -57,7 +57,7 @@
     {% endfor %}
   </table>
   <p class="small">Источник цены: <strong>{{ s.market.source_label }}</strong>, надёжность {{ s.confidence }}{% if s.market.note %} ({{ s.market.note }}){% endif %}.
-    Ожидаемая цена победителя — {{ s.expected_price|money }}{% if s.liquidity.growth %} (в районе цена растёт к старту в {{ s.liquidity.growth }} раза){% endif %}.
+    Ожидаемая цена победителя — {{ s.expected_price|money }}{% if s.liquidity.growth %} ({{ s.liquidity.growth_where }}: на таких торгах — {{ kinds.get(lot.kind, lot.kind) }} — цена растёт к старту в {{ s.liquidity.growth }} раза){% elif lot.price_start %} (сколько прибавляют на таких торгах, данных мало — взят старт){% endif %}.
     {% if s.roi_start is not none %}При входе по старту: ROI {{ (s.roi_start * 100)|round|int }} %{% if s.annual_start is not none %}, {{ (s.annual_start * 100)|round|int }} % годовых при сроке до продажи {{ s.hold_months }} мес.{% endif %}{% endif %}
     {% if s.roi_expected is not none %} При входе по ожидаемой цене: ROI {{ (s.roi_expected * 100)|round|int }} %.{% endif %}
     {% if s.safe is not none %} Безопасный ориентир — {{ s.safe|money }} (минимум из предельных).{% endif %}</p>
@@ -120,7 +120,7 @@
     <tr><td>Завершено торгов за год</td><td class="num">{{ qs_.closed or 0 }}</td><td class="num">{{ ds.closed or 0 }}</td></tr>
     <tr><td>Состоялись с борьбой</td><td class="num">{{ qs_.sold or 0 }}</td><td class="num">{{ ds.sold or 0 }}</td></tr>
     <tr><td>Ушли единственному участнику</td><td class="num">{{ qs_.single or 0 }}</td><td class="num">{{ ds.single or 0 }}</td></tr>
-    <tr><td>Без заявок</td><td class="num">{{ qs_.none or 0 }}</td><td class="num">{{ ds.none or 0 }}</td></tr>
+    <tr><td title="Заявок не было либо договор не заключили">Не ушли</td><td class="num">{{ qs_.none or 0 }}</td><td class="num">{{ ds.none or 0 }}</td></tr>
     <tr><td>Рост цены к старту, медиана</td><td class="num">{% if qs_.growth_median %}×{{ qs_.growth_median }}{% else %}—{% endif %}</td><td class="num">{% if ds.growth_median %}×{{ ds.growth_median }}{% else %}—{% endif %}</td></tr>
     <tr><td>Заявок на лот, медиана</td><td class="num">{{ qs_.applied_median if qs_.applied_median is not none else '—' }}</td><td class="num">{{ ds.applied_median if ds.applied_median is not none else '—' }}</td></tr>
     <tr><td>Идёт сейчас</td><td class="num">{{ qs_.active or 0 }}</td><td class="num">{{ ds.active or 0 }}</td></tr>

@@ -207,9 +207,15 @@ def test_filter_items_and_torgi_note():
     assert freeland.torgi_note({"status": "CANCELED", "form": "IPS"})["busy"] is False
     single = freeland.torgi_note({"status": "FAILED", "applied": 1})
     assert single["busy"] is True and "единственным участником" in single["text"]
+    # протокола нет, но у лота есть цена договора — участок ушёл единственному участнику
+    deal = freeland.torgi_note({"status": "FAILED", "price_fin": 38_000.0, "card": True})
+    assert deal["busy"] is True and "единственным участником" in deal["text"]
+    unread = freeland.torgi_note({"status": "FAILED"})
+    assert unread["busy"] is False and unread["text"] == "торги не состоялись, итог не прочитан"
+    assert freeland.torgi_note({"status": "FAILED", "card": True})["text"].endswith("не ушёл")
     empty = freeland.torgi_note({"status": "FAILED", "applied": 0})
     assert empty == {
-        "text": "выставлялся на торги, заявок не было",
+        "text": "выставлялся на торги и не ушёл",
         "busy": False,
         "date": None,
         "lot_id": None,

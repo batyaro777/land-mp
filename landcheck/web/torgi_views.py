@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import re
 import statistics
 import tempfile
 from collections import Counter
@@ -186,6 +187,12 @@ def _deal_days(d: TorgiDeal) -> int | None:
     return (end - start).days if start and end and end >= start else None
 
 
+# «Респ Карелия Питкярантский район» → «Питкярантский район»: регион в подписи района лишний
+_REGION_PREFIX = re.compile(
+    r"^(?:респ(?:ублика)?\.?\s+\S+|\S+\s+(?:обл(?:асть)?|край)\.?)\s+(?=\S)", re.IGNORECASE
+)
+
+
 def district_names(lots: list[dict[str, Any]]) -> dict[str, str]:
     """Кадастровый район → как его называют в адресах лотов (самое частое название района)."""
     from landcheck.region import district_of, locality_from_address
@@ -197,7 +204,7 @@ def district_names(lots: list[dict[str, Any]]) -> dict[str, str]:
         name = district_of(loc) if loc else None
         if d and name:
             votes.setdefault(d, Counter())[name] += 1
-    return {d: c.most_common(1)[0][0] for d, c in votes.items()}
+    return {d: _REGION_PREFIX.sub("", c.most_common(1)[0][0]) for d, c in votes.items()}
 
 
 def _scan(region: str, q) -> tuple[dict[str, Any], torgi_scan.ScanParams, list[dict[str, Any]]]:
