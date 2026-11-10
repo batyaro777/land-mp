@@ -295,6 +295,8 @@ def test_scan_page_lot_page_and_exports(client):  # noqa: F811
     lot = client.get("/tools/torgi-lot/ACT_0?region=40&roi=40").text
     assert "Почему «на грани»" in lot and "Похожие завершённые торги рядом" in lot
     assert "40:13:120102:1" in lot and "×1.5" in lot  # сопоставимые из района
+    # рост в блоке ликвидности — по той же сделке, что и в расчёте ожидаемой цены
+    assert "Рост цены к старту, продажа, медиана" in lot and "15 лот." in lot
     assert "Кадастровая стоимость" in lot and "старт — 40 % от неё" in lot
     assert "/tools/torgi-calc?" in lot and "smid=150000" in lot and "roi=40" in lot
     x = client.get("/tools/torgi-scan/export.xlsx?region=40&roi=40")

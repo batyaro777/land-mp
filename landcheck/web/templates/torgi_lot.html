@@ -121,7 +121,8 @@
     <tr><td>Состоялись с борьбой</td><td class="num">{{ qs_.sold or 0 }}</td><td class="num">{{ ds.sold or 0 }}</td></tr>
     <tr><td>Ушли единственному участнику</td><td class="num">{{ qs_.single or 0 }}</td><td class="num">{{ ds.single or 0 }}</td></tr>
     <tr><td title="Заявок не было либо договор не заключили">Не ушли</td><td class="num">{{ qs_.none or 0 }}</td><td class="num">{{ ds.none or 0 }}</td></tr>
-    <tr><td>Рост цены к старту, медиана</td><td class="num">{% if qs_.growth_median %}×{{ qs_.growth_median }}{% else %}—{% endif %}</td><td class="num">{% if ds.growth_median %}×{{ ds.growth_median }}{% else %}—{% endif %}</td></tr>
+    {% set qk = (qs_.get(lot.kind) or {}) %}{% set dk = (ds.get(lot.kind) or {}) %}
+    <tr><td title="Только торги той же сделки: годовую плату на аукционах аренды разгоняют сильнее, чем цену продажи">Рост цены к старту, {{ kinds.get(lot.kind, lot.kind) }}, медиана</td><td class="num">{% if qk.growth_median %}×{{ qk.growth_median }} <span class="muted small">{{ qk.growth_n }} лот.</span>{% else %}—{% endif %}</td><td class="num">{% if dk.growth_median %}×{{ dk.growth_median }} <span class="muted small">{{ dk.growth_n }} лот.</span>{% else %}—{% endif %}</td></tr>
     <tr><td>Заявок на лот, медиана</td><td class="num">{{ qs_.applied_median if qs_.applied_median is not none else '—' }}</td><td class="num">{{ ds.applied_median if ds.applied_median is not none else '—' }}</td></tr>
     <tr><td>Идёт сейчас</td><td class="num">{{ qs_.active or 0 }}</td><td class="num">{{ ds.active or 0 }}</td></tr>
   </table>
