@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Участки с подтверждённым правом — {{ brand }}{% endblock %}
+{% block head %}{% include "_leaflet.html" %}{% endblock %}
 {% block content %}
 <hgroup>
   <h2>Участки с подтверждённым правом</h2>
@@ -21,6 +22,12 @@
 <p class="muted small">Найдено: {{ cards|length }}.{% if not user %} Проверить любой участок под свою цель можно <a href="/login?tab=register">после регистрации</a>.{% endif %}</p>
 {% if not cards %}<p class="muted">Пока ничего нет{% if f.region %} по «{{ f.region }}»{% endif %}: в базе только объявления с подтверждённым правом, и она наполняется.{% if f.region %} <a href="/market?applied=1">Показать все регионы</a>.{% endif %}</p>
 <p class="small">Оставьте <a href="{{ '/search' if user else '/login?tab=register' }}">запрос покупателя</a> — продавцы и брокеры увидят ваш спрос и предложат участок напрямую, а вы получите уведомление о новых объявлениях. Разместить свой участок — <a href="{{ '/listing/new' if user else '/login?tab=register' }}">объявление с проверкой права</a>.</p>{% endif %}
+{% if points and points|length > 1 %}
+<details class="market-map">
+  <summary class="small">Показать на карте: {{ points|length }} из {{ cards|length }} участков с границами</summary>
+  {% include "_listing_map.html" %}
+</details>
+{% endif %}
 <div class="cards">
 {% for c in cards %}
   <article class="card">

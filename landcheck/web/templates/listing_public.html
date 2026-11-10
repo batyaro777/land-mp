@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ d.title }} — {{ brand }}{% endblock %}
+{% block head %}{% include "_leaflet.html" %}{% endblock %}
 {% block content %}
 <div class="report-brand">
   <div class="brand-line">{% if logo_url %}<img src="{{ logo_url }}" alt="" class="brand-logo">{% endif %}<strong>{{ card.seller or 'Продавец' }}</strong></div>
@@ -34,6 +35,7 @@
 {% if nearby %}
 <article>
   <h4>Рядом продаётся <small class="muted">· другие участки из базы в этой местности</small></h4>
+  {% if points and points|length > 1 %}{% include "_listing_map.html" %}<p class="muted small">На карте — этот участок (выделен) и соседние объявления с ценами; метка стоит в центре участка.</p>{% endif %}
   <div class="cards">
   {% for c in nearby %}
     <article class="card">

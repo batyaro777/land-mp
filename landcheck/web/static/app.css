@@ -159,3 +159,25 @@ table.results.econ td, table.results.econ th { padding: 0.35em 0.6em; }
 .torgi-inline { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: end; margin-top: 0.6rem; }
 .torgi-inline label { margin: 0; max-width: 9rem; }
 .torgi-inline input { margin: 0; }
+
+/* посадочная страница проверки участка */
+.lp-hero { background: #f7f5f0; border-radius: 12px; padding: 2rem 2rem 1.2rem; margin: 0.5rem 0 2rem; border-left: 6px solid #2E75B6; }
+.lp-hero h1 { color: #2b2f33; margin-bottom: 0.6rem; font-size: 2rem; }
+.lp-kicker { color: #C4663A; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; font-size: 0.8em; margin-bottom: 0.3rem; }
+.lp-lead { font-size: 1.08em; max-width: 60rem; }
+.lp-form { display: grid; grid-template-columns: 2fr 2fr auto; gap: 1rem; align-items: end; margin: 1rem 0 0.4rem; }
+.lp-form label, .lp-form input, .lp-form select, .lp-form button { margin-bottom: 0; }
+.lp-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1rem; }
+.lp-grid.three { grid-template-columns: repeat(3, 1fr); }
+.lp-grid article { margin: 0; padding: 1rem; border-top: 3px solid #2E75B6; }
+.lp-grid article h5 { margin-bottom: 0.4rem; color: #2b2f33; }
+.lp-grid article p { font-size: 0.9em; margin: 0; }
+@media (max-width: 1000px) { .lp-grid, .lp-grid.three { grid-template-columns: 1fr 1fr; } .lp-form { grid-template-columns: 1fr; } }
+@media (max-width: 600px) { .lp-grid, .lp-grid.three { grid-template-columns: 1fr; } .lp-hero { padding: 1.2rem; } }
+
+/* карта объявлений с ценами */
+.listing-map { height: 360px; border-radius: 8px; margin: 0.4rem 0 0.6rem; }
+.leaflet-tooltip.price-tip { font-weight: 600; padding: 1px 6px; border-radius: 10px; border: 1px solid #2E75B6; color: #1d4f7c; }
+.leaflet-tooltip.price-tip.current { border-color: #C4663A; color: #8a3f1c; background: #fff4ec; }
+.leaflet-tooltip.price-tip::before { display: none; }
+details.market-map { margin-bottom: 1rem; }

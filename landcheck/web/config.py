@@ -56,6 +56,10 @@ class Settings:
         default_factory=lambda: float(os.environ.get("LANDCHECK_WATCH_DOCS_HOURS", "168"))
     )
     debug: bool = field(default_factory=lambda: os.environ.get("LANDCHECK_DEBUG", "") == "1")
+    # Посадочная страница проверки участка: ссылка «пример отчёта» (публичная /r/<токен>)
+    demo_report_url: str | None = field(
+        default_factory=lambda: os.environ.get("LANDCHECK_DEMO_REPORT") or None
+    )
     # Автоподтверждение права при совпадении выписки (зум 09.11); LANDCHECK_AUTO_VERIFY=0 — выкл.
     auto_verify: bool = field(
         default_factory=lambda: os.environ.get("LANDCHECK_AUTO_VERIFY", "1") != "0"

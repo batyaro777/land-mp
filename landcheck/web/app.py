@@ -53,7 +53,9 @@ from landcheck.web.content import (
     price_position,
 )
 from landcheck.web.db import (
+    ENTITIES,
     LISTING_STATUSES,
+    ORG_KINDS,
     PROOF_KINDS,
     PUBLIC_ROLES,
     ROLES,
@@ -156,6 +158,8 @@ templates.env.globals.update(
     PUBLIC_ROLES_MAP={k: ROLES[k] for k in PUBLIC_ROLES},
     PROOF_KINDS=PROOF_KINDS,
     LISTING_STATUSES=LISTING_STATUSES,
+    ENTITIES=ENTITIES,
+    ORG_KINDS=ORG_KINDS,
     REGION_NAMES=sorted(set(CADASTRAL_REGIONS.values())),
 )
 
@@ -293,14 +297,76 @@ def login_form(request: Request, error: str | None = None, tab: str = "password"
         return RedirectResponse("/", status_code=303)
     if ref:
         tab = "register"
-    resp = render(request, "login.html", error=error, tab=tab, ref=ref, user=None)
+    resp = render(
+        request,
+        "login.html",
+        error=error,
+        tab=tab,
+        ref=ref,
+        pending=_pending_check(request),
+        user=None,
+    )
     _remember_ref(request, resp, ref)
     return resp
 
 
-def _login_response(user: User) -> RedirectResponse:
-    resp = RedirectResponse("/", status_code=303)
+PENDING_COOKIE = "lc_check"  # участок с посадочной страницы: проверим сразу после входа
+
+
+def _pending_check(request: Request | None) -> tuple[str, str] | None:
+    """(кадастровый номер, цель) из cookie посадочной страницы; мусор — None."""
+    raw = request.cookies.get(PENDING_COOKIE, "") if request is not None else ""
+    cad, _, purpose = raw.partition("|")
+    cad = normalize_cad(cad) or ""
+    if not cad:
+        return None
+    try:
+        return cad, Purpose(purpose or "any").value
+    except ValueError:
+        return cad, Purpose.ANY.value
+
+
+def _start_single(
+    user: User, cad_num: str, purpose: str, *, use: str = "", price: str = "", area: str = ""
+) -> int:
+    """Разовая проверка участка: создать и поставить в очередь. Возвращает id проверки."""
+    parts = [cad_num]
+    if price.strip():
+        parts.append(price.strip() + " руб")
+    if area.strip():
+        parts.append(area.strip() + " сот")
+    req = CheckRequest()
+    try:
+        req.purpose = Purpose(purpose)
+    except ValueError:
+        pass
+    _apply_use(req, use)
+    with session() as db:
+        check = Check(
+            user_id=user.id,
+            title=f"Разовая проверка {cad_num}",
+            request=request_to_dict(req),
+            input_text="; ".join(parts),
+            total=1,
+        )
+        db.add(check)
+        db.commit()
+        check_id = check.id
+    jobs.enqueue(check_id)
+    return check_id
+
+
+def _login_response(user: User, request: Request | None = None) -> RedirectResponse:
+    """Вход выполнен. Если человек пришёл с посадочной страницы с номером участка —
+    проверка запускается сразу, и он попадает в отчёт, а не на пустую главную."""
+    target = "/"
+    pending = _pending_check(request)
+    if pending is not None:
+        target = f"/checks/{_start_single(user, *pending)}"
+    resp = RedirectResponse(target, status_code=303)
     resp.set_cookie(COOKIE, make_token(user.id), max_age=MAX_AGE, httponly=True, samesite="lax")
+    if pending is not None:
+        resp.delete_cookie(PENDING_COOKIE)
     return resp
 
 
@@ -340,7 +406,7 @@ def login(
             tab="code",
             user=None,
         )
-    return _login_response(user)
+    return _login_response(user, request)
 
 
 @router.post("/login/password")
@@ -360,7 +426,7 @@ def login_password(
             tab="password",
             user=None,
         )
-    return _login_response(user)
+    return _login_response(user, request)
 
 
 @router.post("/register")
@@ -373,12 +439,18 @@ def register(
     brand_name: Annotated[str, Form()] = "",
     ref: Annotated[str, Form()] = "",
     region: Annotated[str, Form()] = "",
+    entity: Annotated[str, Form()] = "person",
+    org_kind: Annotated[str, Form()] = "",
+    inn: Annotated[str, Form()] = "",
 ):
     """Регистрация без кода (ТЗ v2, R3): email, пароль, имя, роль; партнёрский код из формы
-    или cookie привязывает пришедшего к инфопартнёру (К4)."""
+    или cookie привязывает пришедшего к инфопартнёру (К4). Сначала «физлицо или организация»,
+    потом роль: у организации роль следует из вида деятельности (зум 09.11, Влад)."""
     if (resp := _throttled(request)) is not None:
         return resp
     code = ref or request.cookies.get(REF_COOKIE, "")
+    if entity == "company":
+        role = ""  # роль организации — по виду деятельности; сменить можно в меню
     with session() as db:
         partner = user_by_ref(db, code)
         user, error = register_user(
@@ -390,11 +462,33 @@ def register(
             brand_name,
             referred_by=partner.id if partner else None,
             region=region,
+            entity=entity,
+            org_kind=org_kind,
+            inn=inn,
         )
     if user is None:
         record_failed_attempt(request.client.host if request.client else "?")
-        return render(request, "login.html", error=error, tab="register", ref=code, user=None)
-    resp = _login_response(user)
+        form = {
+            "email": email,
+            "name": name,
+            "role": role,
+            "brand_name": brand_name,
+            "region": region,
+            "entity": entity,
+            "org_kind": org_kind,
+            "inn": inn,
+        }
+        return render(
+            request,
+            "login.html",
+            error=error,
+            tab="register",
+            ref=code,
+            form=form,
+            pending=_pending_check(request),
+            user=None,
+        )
+    resp = _login_response(user, request)
     resp.delete_cookie(REF_COOKIE)
     return resp
 
@@ -408,7 +502,10 @@ def logout():
 
 # --- dashboard & checks -------------------------------------------------------------------
 @router.get("/", response_class=HTMLResponse)
-def dashboard(request: Request, user: UserDep):
+def dashboard(request: Request):
+    user = current_user(request)
+    if user is None:  # гостю — что это за сервис и поле для номера, а не голая форма входа
+        return RedirectResponse("/proverka", status_code=307)
     if user.is_admin and user.role == "admin":
         return RedirectResponse("/admin", status_code=303)
     if user.role == "seller":
@@ -1610,6 +1707,9 @@ async def profile_save(
     contact: Annotated[str, Form()] = "",
     role: Annotated[str, Form()] = "",
     region: Annotated[str, Form()] = "",
+    entity: Annotated[str, Form()] = "",
+    org_kind: Annotated[str, Form()] = "",
+    inn: Annotated[str, Form()] = "",
     email: Annotated[str, Form()] = "",
     password: Annotated[str, Form()] = "",
     remove_logo: Annotated[str, Form()] = "",
@@ -1617,7 +1717,14 @@ async def profile_save(
     notify_email: Annotated[str, Form()] = "",
     logo: Annotated[UploadFile | None, File()] = None,
 ):
-    from landcheck.web.db import EMAIL_RE, MIN_PASSWORD, hash_password
+    from landcheck.web.db import (
+        EMAIL_RE,
+        ENTITIES,
+        MIN_PASSWORD,
+        ORG_KINDS,
+        clean_inn,
+        hash_password,
+    )
 
     error = None
     if remove_logo:
@@ -1640,6 +1747,17 @@ async def profile_save(
         u.brand = brand_name.strip()[:120] or None
         u.contact = contact.strip()[:200] or None
         u.region = region.strip()[:120] or None
+        if entity in ENTITIES:
+            u.entity = entity
+            if entity == "company":
+                u.org_kind = org_kind if org_kind in ORG_KINDS else (u.org_kind or "other")
+                inn_clean, inn_error = clean_inn(inn)
+                if inn_error:
+                    error = error or f"ИНН не сохранён: {inn_error[6:]}"
+                else:
+                    u.inn = inn_clean
+            else:
+                u.org_kind, u.inn = None, None
         if role in PUBLIC_ROLES:
             u.role = role  # права администратора остаются (is_admin), меняется только режим
         if telegram_chat_id.strip():  # ручной ввод остаётся запасным путём
@@ -1665,6 +1783,63 @@ async def profile_save(
     return RedirectResponse("/profile?saved=1", status_code=303)
 
 
+# --- посадочная страница сервиса проверки участка (зум 09.11, Антон: «отдельный продукт
+# с лендингом, чтобы распространять») ---------------------------------------------------------
+LANDING_PURPOSES = ("any", "izhs", "snt", "lph", "farming", "commerce", "auction", "invest")
+
+
+def _landing(
+    request: Request, *, error: str | None = None, cad_num: str = "", purpose: str = "any"
+):
+    return render(
+        request,
+        "landing.html",
+        status_code=400 if error else 200,
+        error=error,
+        cad_num=cad_num,
+        purpose=purpose,
+        purposes=[(v, label) for v, label in PURPOSES if v in LANDING_PURPOSES],
+        demo_url=settings.demo_report_url,
+    )
+
+
+@router.get("/proverka", response_class=HTMLResponse)
+def landing(request: Request, cad_num: str = "", purpose: str = "any", ref: str = ""):
+    """Публичная страница: что проверяем, поле для кадастрового номера, пример отчёта."""
+    resp = _landing(request, cad_num=cad_num, purpose=purpose)
+    _remember_ref(request, resp, ref)
+    return resp
+
+
+@router.post("/proverka")
+def landing_start(
+    request: Request,
+    cad_num: Annotated[str, Form()] = "",
+    purpose: Annotated[str, Form()] = "any",
+):
+    """Номер с посадочной страницы: вошедшему — сразу отчёт; гостю — регистрация, после
+    которой проверка запустится сама (номер ждёт в cookie один час)."""
+    cad = normalize_cad(cad_num)
+    if not cad:
+        return _landing(
+            request,
+            error="Не похоже на кадастровый номер. Он выглядит так: 50:09:0060202:101 — "
+            "четыре группы цифр через двоеточие.",
+            cad_num=cad_num,
+            purpose=purpose,
+        )
+    try:
+        purpose = Purpose(purpose).value
+    except ValueError:
+        purpose = Purpose.ANY.value
+    user = current_user(request)
+    if user is not None:
+        return RedirectResponse(f"/checks/{_start_single(user, cad, purpose)}", status_code=303)
+    resp = RedirectResponse("/login?tab=register", status_code=303)
+    resp.set_cookie(PENDING_COOKIE, f"{cad}|{purpose}", max_age=3600, httponly=True, samesite="lax")
+    return resp
+
+
 # --- single check ------------------------------------------------------------------------
 @router.get("/single", response_class=HTMLResponse)
 def single_form(request: Request, user: UserDep, cad_num: str = "", purpose: str = "any"):
@@ -1685,29 +1860,7 @@ def single_create(
     cn = normalize_cad(cad_num)  # «50.09.0060202.101» и с пробелами — тоже номер (зум 09.11)
     if not cn:
         raise HTTPException(400, "Не похоже на кадастровый номер")
-    parts = [cn]
-    if price.strip():
-        parts.append(price.strip() + " руб")
-    if area.strip():
-        parts.append(area.strip() + " сот")
-    req = CheckRequest()
-    try:
-        req.purpose = Purpose(purpose)
-    except ValueError:
-        pass
-    _apply_use(req, use)
-    with session() as db:
-        check = Check(
-            user_id=user.id,
-            title=f"Разовая проверка {cn}",
-            request=request_to_dict(req),
-            input_text="; ".join(parts),
-            total=1,
-        )
-        db.add(check)
-        db.commit()
-        check_id = check.id
-    jobs.enqueue(check_id)
+    check_id = _start_single(user, cn, purpose, use=use, price=price, area=area)
     return RedirectResponse(f"/checks/{check_id}", status_code=303)
 
 
@@ -2396,11 +2549,78 @@ def _notify_buyers_about(db, row) -> int:
     return sent
 
 
+def _ensure_points(db, rows, limit: int = 60) -> None:
+    """Точка объявления на карте (зум 09.11, Влад: «видеть соседние участки с ценами»): центр
+    участка из кэша НСПД, без запросов в сеть. Считается один раз и хранится в данных
+    объявления; участок без границ остаётся без точки."""
+    todo = [r for r in rows if "point" not in (r.data or {})][:limit]
+    if not todo:
+        return
+    from landcheck.cache import ParcelCache
+    from landcheck.location import centroid
+    from landcheck.normalize import parcel_from_payload
+
+    cache = ParcelCache(settings.cache_path, ttl_days=settings.cache_ttl_days)
+    # демо-режим на фикстурах: их ответы в кэш не пишутся, берём прямо из набора
+    demo = jobs.build_provider() if settings.fixtures is not None else None
+    try:
+        for r in todo:
+            point = None
+            payload = cache.get(r.cad_num, allow_stale=True)
+            if payload is None and demo is not None:
+                payload = demo.fetch_raw(r.cad_num)
+            if payload is not None:
+                parcel = parcel_from_payload(payload)
+                if parcel.found and parcel.geometry:
+                    try:
+                        lat, lon = centroid(parcel.geometry)
+                        point = [round(lat, 6), round(lon, 6)]
+                    except Exception:  # noqa: BLE001 — кривая геометрия: без точки
+                        point = None
+                elif not parcel.found:
+                    continue  # участка в кэше нет — попробуем в другой раз
+            else:
+                continue
+            r.data = {**(r.data or {}), "point": point}
+        db.commit()
+    finally:
+        cache.close()
+
+
+def _map_points(cards: list[dict[str, Any]], current: int | None = None) -> list[dict[str, Any]]:
+    """Метки для карты объявлений: точка, цена и подпись; `current` — открытое объявление."""
+    out = []
+    for c in cards:
+        point = c.get("point")
+        if not point:
+            continue
+        price = c.get("price_rub")
+        if price and price >= 1_000_000:
+            label = f"{price / 1_000_000:.1f}".rstrip("0").rstrip(".").replace(".", ",") + " млн"
+        elif price:
+            label = f"{price / 1000:.0f} тыс."
+        else:
+            label = "цена по запросу"
+        out.append(
+            {
+                "id": c["id"],
+                "lat": point[0],
+                "lon": point[1],
+                "label": label,
+                "title": c.get("title") or c.get("cad_num"),
+                "area": c.get("area_sotka"),
+                "current": c["id"] == current,
+            }
+        )
+    return out
+
+
 def _market_card(row, owner: User | None) -> dict[str, Any]:
     d = row.data or {}
     pf = d.get("parcel_facts") or {}
     return {
         "id": row.id,
+        "point": d.get("point"),
         "cad_num": row.cad_num,
         "title": d.get("title") or row.cad_num,
         "price_rub": d.get("price_rub"),
@@ -2442,6 +2662,7 @@ def _public_listings(
         .limit(500)
     ).all()
     owners = {u.id: u for u in db.scalars(select(User)).all()}
+    _ensure_points(db, rows)
     cards = []
     for r in rows:
         c = _market_card(r, owners.get(r.user_id))
@@ -2522,6 +2743,7 @@ def market(
         request,
         "market.html",
         cards=cards,
+        points=_map_points(cards),
         kinds=list(AVITO_OBJECT_TYPES.values()),
         sorts=MARKET_SORTS,
         sort=sort,
@@ -2557,17 +2779,21 @@ def listing_public(request: Request, listing_id: int):
                     Connection.listing_id == row.id, Connection.from_user_id == me.id
                 )
             )
+        _ensure_points(db, [row])
+        card = _market_card(row, owner)
+        nearby = _nearby_listings(db, row)
         return render(
             request,
             "listing_public.html",
             row=row,
             d=row.data,
-            card=_market_card(row, owner),
+            card=card,
             owner=owner,
             logo_url=logo_url(row.user_id) if owner else None,
             my_conn=my_conn,
             is_owner=bool(me is not None and me.id == row.user_id),
-            nearby=_nearby_listings(db, row),
+            nearby=nearby,
+            points=_map_points([card, *nearby], current=row.id),
         )
 
 
@@ -2606,6 +2832,7 @@ def _nearby_listings(db, row, limit: int = 6) -> list[dict[str, Any]]:
         if common:
             scored.append((-common, -r.id, r))
     scored.sort(key=lambda t: t[:2])
+    _ensure_points(db, [r for _, _, r in scored[:limit]])
     out = []
     for _, _, r in scored[:limit]:
         c = _market_card(r, owners.get(r.user_id))

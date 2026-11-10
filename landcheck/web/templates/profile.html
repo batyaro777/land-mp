@@ -13,6 +13,18 @@
     <label>Как вас называть<input name="name" value="{{ user.name }}" required></label>
     <label>Название компании или бренда <small class="muted">(в шапке отчётов)</small>
       <input name="brand_name" value="{{ user.brand or '' }}" placeholder="Например, Земля Подмосковья"></label>
+    <div class="grid">
+      <label>Кто вы
+        <select name="entity" id="profile-entity">
+          {% for key, label in ENTITIES.items() %}<option value="{{ key }}" {{ 'selected' if user.entity == key else '' }}>{{ label }}</option>{% endfor %}
+        </select></label>
+      <label data-entity="company">Чем занимается организация
+        <select name="org_kind">
+          {% for key, item in ORG_KINDS.items() %}<option value="{{ key }}" {{ 'selected' if user.org_kind == key else '' }}>{{ item[0] }}</option>{% endfor %}
+        </select></label>
+      <label data-entity="company">ИНН <small class="muted">(необязательно)</small><input name="inn" inputmode="numeric" value="{{ user.inn or '' }}"></label>
+    </div>
+    <script>(function(){var s=document.getElementById('profile-entity');if(!s)return;function f(){document.querySelectorAll('[data-entity]').forEach(function(el){el.hidden=el.dataset.entity!==s.value;});}s.addEventListener('change',f);f();})();</script>
     <label>Контакт <small class="muted">(телефон или Telegram; в отчёты пока не выводится)</small>
       <input name="contact" value="{{ user.contact or '' }}" placeholder="@username"></label>
     <label>Регион интереса <small class="muted">(база участков, поиск и спрос открываются по нему; можно очистить)</small>

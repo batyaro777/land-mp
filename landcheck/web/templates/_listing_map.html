@@ -1,0 +1,34 @@
+{# Карта объявлений с ценами (зум 09.11): метка на участок, подпись — цена #}
+{% if points %}
+<div id="listing-map" class="listing-map"></div>
+<script>
+window.addEventListener('load', function () {
+  if (!window.L) return;
+  const pts = {{ points|tojson }};
+  const map = L.map('listing-map', { scrollWheelZoom: false });
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+  const marks = pts.map(function (p) {
+    const mark = L.circleMarker([p.lat, p.lon], { radius: p.current ? 10 : 7, color: p.current ? '#C4663A' : '#2E75B6', fillOpacity: 0.75 }).addTo(map);
+    mark.bindTooltip(p.label, { permanent: true, direction: 'top', className: 'price-tip' + (p.current ? ' current' : '') });
+    const box = document.createElement('div');
+    const link = document.createElement('a');
+    link.href = '/l/' + p.id;
+    link.textContent = p.title;
+    box.appendChild(link);
+    const line = document.createElement('div');
+    line.textContent = p.label + (p.area ? ' · ' + p.area + ' сот.' : '') + (p.current ? ' · это объявление' : '');
+    box.appendChild(line);
+    mark.bindPopup(box);
+    return mark;
+  });
+  function fit() {
+    if (marks.length === 1) { map.setView([pts[0].lat, pts[0].lon], 14); }
+    else { map.fitBounds(L.featureGroup(marks).getBounds().pad(0.2)); }
+  }
+  fit();
+  // карта в свёрнутом блоке создаётся с нулевым размером — пересчитать при раскрытии
+  const fold = document.getElementById('listing-map').closest('details');
+  if (fold) fold.addEventListener('toggle', function () { map.invalidateSize(); fit(); });
+});
+</script>
+{% endif %}

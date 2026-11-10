@@ -36,7 +36,10 @@ def login(c: TestClient) -> None:
 
 
 def test_requires_login(client: TestClient):
+    # гостю главная отдаёт посадочную страницу проверки участка, закрытые страницы — вход
     r = client.get("/")
+    assert r.status_code == 307 and r.headers["location"] == "/proverka"
+    r = client.get("/checks")
     assert r.status_code == 307 and r.headers["location"] == "/login"
     assert client.get("/login").status_code == 200
     r = client.post("/login", data={"code": "LC-NOPE", "name": "x"})

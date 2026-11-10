@@ -668,13 +668,30 @@ def register_user(
     brand: str | None = None,
     referred_by: int | None = None,
     region: str | None = None,
+    entity: str = "person",
+    org_kind: str | None = None,
+    inn: str | None = None,
 ) -> tuple[User | None, str | None]:
-    """Новый пользователь по email: (user, None) или (None, текст ошибки)."""
+    """Новый пользователь по email: (user, None) или (None, текст ошибки). Организация или
+    ИП: нужно название, вид деятельности задаёт роль по умолчанию, ИНН необязателен."""
     email = normalize_email(email)
     if not EMAIL_RE.match(email):
         return None, "Укажите настоящий email."
     if len(password) < MIN_PASSWORD:
         return None, f"Пароль не короче {MIN_PASSWORD} знаков."
+    entity = entity if entity in ENTITIES else "person"
+    inn_clean: str | None = None
+    if entity == "company":
+        if not (brand or "").strip():
+            return None, "Укажите название организации или ИП."
+        org_kind = org_kind if org_kind in ORG_KINDS else "other"
+        inn_clean, inn_error = clean_inn(inn)
+        if inn_error:
+            return None, inn_error
+        if role not in PUBLIC_ROLES:
+            role = ORG_KINDS[org_kind][1]
+    else:
+        org_kind = None
     if role not in PUBLIC_ROLES:
         return None, "Выберите роль."
     if db.scalar(select(User.id).where(User.email == email)) is not None:
@@ -688,10 +705,23 @@ def register_user(
         role=role,
         referred_by=referred_by,
         region=(region or "").strip()[:120] or None,
+        entity=entity,
+        org_kind=org_kind,
+        inn=inn_clean,
     )
     db.add(user)
     db.commit()
     return user, None
+
+
+def clean_inn(inn: str | None) -> tuple[str | None, str | None]:
+    """ИНН из формы → (цифры или None, текст ошибки или None). Пустой — допустим."""
+    digits = re.sub(r"\D", "", inn or "")
+    if not digits:
+        return None, None
+    if not INN_RE.match(digits):
+        return None, "ИНН — 10 цифр у организации или 12 у ИП."
+    return digits, None
 
 
 def authenticate(db: Session, email: str, password: str) -> User | None:
