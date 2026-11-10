@@ -100,9 +100,13 @@ class FakeTorgi:
             body = _page(items[page * 10 : page * 10 + 10], len(items))
             return httpx.Response(200, json=body)
         lot_id = url.path.rsplit("/", 1)[-1]
-        if lot_id not in self.cards:
-            return httpx.Response(404, json={})
-        return httpx.Response(200, json=self.cards[lot_id])
+        if lot_id in self.cards:
+            return httpx.Response(200, json=self.cards[lot_id])
+        for items in self.lists.values():  # карточка идущего лота: то же, что в поиске, + шаг
+            for hit in items:
+                if hit["id"] == lot_id:
+                    return httpx.Response(200, json={**hit, "priceStep": 3_000, "deposit": 20_000})
+        return httpx.Response(404, json={})
 
     def client(self) -> httpx.Client:
         return httpx.Client(transport=httpx.MockTransport(self.handler))
@@ -152,7 +156,8 @@ def test_sync_region_collects_lots_cards_and_nspd(client):  # noqa: F811
     assert state["state"] == "idle" and state["backfill_done"] is True
     assert (state["active"], state["succeed"], state["failed"]) == (12, 15, 6)
     assert state["succeed_priced"] == 15 and state["cards_left"] == 0
-    assert state["stats"]["new"] == 33 and state["stats"]["cards"] == 21
+    # карточки: 12 идущих (шаг, задаток) + 15 состоявшихся + 6 не состоявшихся
+    assert state["stats"]["new"] == 33 and state["stats"]["cards"] == 33
     assert state["stats"]["nspd"] == 12 and len(nspd.calls) == 12
     with session() as db:
         lot = db.get(TorgiLot, "S_0")
@@ -161,7 +166,8 @@ def test_sync_region_collects_lots_cards_and_nspd(client):  # noqa: F811
         assert lot.district == "40:13" and lot.quarter == "40:13:120102" and lot.region == "40"
         act = db.get(TorgiLot, "ACT_3")
         assert act.status == "APPLICATIONS_SUBMISSION" and act.bidd_end == "2026-12-20"
-        assert act.cad_cost == 250_000 and act.lat is not None and act.card_at is None
+        assert act.cad_cost == 250_000 and act.lat is not None
+        assert act.price_step == 3_000 and act.deposit == 20_000 and act.card_at is not None
         # имён участников в базе нет
         dump = json.dumps(
             [x.to_dict() for x in db.scalars(select(TorgiLot))], ensure_ascii=False, default=str
@@ -199,7 +205,9 @@ def test_sync_second_pass_is_shallow_and_closes_finished_lots(client):  # noqa: 
     history = [s for s in second if s.get("lotStatus") in ("SUCCEED", "FAILED")]
     # история уже собрана: по одной странице на статус, новых лотов нет — дальше не листаем
     assert len(history) == 2 and all(s["page"] == "0" for s in history)
-    assert [s["path"].rsplit("/", 1)[-1] for s in second if "search" not in s["path"]] == ["ACT_0"]
+    # карточки второго прохода: новый идущий лот и итог завершившегося
+    cards = [s["path"].rsplit("/", 1)[-1] for s in second if "search" not in s["path"]]
+    assert cards == ["ACT_99", "ACT_0"]
 
 
 def test_sync_error_keeps_progress_and_resumes(client):  # noqa: F811
@@ -207,7 +215,8 @@ def test_sync_error_keeps_progress_and_resumes(client):  # noqa: F811
     from landcheck.web.db import TorgiSync, session
 
     fake = _seed(client)
-    fake.fail_after = 3  # 2 страницы идущих, 1-я страница состоявшихся, потом шлюз падает
+    # 2 страницы идущих, 12 карточек идущих, 1-я страница состоявшихся — потом шлюз падает
+    fake.fail_after = 15
     state = _sync(fake, max_nspd=0)
     assert state["state"] == "error" and "сбор прерван" in state["error"]
     assert state["active"] == 12 and state["succeed"] == 10 and state["backfill_done"] is False
@@ -549,3 +558,32 @@ def test_cli_pro_tools_status_and_probe(client, monkeypatch):  # noqa: F811
     assert "идут: лотов 12, страниц 2" in out and "состоялись: лотов 15" in out
     assert "характеристики: CadastralNumber, PermittedUse, SquareZU" in out
     assert "запросов: 3" in out and "40:13:120101" not in out
+
+
+def test_sync_stops_when_cards_do_not_answer_and_rereads_finished(client):  # noqa: F811
+    """Сайт перестал отвечать на карточки — проход прерывается после нескольких сбоев подряд;
+    лот, завершившийся после чтения карточки, получает итог при следующем проходе."""
+    from landcheck.web import torgi_sync
+    from landcheck.web.db import TorgiLot, session
+
+    fake = _seed(client)
+    fake.fail_after = 2  # обе страницы идущих прочитаны, дальше карточки не отвечают
+    state = _sync(fake, max_nspd=0)
+    assert state["state"] == "error" and state["active"] == 12
+    # не все 12 карточек перебраны впустую: стоп после пяти сбоев подряд
+    assert len(fake.seen) == 2 + torgi_sync.MAX_CARD_FAILURES
+    # через час после сбоя регион снова в очереди автосбора, а не через сутки
+    from datetime import timedelta
+
+    assert torgi_sync.due_regions(now=NOW) == []
+    assert torgi_sync.due_regions(now=datetime.now(UTC) + timedelta(minutes=61)) == ["40"]
+    fake.fail_after = None
+    _sync(fake, max_nspd=0)
+    # лот ACT_1 завершился, но в «пропавших» не дочитан (лимит), статус пришёл из поиска истории
+    with session() as db:
+        lot = db.get(TorgiLot, "ACT_1")
+        assert lot.card_at is not None and lot.price_fin is None
+        row = {**lot.to_dict(), "status": "SUCCEED"}
+        _, what = torgi_sync.upsert(db, row, NOW)
+        assert what == "changed" and lot.card_at is None  # карточку нужно перечитать: итог
+        db.rollback()

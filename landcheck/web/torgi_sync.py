@@ -4,7 +4,8 @@ torgi.gov.ru пропускает один запрос в 6 секунд и о�
 собирается фоном в отдельном потоке и хранится в таблице `torgi_lots`: страница анализатора
 открывается мгновенно, а данные обновляются раз в сутки. Один проход:
 
-1. `active` — все идущие лоты региона (страницы поиска целиком);
+1. `active` — все идущие лоты региона (страницы поиска целиком), затем карточки новых
+   идущих лотов: шаг аукциона, задаток, дата торгов и документы (ГПЗУ) есть только там;
 2. `finished` — лоты, которые в прошлый раз шли, а теперь из поиска пропали: читаем карточку,
    получаем итог;
 3. `history` — завершённые за год (состоялись и не состоялись). Первый раз — все страницы
@@ -43,6 +44,7 @@ MAX_FINISHED = 150  # карточек «пропавших из идущих» 
 SHALLOW_PAGES = 5  # после первого полного сбора — столько страниц истории сверху
 STALE_RUNNING_MIN = 20  # нет отметок прогресса дольше — считаем, что процесс умер
 NSPD_PAUSE_S = 1.0
+ERROR_RETRY_HOURS = 1.0
 
 _executor: ThreadPoolExecutor | None = None
 _lock = threading.Lock()
@@ -96,6 +98,9 @@ def upsert(
     lot.seen_at = now
     if card:
         lot.card_at = now
+    elif what == "changed" and lot.status not in torgi.ACTIVE:
+        # лот завершился, а карточку читали, пока он шёл: итог и заявки нужно дочитать
+        lot.card_at = None
     return lot, what
 
 
@@ -326,11 +331,14 @@ def sync_region(
     provider=None,
     max_cards: int | None = None,
     max_nspd: int | None = None,
+    max_active_cards: int | None = None,
 ) -> dict[str, Any]:
     """Полный проход по региону (см. описание модуля). Ошибка сети прерывает проход, уже
     записанное остаётся; исключения наружу не выходят — результат в `torgi_sync`."""
     now = now or utcnow()
     max_cards = settings.torgi_scan_cards if max_cards is None else max_cards
+    if max_active_cards is None:
+        max_active_cards = settings.torgi_scan_active_cards
     max_nspd = settings.torgi_scan_nspd if max_nspd is None else max_nspd
     if client is None and not ruproxy.enabled():
         _update(
@@ -367,6 +375,25 @@ def sync_region(
             on_page=on_active,
         )
 
+        # 1б. карточки идущих: шаг, задаток, дата торгов и ГПЗУ есть только в карточке ---------
+        with session() as db:
+            fresh_active = db.execute(
+                select(TorgiLot.id, TorgiLot.published).where(
+                    TorgiLot.region == region,
+                    TorgiLot.status.in_(sorted(torgi.ACTIVE)),
+                    TorgiLot.card_at.is_(None),
+                )
+            ).all()
+        fresh_active.sort(key=lambda r: r[1] or "", reverse=True)
+        _read_cards(
+            api,
+            region,
+            [r[0] for r in fresh_active[:max_active_cards]],
+            now,
+            stats,
+            "active_cards",
+        )
+
         # 2. пропали из идущих ---------------------------------------------------------------
         # Только если идущие дочитаны до конца: иначе «пропавшими» окажутся непросмотренные.
         gone: list[str] = []
@@ -381,12 +408,7 @@ def sync_region(
                     ).all()
                     if lot_id not in seen
                 ][:MAX_FINISHED]
-        _update(
-            region, phase="finished", progress={"page": 0, "pages": len(gone), "phase": "finished"}
-        )
-        for n, lot_id in enumerate(gone, 1):
-            _read_card(api, region, lot_id, now, stats)
-            _update(region, progress={"page": n, "pages": len(gone), "phase": "finished"})
+        _read_cards(api, region, gone, now, stats, "finished")
 
         # 3. завершённые за год ----------------------------------------------------------------
         _update(region, phase="history")
@@ -420,11 +442,7 @@ def sync_region(
         # сначала состоявшиеся (нужна итоговая цена), внутри — новые первыми
         need.sort(key=lambda r: r[2] or "", reverse=True)
         need.sort(key=lambda r: r[1] != "SUCCEED")
-        queue = need[:max_cards]
-        for n, (lot_id, _status, _pub) in enumerate(queue, 1):
-            _read_card(api, region, lot_id, now, stats)
-            if n % 5 == 0 or n == len(queue):
-                _update(region, progress={"page": n, "pages": len(queue), "phase": "cards"})
+        _read_cards(api, region, [r[0] for r in need[:max_cards]], now, stats, "cards")
 
         # 5. НСПД по идущим ----------------------------------------------------------------------
         _update(region, phase="nspd")
@@ -442,11 +460,11 @@ def sync_region(
     except Exception as exc:  # noqa: BLE001 — фоновая задача: ошибка в состояние, не наружу
         log.warning("torgi sync %s: %s", region, exc)
         stats["requests"] = api.requests
+        reason = str(exc) if isinstance(exc, RuntimeError) else type(exc).__name__
         _update(
             region,
             state="error",
-            error=f"сбор прерван: {type(exc).__name__} — уже собранное сохранено, "
-            "следующий запуск продолжит",
+            error=f"сбор прерван: {reason} — уже собранное сохранено, следующий запуск продолжит",
             finished_at=utcnow(),
             stats=stats,
         )
@@ -484,30 +502,60 @@ def _history_handler(
     return on_history
 
 
+MAX_CARD_FAILURES = 5  # столько сбоев подряд — сайт или шлюз лежит, проход прерываем
+
+
+def _read_cards(
+    api: torgi.TorgiClient,
+    region: str,
+    lot_ids: list[str],
+    now: datetime,
+    stats: dict[str, int],
+    phase: str,
+) -> None:
+    """Прочитать карточки лотов с отметками прогресса. Одна неудача прохода не роняет, но
+    несколько подряд значат, что сайт недоступен: бросаем, уже записанное остаётся."""
+    _update(region, phase=phase, progress={"page": 0, "pages": len(lot_ids), "phase": phase})
+    failures = 0
+    for n, lot_id in enumerate(lot_ids, 1):
+        if _read_card(api, region, lot_id, now, stats):
+            failures = 0
+        else:
+            failures += 1
+            if failures >= MAX_CARD_FAILURES:
+                raise RuntimeError("torgi.gov.ru не отвечает на запросы карточек")
+        if n % 5 == 0 or n == len(lot_ids):
+            _update(region, progress={"page": n, "pages": len(lot_ids), "phase": phase})
+
+
 def _read_card(
     api: torgi.TorgiClient, region: str, lot_id: str, now: datetime, stats: dict[str, int]
-) -> None:
+) -> bool:
+    """Карточка лота в базу. False — сайт не ответил (сеть, 5xx); «лота нет» (404) — это
+    ответ: помечаем и больше не спрашиваем."""
     try:
         card = api.lot(lot_id)
     except Exception as exc:  # noqa: BLE001 — одна карточка не должна ронять проход
         log.info("torgi card %s: %s", lot_id, exc)
-        if getattr(getattr(exc, "response", None), "status_code", None) == 404:
-            with session() as db:  # лот убрали с площадки — больше не спрашиваем
-                lot = db.get(TorgiLot, lot_id)
-                if lot is not None:
-                    lot.card_at = now
-                    if lot.status in torgi.ACTIVE:
-                        lot.status = "CANCELED"
-                    db.commit()
-        return
+        if getattr(getattr(exc, "response", None), "status_code", None) != 404:
+            return False
+        with session() as db:  # лот убрали с площадки
+            lot = db.get(TorgiLot, lot_id)
+            if lot is not None:
+                lot.card_at = now
+                if lot.status in torgi.ACTIVE:
+                    lot.status = "CANCELED"
+                db.commit()
+        return True
     row = torgi_scan.lot_row({"id": lot_id, **card})
     if row is None:
-        return
+        return True
     row["region"] = row.get("region") or region
     with session() as db:
         upsert(db, row, now, card=True)
         db.commit()
     stats["cards"] += 1
+    return True
 
 
 def enrich_nspd(
@@ -633,7 +681,9 @@ def due_regions(now: datetime | None = None) -> list[str]:
         if state in ("running", "queued"):
             continue
         finished = _aware(finished)
-        if finished is None or now - finished >= timedelta(hours=hours):
+        # после сбоя (шлюз, сайт) пробуем снова через час, а не через сутки
+        wait = timedelta(hours=min(hours, ERROR_RETRY_HOURS) if state == "error" else hours)
+        if finished is None or now - finished >= wait:
             out.append(region)
     return out
 

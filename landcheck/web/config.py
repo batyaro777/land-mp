@@ -84,6 +84,9 @@ class Settings:
     torgi_scan_cards: int = field(
         default_factory=lambda: int(os.environ.get("LANDCHECK_TORGI_SCAN_CARDS", "300"))
     )
+    torgi_scan_active_cards: int = field(
+        default_factory=lambda: int(os.environ.get("LANDCHECK_TORGI_SCAN_ACTIVE_CARDS", "200"))
+    )
     torgi_scan_nspd: int = field(
         default_factory=lambda: int(os.environ.get("LANDCHECK_TORGI_SCAN_NSPD", "300"))
     )
