@@ -634,6 +634,32 @@ def torgi_probe(
     print(f"запросов: {api.requests}, повторов: {api.retries}")
 
 
+@app.command("torgi-enable")
+def torgi_enable(
+    region: Annotated[str, typer.Argument(help="Код региона, например 40")],
+    off: Annotated[bool, typer.Option("--off", help="Выключить автосбор региона")] = False,
+):
+    """Поставить регион на автосбор торгов: веб-процесс начнёт сбор сам в течение пяти минут
+    (сбор идёт только в нём — так соблюдается общая пауза между запросами к torgi.gov.ru)."""
+    from landcheck.regions import CADASTRAL_REGIONS
+    from landcheck.web.config import settings
+    from landcheck.web.db import TorgiSync, init_db, session
+
+    code = region.zfill(2)
+    if code not in CADASTRAL_REGIONS:
+        print("неизвестный код региона")
+        raise typer.Exit(code=1)
+    init_db(settings.db_path)
+    with session() as db:
+        st = db.get(TorgiSync, code)
+        if st is None:
+            st = TorgiSync(region=code, state="idle", progress={}, stats={})
+            db.add(st)
+        st.auto = not off
+        db.commit()
+        print(f"{code} {CADASTRAL_REGIONS[code]}: автосбор={'выкл' if off else 'вкл'}")
+
+
 @app.command("torgi-status")
 def torgi_status(
     region: Annotated[str, typer.Argument(help="Код региона, например 40")],

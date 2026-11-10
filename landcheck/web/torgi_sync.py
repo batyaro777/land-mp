@@ -638,9 +638,9 @@ def due_regions(now: datetime | None = None) -> list[str]:
     return out
 
 
-def start_auto_loop(*, first_delay_s: float = 600.0, period_s: float = 1800.0):
-    """Раз в полчаса смотрим, какие регионы пора пересобрать. Без RU-шлюза и в демо-режиме
-    на фикстурах не запускается."""
+def start_auto_loop(*, first_delay_s: float = 120.0, period_s: float = 300.0):
+    """Раз в пять минут смотрим, какие регионы пора пересобрать (один запрос к базе).
+    Без RU-шлюза и в демо-режиме на фикстурах не запускается."""
     if settings.torgi_scan_hours <= 0 or settings.fixtures is not None or not ruproxy.enabled():
         return None
 

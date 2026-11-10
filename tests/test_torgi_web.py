@@ -518,6 +518,15 @@ def test_cli_pro_tools_status_and_probe(client, monkeypatch):  # noqa: F811
         "pro_tools=False" in runner.invoke(app, ["pro-tools", "team@example.com", "--off"]).output
     )
     assert runner.invoke(app, ["pro-tools", "nobody@example.com"]).exit_code == 1
+    # регион ставится на автосбор командой: веб-процесс подхватит его сам
+    from landcheck.web import torgi_sync
+
+    assert torgi_sync.due_regions() == []
+    out = runner.invoke(app, ["torgi-enable", "10"]).output
+    assert "10 Республика Карелия: автосбор=вкл" in out and torgi_sync.due_regions() == ["10"]
+    assert "автосбор=выкл" in runner.invoke(app, ["torgi-enable", "10", "--off"]).output
+    assert torgi_sync.due_regions() == []
+    assert runner.invoke(app, ["torgi-enable", "99"]).exit_code == 1
     fake = _seed(client)
     _sync(fake, max_nspd=0)
     out = runner.invoke(app, ["torgi-status", "40"]).output
