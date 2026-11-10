@@ -540,6 +540,7 @@ def test_cli_pro_tools_status_and_probe(client, monkeypatch):  # noqa: F811
     _sync(fake, max_nspd=0)
     out = runner.invoke(app, ["torgi-status", "40"]).output
     assert "state=idle" in out and "active=12" in out and "succeed_priced=15" in out
+    assert "notices=0, notices_active=0" in out
     # проба API: без шлюза — честный отказ; со шлюзом — счётчики и имена полей, без значений
     monkeypatch.delenv("LANDCHECK_RU_PROXY", raising=False)
     assert runner.invoke(app, ["torgi-probe", "40"]).exit_code == 1

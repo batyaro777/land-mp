@@ -673,6 +673,8 @@ def torgi_status(
     st = torgi_sync.state_of(region.zfill(2))
     keys = "state phase backfill_done lots active succeed failed succeed_priced cards_left".split()
     print(", ".join(f"{k}={st[k]}" for k in keys))
+    # счётчики выше — по аукционам; извещения о предоставлении (ст. 39.18) отдельно
+    print(f"notices={st['notices']}, notices_active={st['notices_active']}")
     print(f"progress={st['progress']}")
     print(f"finished_at={st['finished_at']}, error={st['error']}, stats={st['stats']}")
 
