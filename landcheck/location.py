@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import math
+import re
 import statistics
 from datetime import UTC, datetime
 from typing import Any
@@ -951,6 +952,52 @@ def _is_public(own: str) -> bool:
     return any(k in lo for k in _PUBLIC_OWN)
 
 
+NO_RIGHT = "право не зарегистрировано"
+NOTE_NO_RIGHT = (
+    "в ЕГРН право не зарегистрировано: вероятно, неразграниченная государственная земля — "
+    "распоряжается администрация"
+)
+NOTE_NO_RIGHT_PRIOR = (
+    "в ЕГРН право не зарегистрировано, участок ранее учтённый: у него может быть хозяин с "
+    "правом, возникшим до 1998 года, — спросить в администрации"
+)
+
+
+def ownership_class(own: str | None) -> str:
+    """`public` — публичная форма собственности названа; `private` — названа иная;
+    `unregistered` — поле пустое: право в ЕГРН не зарегистрировано. Так в НСПД выглядит
+    неразграниченная государственная земля — главный кандидат на «получить у администрации»
+    (прод, квартал 10:20:0060108, 10.11.2026: 64 участка «Частная», 13 без формы, среди них
+    участок, который администрация выставляла на аукцион). Но так же выглядит и ранее учтённый
+    участок, чьё право возникло до 1998 года и в реестр не внесено."""
+    lo = (own or "").strip().lower()
+    if not lo:
+        return "unregistered"
+    return "public" if _is_public(lo) else "private"
+
+
+def is_prior(status: str | None) -> bool:
+    """Ранее учтённый участок: поставлен на учёт до 2008 года, часто без границ."""
+    return "ранее учт" in (status or "").lower().replace("ё", "е")
+
+
+_PARCEL_NUM_RE = re.compile(r"\b\d{1,2}:\d{1,2}:\d{1,7}:\d+\b")
+# Слой НСПД «участки, выставленные на аукцион» отдаёт поля по-русски (прод, 10.11.2026):
+# «Кадастровый номер», «Дата торгов», «Начальная цена» — а не `cad_num`, как слой участков.
+AUCTION_CAD_KEYS = ("cad_num", "Кадастровый номер")
+_KEEP_AUCTION_KEYS = (*AUCTION_CAD_KEYS, "Дата торгов", "Начальная цена")
+
+
+def auction_cads(features: list[dict[str, Any]] | None) -> set[str]:
+    """Кадастровые номера участков из слоя «на аукционе»."""
+    out: set[str] = set()
+    for f in features or []:
+        opts = (f.get("properties") or {}).get("options") or {}
+        for key in AUCTION_CAD_KEYS:
+            out.update(_PARCEL_NUM_RE.findall(str(opts.get(key) or "")))
+    return out
+
+
 def _unavailable(category: str | None, vri: str | None) -> str | None:
     """Почему публичный участок нельзя считать «свободной землёй» (Клавдий, прод 29.10: в список
     попали лесфонд, газоснабжение, электросеть, ветучасток). None — препятствий по данным нет."""
@@ -979,9 +1026,7 @@ def free_land(
     аукцион, минус земли общего пользования и архивные. Аренду НСПД не показывает — поэтому
     каждая строка «свободен или в аренде: проверить выпиской» (Андрей, Влад: «сервис, который
     находит никем не занятые участки»)."""
-    on_auction = {
-        ((f.get("properties") or {}).get("options") or {}).get("cad_num") for f in auction
-    }
+    on_auction = auction_cads(auction)
     items: list[dict[str, Any]] = []
     excluded = 0
     for f in neighbors:
@@ -990,10 +1035,15 @@ def free_land(
         if not cad or cad == target_cad_num:
             continue
         own = str(_get(opts, "ownership_type", default="") or "")
-        if not _is_public(own):
-            continue
-        vri = str(_get(opts, "permitted_use_established_by_document", default="") or "")
         status = str(_get(opts, "status", default="") or "")
+        kind = ownership_class(own)
+        # Без зарегистрированного права берём только учтённые участки: ранее учтённые здесь
+        # дали бы десятки старых наделов с хозяевами. Полный список — в «Свободной земле».
+        if kind == "private" or (kind == "unregistered" and is_prior(status)):
+            continue
+        if kind == "unregistered":
+            own = f"{NO_RIGHT} (вероятно, неразграниченная)"
+        vri = str(_get(opts, "permitted_use_established_by_document", default="") or "")
         if "общего пользования" in vri.lower() or "архив" in status.lower():
             continue
         category = _get(opts, "land_record_category_type")
@@ -1351,7 +1401,8 @@ def slim_raw(raw: dict[str, Any], parcel_geojson: dict[str, Any] | None = None) 
         _with_distance(f, _KEEP_PLOT_KEYS, parcel_geojson) for f in nspd.get("neighbors") or []
     ]
     nspd["auction"] = [
-        slim_feature(f, _KEEP_PLOT_KEYS, geometry=False) for f in nspd.get("auction") or []
+        slim_feature(f, _KEEP_PLOT_KEYS + _KEEP_AUCTION_KEYS, geometry=False)
+        for f in nspd.get("auction") or []
     ]
     osm = raw.get("osm")
     if osm and osm.get("elements"):

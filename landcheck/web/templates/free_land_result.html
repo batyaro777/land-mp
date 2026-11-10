@@ -19,8 +19,11 @@
   <form method="post" action="/tools/free-land/{{ scan.id }}/retry"><button class="sm">Повторить</button></form></article>
 {% else %}
 {% set c = result.counts %}
-<p class="small"><strong>На территории:</strong> участков {{ c.total }}, из них частных {{ c.private }}, архивных {{ c.archived }}, общего пользования {{ c.common }}, не передаётся или занято {{ c.unavailable }}{% if result.reasons %} ({% for why, n in result.reasons %}{{ why }} — {{ n }}{{ ', ' if not loop.last else '' }}{% endfor %}){% endif %}. <strong>Публичных без видимых препятствий: {{ c.public_free }}</strong>{% if result.truncated %} (показаны первые 500){% endif %}.{% if result.errors %} <span class="warn">Часть слоёв не ответила: {{ result.errors|join('; ')|truncate(160) }}.</span>{% endif %}{% if result.layers_truncated %} <span class="warn">Территория большая: слои прочитаны не целиком — сузьте поиск до квартала.</span>{% endif %}</p>
+<p class="small"><strong>На территории:</strong> участков {{ c.total }}{% if c.outside %} (ещё {{ c.outside }} из соседних кварталов касаются границы — не считаем){% endif %}, из них частных {{ c.private }}{% if c.no_right is defined %}, без зарегистрированного права {{ c.no_right }}{% endif %}, архивных {{ c.archived }}, общего пользования {{ c.common }}, не передаётся или занято {{ c.unavailable }}{% if result.reasons %} ({% for why, n in result.reasons %}{{ why }} — {{ n }}{{ ', ' if not loop.last else '' }}{% endfor %}){% endif %}. <strong>Кандидатов без видимых препятствий: {{ c.public_free }}</strong>{% if c.free_public is defined %} — с публичной собственностью {{ c.free_public }}, без зарегистрированного права {{ c.free_no_right }}, ранее учтённых без права {{ c.free_prior }}{% endif %}{% if result.truncated %} (показаны первые 500){% endif %}.{% if result.errors %} <span class="warn">Часть слоёв не ответила: {{ result.errors|join('; ')|truncate(160) }}.</span>{% endif %}{% if result.layers_truncated %} <span class="warn">Территория большая: слои прочитаны не целиком — сузьте поиск до квартала.</span>{% endif %}</p>
 
+{% if c.no_right is defined and (c.free_no_right or c.free_prior) %}
+<p class="small muted">«Право не зарегистрировано» — в ЕГРН у участка нет ни собственника, ни формы собственности. Так выглядит неразграниченная государственная земля: ею распоряжается администрация, и это главные кандидаты. Но так же выглядит ранее учтённый надел, чьё право возникло до 1998 года и в реестр не внесено, — у такого участка может найтись хозяин. Аренду открытые данные тоже не показывают. Поэтому первый шаг по любой строке — выписка ЕГРН и вопрос в администрацию.</p>
+{% endif %}
 <form method="get" class="grid no-print">
   <label>Категория
     <select name="how" onchange="this.form.submit()">
@@ -32,6 +35,11 @@
       <option value="">любое</option>
       {% for key, label in groups.items() %}<option value="{{ key }}"{% if q.get('group') == key %} selected{% endif %}>{{ label }}</option>{% endfor %}
     </select></label>
+  {% if own_kinds|length > 1 %}<label>Собственность
+    <select name="own" onchange="this.form.submit()">
+      <option value="">любая</option>
+      {% for k in own_kinds %}<option value="{{ k }}"{% if q.get('own') == k %} selected{% endif %}>{{ own_label[k] }}</option>{% endfor %}
+    </select></label>{% endif %}
   <label>Площадь от, сот. <input name="amin" inputmode="decimal" value="{{ q.get('amin') or '' }}"></label>
   <label>до, сот. <input name="amax" inputmode="decimal" value="{{ q.get('amax') or '' }}"></label>
   <label>&nbsp;<button class="sm outline">Показать</button></label>
@@ -57,7 +65,7 @@
     <td class="cad"><a href="/single?cad_num={{ i.cad_num }}&amp;purpose=municipal"><code>{{ i.cad_num }}</code></a><div class="small muted">{{ (i.address or '')|short_address|truncate(70) }}</div></td>
     <td class="small">{{ (i.category or '—')|short_category }}<div class="muted">{{ (i.vri or '')|truncate(70) }}</div></td>
     <td class="num">{% if i.area_m2 %}{{ (i.area_m2 / 100)|round(1) }} сот.{% else %}—{% endif %}</td>
-    <td class="small">{{ i.ownership }}</td>
+    <td class="small"{% if i.own_note %} title="{{ i.own_note }}"{% endif %}>{{ i.ownership }}{% if i.own_class == 'unregistered' %}<div class="muted">{{ 'ранее учтённый: возможен хозяин' if i.prior else 'вероятно, неразграниченная' }}</div>{% endif %}</td>
     <td class="num">{{ i.cad_cost|money }}</td>
     <td class="small">{% if i.on_auction %}<span class="badge mini v-check" title="Слой НСПД «участки, выставленные на аукцион»">на аукционе</span> {% endif %}{% if i.in_pmt %}<span class="badge mini v-check" title="Пересекается с участком по проекту межевания: может быть уже распределён">проект межевания</span> {% endif %}{% if i.torgi %}<a href="/tools/torgi-lot/{{ i.torgi.lot_id }}" class="badge mini {{ 'v-stop' if i.torgi.busy else '' }}" title="Последний лот участка в базе торгов{% if i.torgi.date %}, {{ i.torgi.date }}{% endif %}">{{ i.torgi.text }}</a>{% endif %}{% if not i.on_auction and not i.in_pmt and not i.torgi %}<span class="muted">препятствий не видно</span>{% endif %}</td>
   </tr>

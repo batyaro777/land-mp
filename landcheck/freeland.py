@@ -7,10 +7,20 @@
 здесь — все участки территории.
 
 Что делаем с участками из НСПД (слой «Земельные участки из ЕГРН»): оставляем публичные
-(муниципальные, государственные, неразграниченные), убираем архивные, земли общего пользования
-и то, что гражданам и бизнесу не передаётся или занято сетями, дорогами, учреждениями (те же
-правила, что в блоке «Свободная земля рядом»). По оставшимся отмечаем: выставлен на аукцион
-(слой НСПД), попадает в проект межевания (может быть распределён), был на торгах (база лотов).
+(муниципальные, государственные) и участки без зарегистрированного права, убираем архивные,
+земли общего пользования и то, что гражданам и бизнесу не передаётся или занято сетями,
+дорогами, учреждениями (те же правила, что в блоке «Свободная земля рядом»). По оставшимся
+отмечаем: выставлен на аукцион (слой НСПД), попадает в проект межевания (может быть
+распределён), был на торгах (база лотов).
+
+Участок без зарегистрированного права — пустая форма собственности в НСПД. Так выглядит
+неразграниченная государственная земля, то есть главное, что здесь ищут: в квартале
+10:20:0060108 (прод, 10.11.2026) из 77 участков 64 частных и 13 без формы, и среди них участок,
+который администрация выставляла на аукцион. Но так же выглядит ранее учтённый надел, чьё право
+возникло до 1998 года и в реестр не внесено, — поэтому такие строки помечены отдельно.
+
+Поиск по кварталу НСПД ведёт по контуру и возвращает и соседей, касающихся границы: оставляем
+только участки с номером этого квартала.
 
 Чего открытые данные не дают: действующую аренду. Поэтому «свободен» здесь значит «по открытым
 данным препятствий нет» — первым шагом в карточке «как оформить» всегда стоит выписка ЕГРН.
@@ -25,15 +35,21 @@ from landcheck.location import (
     HOWTO_AGRI,
     HOWTO_OTHER,
     HOWTO_SETTLEMENT,
+    NO_RIGHT,
+    NOTE_NO_RIGHT,
+    NOTE_NO_RIGHT_PRIOR,
     _get,
-    _is_public,
     _unavailable,
+    auction_cads,
+    is_prior,
+    ownership_class,
 )
 
 MAX_ITEMS = 500
 SOURCE = (
     "НСПД: земельные участки из ЕГРН, участки на аукционе, участки по проектам межевания. "
-    "Аренду открытые данные не показывают — её видно только в выписке ЕГРН"
+    "Аренду и права, возникшие до 1998 года, открытые данные не показывают — их видно только "
+    "в выписке ЕГРН и в администрации"
 )
 RADII_M = (500, 1000, 2000)
 
@@ -76,14 +92,25 @@ def analyze(
     landplots: list[dict[str, Any]],
     auction: list[dict[str, Any]] | None = None,
     pmt: list[dict[str, Any]] | None = None,
+    *,
+    quarter: str | None = None,
 ) -> dict[str, Any]:
-    """Участки территории → публичные без видимых препятствий, со счётчиками по отсеву.
-    Вход — признаки слоёв НСПД как их отдаёт провайдер (`properties.options`, `geometry`)."""
-    on_auction = {_opts(f).get("cad_num") for f in auction or []}
+    """Участки территории → кандидаты без видимых препятствий, со счётчиками по отсеву.
+    Вход — признаки слоёв НСПД как их отдаёт провайдер (`properties.options`, `geometry`).
+    `quarter` — оставить только участки этого квартала (поиск по контуру отдаёт и соседей)."""
+    on_auction = auction_cads(auction)
     pmt_shapes = [g for f in pmt or [] if (g := _shape(f)) is not None]
     seen: set[str] = set()
     items: list[dict[str, Any]] = []
-    counts = {"total": 0, "private": 0, "archived": 0, "common": 0, "unavailable": 0}
+    counts = {
+        "total": 0,
+        "outside": 0,
+        "private": 0,
+        "no_right": 0,
+        "archived": 0,
+        "common": 0,
+        "unavailable": 0,
+    }
     reasons: dict[str, int] = {}
     for f in landplots:
         o = _opts(f)
@@ -91,11 +118,17 @@ def analyze(
         if not cad or cad in seen:
             continue
         seen.add(cad)
+        if quarter and not str(cad).startswith(quarter + ":"):
+            counts["outside"] += 1
+            continue
         counts["total"] += 1
         own = str(_get(o, "ownership_type", default="") or "")
-        if not _is_public(own):
+        own_class = ownership_class(own)
+        if own_class == "private":
             counts["private"] += 1
             continue
+        if own_class == "unregistered":
+            counts["no_right"] += 1
         vri = str(_get(o, "permitted_use_established_by_document", default="") or "")
         status = str(_get(o, "status", default="") or "")
         if "архив" in status.lower():
@@ -127,7 +160,12 @@ def analyze(
                 "group": torgi_scan.vri_group(vri, None, category),
                 "how": howto_key(category),
                 "area_m2": float(area) if isinstance(area, int | float) else None,
-                "ownership": own,
+                "ownership": own or NO_RIGHT,
+                "own_class": own_class,
+                "prior": is_prior(status),
+                "own_note": None
+                if own_class == "public"
+                else (NOTE_NO_RIGHT_PRIOR if is_prior(status) else NOTE_NO_RIGHT),
                 "status": status or None,
                 "address": _get(o, "readable_address"),
                 "cad_cost": float(cost) if isinstance(cost, int | float) else None,
@@ -136,9 +174,21 @@ def analyze(
                 "point": point,
             }
         )
-    items.sort(key=lambda i: (i["how"], -(i["area_m2"] or 0)))
+    # Сначала то, что надёжнее: публичная собственность, затем учтённые без права, затем ранее
+    # учтённые без права (у них может найтись хозяин).
+    items.sort(
+        key=lambda i: (i["how"], i["own_class"] != "public", i["prior"], -(i["area_m2"] or 0))
+    )
     return {
-        "counts": {**counts, "public_free": len(items)},
+        "counts": {
+            **counts,
+            "public_free": len(items),
+            "free_public": sum(1 for i in items if i["own_class"] == "public"),
+            "free_no_right": sum(
+                1 for i in items if i["own_class"] == "unregistered" and not i["prior"]
+            ),
+            "free_prior": sum(1 for i in items if i["own_class"] == "unregistered" and i["prior"]),
+        },
         "reasons": sorted(reasons.items(), key=lambda kv: -kv[1]),
         "items": items[:MAX_ITEMS],
         "truncated": len(items) > MAX_ITEMS,
@@ -154,12 +204,17 @@ def filter_items(
     area_min_m2: float | None = None,
     area_max_m2: float | None = None,
     hide_busy: bool = False,
+    own: str | None = None,
 ) -> list[dict[str, Any]]:
     """Фильтр списка на странице: категория, назначение, площадь; `hide_busy` убирает то, что
-    уже на аукционе, в проекте межевания или сдано с торгов."""
+    уже на аукционе, в проекте межевания или сдано с торгов; `own` — `public` (собственность
+    названа публичной), `no_right` (учтённые без зарегистрированного права), `prior` (ранее
+    учтённые без права)."""
     out = []
     for i in items:
         if how and i.get("how") != how:
+            continue
+        if own and own_kind(i) != own:
             continue
         if group and i.get("group") != group:
             continue
@@ -174,6 +229,21 @@ def filter_items(
             continue
         out.append(i)
     return out
+
+
+def own_kind(item: dict[str, Any]) -> str:
+    """Группа строки для фильтра и подписи: `public`, `no_right`, `prior`. У поисков, сохранённых
+    до 10.11.2026, класса нет — там были только публичные."""
+    if (item.get("own_class") or "public") == "public":
+        return "public"
+    return "prior" if item.get("prior") else "no_right"
+
+
+OWN_KIND_LABEL = {
+    "public": "публичная собственность",
+    "no_right": "право не зарегистрировано",
+    "prior": "ранее учтённые без права",
+}
 
 
 def torgi_note(lot: dict[str, Any]) -> dict[str, Any]:
@@ -220,6 +290,7 @@ XLSX_COLUMNS = (
     "Вид разрешённого использования",
     "Площадь, сот.",
     "Форма собственности",
+    "Что это значит",
     "Кадастровая стоимость, ₽",
     "Адрес",
     "На аукционе (НСПД)",
@@ -237,6 +308,7 @@ def xlsx_rows(items: list[dict[str, Any]]) -> list[list[Any]]:
             i.get("vri"),
             round(i["area_m2"] / 100, 2) if i.get("area_m2") else None,
             i.get("ownership"),
+            i.get("own_note") or "",
             i.get("cad_cost"),
             i.get("address"),
             "да" if i.get("on_auction") else "",
@@ -261,7 +333,7 @@ def to_xlsx(items: list[dict[str, Any]], path: Any, *, title: str = "Свобо�
         cell.alignment = Alignment(wrap_text=True, vertical="top")
     for row in xlsx_rows(items):
         ws.append(row)
-    for col, width in {1: 22, 2: 30, 3: 40, 5: 28, 7: 50, 10: 34, 11: 34}.items():
+    for col, width in {1: 22, 2: 30, 3: 40, 5: 28, 6: 50, 8: 50, 11: 34, 12: 34}.items():
         ws.column_dimensions[ws.cell(row=1, column=col).column_letter].width = width
     ws.freeze_panes = "B2"
     howto = wb.create_sheet("Как оформить")

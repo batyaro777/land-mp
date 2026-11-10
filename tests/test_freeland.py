@@ -93,6 +93,89 @@ def test_analyze_keeps_public_parcels_without_obstacles():
     assert r["items"][0]["cad_num"] == f"{Q}:1"
 
 
+def test_live_nspd_shape_no_registered_right_quarter_only_russian_auction_keys():
+    """Как НСПД отдаёт данные на проде (квартал 10:20:0060108, 10.11.2026): у неразграниченной
+    земли форма собственности пустая; поиск по контуру квартала приносит соседей из других
+    кварталов; слой «на аукционе» называет поля по-русски."""
+    landplots = [
+        _plot(1),  # частный
+        _plot(281, ownership=None, shift=0.01),  # учтённый, права нет — выставлялся на аукцион
+        _plot(262, ownership=None, shift=0.02, cost=300_000.0),
+        _plot(21, ownership=None, status="Ранее учтенный", category="", vri="", shift=0.03),
+        _plot(
+            5, ownership=None, category="Земли лесного фонда", vri="Для ведения лесного хозяйства"
+        ),
+        _plot(6, ownership="Муниципальная собственность", shift=0.04),
+        # соседние кварталы, касаются границы
+        copy.deepcopy(make_payload("40:10:160501:7", ownership=None)["landplot"]),
+        copy.deepcopy(make_payload("40:10:000000:99", ownership=None)["landplot"]),
+    ]
+    auction = [
+        {
+            "type": "Feature",
+            "geometry": None,
+            "properties": {
+                "options": {
+                    "Кадастровый номер": f"{Q}:281",
+                    "Дата торгов": "2026-06-30",
+                    "Начальная цена": 38_000,
+                }
+            },
+        }
+    ]
+    r = freeland.analyze(landplots, auction, [], quarter=Q)
+    c = r["counts"]
+    assert (c["total"], c["outside"], c["private"], c["no_right"]) == (6, 2, 1, 4)
+    assert c["unavailable"] == 1  # лесфонд без формы собственности — не кандидат
+    assert (c["public_free"], c["free_public"], c["free_no_right"], c["free_prior"]) == (4, 1, 2, 1)
+    by = {i["cad_num"]: i for i in r["items"]}
+    assert set(by) == {f"{Q}:281", f"{Q}:262", f"{Q}:21", f"{Q}:6"}
+    lot = by[f"{Q}:281"]
+    assert lot["on_auction"] is True and lot["own_class"] == "unregistered" and not lot["prior"]
+    assert lot["ownership"] == "право не зарегистрировано"
+    assert "неразграниченная государственная земля" in lot["own_note"]
+    old = by[f"{Q}:21"]
+    assert old["prior"] is True and "до 1998 года" in old["own_note"] and old["how"] == "other"
+    assert by[f"{Q}:6"]["own_note"] is None and by[f"{Q}:262"]["on_auction"] is False
+    # порядок: публичная собственность, учтённые без права, ранее учтённые без права
+    kinds = [freeland.own_kind(i) for i in r["items"] if i["how"] == "settlement"]
+    assert kinds == ["public", "no_right", "no_right"]
+    assert [i["cad_num"] for i in freeland.filter_items(r["items"], own="prior")] == [f"{Q}:21"]
+    assert len(freeland.filter_items(r["items"], own="no_right")) == 2
+    assert len(freeland.filter_items(r["items"], own="no_right", hide_busy=True)) == 1
+    # без квартала (поиск вокруг участка) соседи остаются
+    assert freeland.analyze(landplots, auction, [])["counts"]["total"] == 8
+    # поиск, сохранённый до правки: класса нет — это публичные
+    assert freeland.own_kind({"cad_num": "x", "ownership": PUBLIC}) == "public"
+
+
+def test_report_block_counts_unregistered_and_reads_auction_layer():
+    """Блок «Свободная земля рядом» в отчёте: учтённые участки без права — кандидаты, ранее
+    учтённые — нет (там десятки старых наделов); отметка аукциона — по русскому полю слоя."""
+    from landcheck import location
+
+    def neighbor(n: int, **kw) -> dict:
+        f = _plot(n, **kw)
+        f["distance_m"] = float(n)
+        return f
+
+    neighbors = [
+        neighbor(1),
+        neighbor(281, ownership=None),
+        neighbor(21, ownership=None, status="Ранее учтенный"),
+        neighbor(6, ownership="Муниципальная собственность"),
+    ]
+    auction = [{"properties": {"options": {"Кадастровый номер": f"{Q}:281"}}}]
+    fl = location.free_land(f"{Q}:500", neighbors, auction)
+    assert [i["cad_num"] for i in fl["items"]] == [f"{Q}:6", f"{Q}:281"]
+    assert fl["on_auction"] == 1 and fl["items"][1]["on_auction"] is True
+    assert fl["items"][1]["ownership"].startswith("право не зарегистрировано")
+    assert location.auction_cads([{"properties": {"options": {"cad_num": f"{Q}:2"}}}]) == {f"{Q}:2"}
+    # в кэше окружения русские поля слоя аукционов сохраняются
+    slim = location.slim_raw({"nspd": {"auction": auction}})
+    assert location.auction_cads(slim["nspd"]["auction"]) == {f"{Q}:281"}
+
+
 def test_filter_items_and_torgi_note():
     raw = _area()
     items = freeland.analyze(raw["landplots"], raw["auction"], raw["pmt"])["items"]
@@ -141,7 +224,8 @@ def test_xlsx_has_parcels_and_howto_sheet(tmp_path):
     wb = load_workbook(path)
     ws = wb.active
     assert ws.max_row == 5 and ws["A1"].value == "Кадастровый номер" and ws["A2"].value == f"{Q}:1"
-    assert ws["D2"].value == 730.0 and ws["K2"].value.startswith("101-ФЗ")
+    assert ws["D2"].value == 730.0 and ws["L2"].value.startswith("101-ФЗ")
+    assert ws["F1"].value == "Что это значит" and not ws["F2"].value  # публичная — без оговорки
     assert "Как оформить" in wb.sheetnames
     assert "Сельхозземля у муниципалитета" in wb["Как оформить"]["A1"].value
 
@@ -240,7 +324,9 @@ def test_quarter_scan_result_filters_export_and_check(client, monkeypatch):  # n
     url = r.headers["location"]
     assert fake.calls == [{"quarter": Q}]
     page = client.get(url).text
-    assert "участков 9, из них частных 1" in page and "без видимых препятствий: 4" in page
+    assert "участков 9, из них частных 1, без зарегистрированного права 0" in page
+    assert "Кандидатов без видимых препятствий: 4" in page
+    assert "с публичной собственностью 4, без зарегистрированного права 0" in page
     assert "категория не передаётся гражданам и бизнесу — 1" in page
     for cad in (f"{Q}:1", f"{Q}:2", f"{Q}:8", f"{Q}:9"):
         assert cad in page
@@ -310,7 +396,10 @@ def test_scan_around_parcel_and_errors(client, monkeypatch):  # noqa: F811
     # повтор после починки
     monkeypatch.setattr(fv, "_provider", lambda: fake)
     assert client.post(url + "/retry").status_code == 303
-    assert "без видимых препятствий: 4" in client.get(url).text
+    # подставной НСПД отдаёт участки квартала 160500: для квартала 999999 все они — соседи
+    page = client.get(url).text
+    assert "участков 0 (ещё 9 из соседних кварталов касаются границы — не считаем)" in page
+    assert "без видимых препятствий: 0" in page
 
 
 def test_other_users_scan_is_hidden(client, monkeypatch):  # noqa: F811

@@ -102,7 +102,12 @@ def run_scan(scan_id: int, provider=None) -> None:
             raw = provider.fetch_area_raw(center=center, radius_m=radius)
         if raw.get("errors") and not raw.get("landplots"):
             raise RuntimeError("; ".join(raw["errors"])[:300])
-        result = freeland.analyze(raw.get("landplots") or [], raw.get("auction"), raw.get("pmt"))
+        result = freeland.analyze(
+            raw.get("landplots") or [],
+            raw.get("auction"),
+            raw.get("pmt"),
+            quarter=scope if kind == "quarter" else None,
+        )
         result["errors"] = raw.get("errors") or []
         result["layers_truncated"] = raw.get("truncated") or []
         result["center"] = raw.get("center")
@@ -184,6 +189,7 @@ def _filtered(db, scan: LandScan, q) -> list[dict[str, Any]]:
         area_min_m2=amin * 100 if amin else None,
         area_max_m2=amax * 100 if amax else None,
         hide_busy=q.get("free") == "1",
+        own=q.get("own") if q.get("own") in freeland.OWN_KIND_LABEL else None,
     )
 
 
@@ -287,6 +293,8 @@ def free_land_result(request: Request, user: TorgiDep, scan_id: int):
         hows=hows,
         howto=freeland.HOWTO,
         howto_label=freeland.HOWTO_LABEL,
+        own_label=freeland.OWN_KIND_LABEL,
+        own_kinds=sorted({freeland.own_kind(i) for i in (result.get("items") or [])}),
         groups=torgi_scan.GROUPS,
         q=q,
         qs=str(q),
