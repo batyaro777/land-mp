@@ -53,7 +53,7 @@
   <tbody>
   {% for r in rows %}
   <tr>
-    <td><a href="/tools/torgi-scan?region={{ region }}&amp;d={{ r.key }}"><code>{{ r.key }}</code></a>{% if level == 'district' %}<div class="small muted">{{ names.get(r.key, '') }}</div><a class="small" href="/tools/torgi-liquidity?region={{ region }}&amp;level=quarter&amp;d={{ r.key }}">кварталы</a>{% endif %}</td>
+    <td><a href="/tools/torgi-scan?region={{ region }}&amp;d={{ r.key }}"><code>{{ r.key }}</code></a>{% if level == 'district' %}<div class="small muted">{{ names.get(r.key, '') }}</div><a class="small" href="/tools/torgi-liquidity?region={{ region }}&amp;level=quarter&amp;d={{ r.key }}">кварталы</a>{% else %}<br><a class="small" href="/tools/free-land?scope={{ r.key }}" title="Найти в этом квартале публичные участки без видимых препятствий">свободная земля</a>{% endif %}</td>
     <td class="num">{% if r.index is not none %}<span class="badge mini v-{{ 'ok' if r.index >= 55 else ('check' if r.index >= 30 else 'stop') }}">{{ r.index }}</span><div class="small muted">{{ r.label }}</div>{% else %}<span class="muted small">мало данных</span>{% endif %}</td>
     <td class="num">{{ r.closed }}</td><td class="num">{{ r.sold }}</td><td class="num">{{ r.single }}</td>
     <td class="num">{{ r.none }}{% if r.failed_unknown %}<div class="small muted" title="Не состоялись, карточка ещё не прочитана: число заявок неизвестно">+{{ r.failed_unknown }} ?</div>{% endif %}</td>

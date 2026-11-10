@@ -142,6 +142,70 @@ class LiveNspdProvider:
         return payload
 
     # --- окружение участка (модуль «Локация», по запросу из отчёта) ------------------------
+    def fetch_area_raw(
+        self,
+        *,
+        quarter: str | None = None,
+        center: tuple[float, float] | None = None,
+        radius_m: int = 1000,
+        max_features: int = 3000,
+    ) -> dict[str, Any]:
+        """Все участки территории (ТЗ v3, п. 8): кадастровый квартал по номеру или квадрат
+        вокруг точки. Три слоя: участки ЕГРН, участки на аукционе, участки по проектам
+        межевания. Число запросов растёт с площадью — библиотека сама делит контур на плитки.
+        Ошибка шага не роняет остальные: пишется в `errors`."""
+        from pynspd import schemas as pschemas
+        from pynspd.map_types.enums import ThemeId
+
+        from landcheck.location import bbox_polygon
+
+        out: dict[str, Any] = {
+            "quarter": quarter,
+            "center": list(center) if center else None,
+            "radius_m": radius_m if center else None,
+            "landplots": [],
+            "auction": [],
+            "pmt": [],
+            "errors": [],
+            "truncated": [],
+        }
+        nspd = self._client()
+        try:
+            if quarter:
+                feat = nspd.find(quarter, ThemeId.CADASTRAL_DIVISION)
+                if feat is None or feat.geometry is None:
+                    out["errors"].append("квартал не найден в НСПД")
+                    return out
+                contour = feat.geometry.to_shape()
+                if contour.geom_type not in ("Polygon", "MultiPolygon"):
+                    out["errors"].append("у квартала в НСПД нет границ")
+                    return out
+            elif center:
+                contour = bbox_polygon(center[0], center[1], radius_m)
+            else:
+                out["errors"].append("не задана территория")
+                return out
+        except Exception as e:  # noqa: BLE001 — сеть или формат ответа: честно в ошибки
+            out["errors"].append(f"территория: {type(e).__name__}: {e}")
+            return out
+        for key, layer_id in (
+            ("landplots", LANDPLOT_LAYER_ID),
+            ("auction", AUCTION_LAYER_ID),
+            ("pmt", PMT_LAYER_ID),
+        ):
+            layer_def = getattr(pschemas, f"Layer{layer_id}Feature")
+            try:
+                feats = []
+                for hit in nspd.search_in_contour_iter(contour, layer_def, only_intersects=True):
+                    feats.append(hit.model_dump(by_alias=True, mode="json"))
+                    if len(feats) >= max_features:
+                        out["truncated"].append(key)
+                        break
+                out[key] = feats
+            except Exception as e:  # noqa: BLE001
+                out["errors"].append(f"{key}: {type(e).__name__}: {e}")
+        return out
+
     def fetch_location_raw(self, cad_num: str, parcel_geojson: dict[str, Any]) -> dict[str, Any]:
         """ЗОУИТ и проекты межевания в радиусе NSPD_RADIUS_M, соседи в NEIGHBORS_RADIUS_M.
 

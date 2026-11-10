@@ -70,6 +70,7 @@
       <input type="file" name="files" multiple accept=".pdf,.xml,.zip,.sig,.p7s">
       <button class="sm">Сохранить сведения о правах</button>
     </form>
+    {% if err == 'rights_cad' %}<p class="err small">Выписка выдана на другой кадастровый номер — к этому участку не приложена. Загрузите выписку именно на этот участок.</p>{% endif %}
     {% if err == 'rights' %}<p class="err small">В тексте не нашёл раздела о правах, а в файлах — выписки ЕГРН. Вставьте страницу Росреестра целиком или приложите PDF/XML выписки.</p>{% endif %}
   </details>
   {% endif %}

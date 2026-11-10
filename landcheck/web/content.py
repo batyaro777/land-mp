@@ -394,6 +394,17 @@ def discrepancies(item: dict[str, Any]) -> list[dict[str, str]]:
                     f"({r.get('source_label')}) правообладатель — {who}",
                 }
             )
+    doc = item.get("rights_doc")
+    if doc:
+        from landcheck import egrn
+
+        for row in egrn.land_diff(
+            doc,
+            area_m2=p.get("area_m2"),
+            category=p.get("category"),
+            permitted_use=p.get("permitted_use"),
+        ):
+            out.append({"what": f"выписка ↔ НСПД, {row['what']}", "text": row["text"]})
     for row in (item.get("gpzu") or {}).get("compare") or []:
         if row.get("level") != "ок" and row.get("field") in ("Терзона", "ВРИ", "ЗОУИТ"):
             out.append({"what": f"ГПЗУ ↔ НСПД, {row['field'].lower()}", "text": row["text"]})

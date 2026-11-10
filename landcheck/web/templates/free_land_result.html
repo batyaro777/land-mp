@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Свободная земля — {{ scan.scope }}{% endblock %}
+{% block head %}{% include "_leaflet.html" %}{% endblock %}
+{% block content %}
+{% set tab = 'free' %}
+<h2>Свободная земля: <code>{{ scan.scope }}</code>{% if scan.kind == 'around' %} <small class="muted">± {{ scan.radius_m }} м</small>{% endif %} <span class="badge mini">внутренний режим</span></h2>
+{% include "_torgi_nav.html" %}
+<p class="small"><a href="/tools/free-land">← к поискам</a></p>
+{% if state in ('queued', 'running') %}
+<article aria-busy="true" hx-get="/tools/free-land/{{ scan.id }}" hx-trigger="every 10s" hx-target="body" hx-swap="outerHTML">
+  Ищем участки на территории: запрашиваем слои карты НСПД. Обычно это от одной до нескольких минут, страница обновится сама.
+</article>
+{% elif state == 'interrupted' %}
+<article><p class="warn">Поиск прервался при перезапуске сервиса.</p>
+  <form method="post" action="/tools/free-land/{{ scan.id }}/retry"><button class="sm">Запустить снова</button></form></article>
+{% elif state == 'error' %}
+<article><p class="err">Не получилось: {{ scan.error }}.</p>
+  <p class="small muted">Если квартал не нашёлся — задайте номер любого участка из этого места: поиск пойдёт вокруг него.</p>
+  <form method="post" action="/tools/free-land/{{ scan.id }}/retry"><button class="sm">Повторить</button></form></article>
+{% else %}
+{% set c = result.counts %}
+<p class="small"><strong>На территории:</strong> участков {{ c.total }}, из них частных {{ c.private }}, архивных {{ c.archived }}, общего пользования {{ c.common }}, не передаётся или занято {{ c.unavailable }}{% if result.reasons %} ({% for why, n in result.reasons %}{{ why }} — {{ n }}{{ ', ' if not loop.last else '' }}{% endfor %}){% endif %}. <strong>Публичных без видимых препятствий: {{ c.public_free }}</strong>{% if result.truncated %} (показаны первые 500){% endif %}.{% if result.errors %} <span class="warn">Часть слоёв не ответила: {{ result.errors|join('; ')|truncate(160) }}.</span>{% endif %}{% if result.layers_truncated %} <span class="warn">Территория большая: слои прочитаны не целиком — сузьте поиск до квартала.</span>{% endif %}</p>
+
+<form method="get" class="grid no-print">
+  <label>Категория
+    <select name="how" onchange="this.form.submit()">
+      <option value="">любая</option>
+      {% for h in hows %}<option value="{{ h }}"{% if q.get('how') == h %} selected{% endif %}>{{ howto_label[h] }}</option>{% endfor %}
+    </select></label>
+  <label>Назначение
+    <select name="group" onchange="this.form.submit()">
+      <option value="">любое</option>
+      {% for key, label in groups.items() %}<option value="{{ key }}"{% if q.get('group') == key %} selected{% endif %}>{{ label }}</option>{% endfor %}
+    </select></label>
+  <label>Площадь от, сот. <input name="amin" inputmode="decimal" value="{{ q.get('amin') or '' }}"></label>
+  <label>до, сот. <input name="amax" inputmode="decimal" value="{{ q.get('amax') or '' }}"></label>
+  <label>&nbsp;<button class="sm outline">Показать</button></label>
+  <input type="hidden" name="free" value="{{ '1' if q.get('free') == '1' else '' }}">
+</form>
+<p class="small no-print">{% if q.get('free') == '1' %}Показано только то, по чему препятствий не видно. <a href="?{{ qs|replace('free=1', 'free=') }}">Показать все</a>{% else %}<a href="?{{ qs ~ '&' if qs else '' }}free=1">Скрыть участки на аукционе, в проекте межевания и ушедшие с торгов</a>{% endif %}</p>
+
+{% if items %}
+{% if points %}
+<details class="torgi-map-wrap">
+  <summary class="small">Карта: {{ points|length }} участков с границами</summary>
+  <div id="torgi-map"></div>
+</details>
+{% endif %}
+<form method="post" action="/tools/free-land/{{ scan.id }}/check">
+<div class="table-wrap">
+<table class="results torgi">
+  <thead><tr><th></th><th>Участок</th><th>Категория · назначение</th><th class="num">Площадь</th><th>Форма собственности</th><th class="num">Кадастровая стоимость</th><th>Отметки</th></tr></thead>
+  <tbody>
+  {% for i in items %}
+  <tr>
+    <td><input type="checkbox" name="cad" value="{{ i.cad_num }}" aria-label="Выбрать участок"></td>
+    <td class="cad"><a href="/single?cad_num={{ i.cad_num }}&amp;purpose=municipal"><code>{{ i.cad_num }}</code></a><div class="small muted">{{ (i.address or '')|short_address|truncate(70) }}</div></td>
+    <td class="small">{{ (i.category or '—')|short_category }}<div class="muted">{{ (i.vri or '')|truncate(70) }}</div></td>
+    <td class="num">{% if i.area_m2 %}{{ (i.area_m2 / 100)|round(1) }} сот.{% else %}—{% endif %}</td>
+    <td class="small">{{ i.ownership }}</td>
+    <td class="num">{{ i.cad_cost|money }}</td>
+    <td class="small">{% if i.on_auction %}<span class="badge mini v-check" title="Слой НСПД «участки, выставленные на аукцион»">на аукционе</span> {% endif %}{% if i.in_pmt %}<span class="badge mini v-check" title="Пересекается с участком по проекту межевания: может быть уже распределён">проект межевания</span> {% endif %}{% if i.torgi %}<a href="/tools/torgi-lot/{{ i.torgi.lot_id }}" class="badge mini {{ 'v-stop' if i.torgi.busy else '' }}" title="Последний лот участка в базе торгов{% if i.torgi.date %}, {{ i.torgi.date }}{% endif %}">{{ i.torgi.text }}</a>{% endif %}{% if not i.on_auction and not i.in_pmt and not i.torgi %}<span class="muted">препятствий не видно</span>{% endif %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<div class="toolbar no-print">
+  <button class="sm" title="Обычная проверка с целью «получить участок у муниципалитета»: права, зоны, документы администрации">Проверить отмеченные участки полностью</button>
+  <a href="/tools/free-land/{{ scan.id }}/export.xlsx{% if qs %}?{{ qs }}{% endif %}" role="button" class="outline sm">Скачать XLSX</a>
+  <span class="muted small">до 30 участков за раз</span>
+</div>
+</form>
+{% if points %}
+<script>
+document.querySelector('.torgi-map-wrap').addEventListener('toggle', function (e) {
+  if (!e.target.open || window._freeMap) return;
+  const pts = {{ points|tojson }};
+  const map = L.map('torgi-map', { scrollWheelZoom: false });
+  window._freeMap = map;
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+  const marks = pts.map(function (p) {
+    const link = document.createElement('a');
+    link.href = '/single?cad_num=' + encodeURIComponent(p.cad) + '&purpose=municipal';
+    link.textContent = p.cad;
+    return L.circleMarker([p.lat, p.lon], { radius: 7, color: p.busy ? '#d59b00' : '#1f6b2a', fillOpacity: 0.7 }).bindPopup(link).addTo(map);
+  });
+  if (marks.length === 1) { map.setView([pts[0].lat, pts[0].lon], 15); }
+  else { map.fitBounds(L.featureGroup(marks).getBounds().pad(0.15)); }
+});
+</script>
+{% endif %}
+{% else %}
+<article><p>{% if c.public_free %}Под выбранные условия ничего не подошло — снимите часть фильтров.{% else %}Публичных участков без видимых препятствий на этой территории нет.{% endif %}</p></article>
+{% endif %}
+
+{% for h in hows %}{% set card = howto[h] %}
+<details{% if loop.first %} open{% endif %}>
+  <summary><strong>{{ card.title }}</strong></summary>
+  <ol class="small">{% for step in card.steps %}<li>{{ step }}</li>{% endfor %}</ol>
+  <p class="muted small">Основание: {{ card.source|lawlinks }}</p>
+</details>
+{% endfor %}
+<p class="muted small">{{ result.source }}. Поиск от {{ scan.finished_at|dt if scan.finished_at else scan.created_at|dt }}.</p>
+{% endif %}
+{% endblock %}

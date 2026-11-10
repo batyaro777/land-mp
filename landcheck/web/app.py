@@ -191,9 +191,11 @@ def create_app() -> FastAPI:
 
     app.include_router(api_router)
     from landcheck.web import torgi_sync
+    from landcheck.web.freeland_views import router as freeland_router
     from landcheck.web.torgi_views import router as torgi_router
 
     app.include_router(torgi_router)
+    app.include_router(freeland_router)
     resumed = jobs.resume_pending()
     if resumed:
         log.warning("возобновлено незавершённых проверок после рестарта: %s", resumed)
@@ -1134,13 +1136,24 @@ async def report_rights(
         key = (ex.source == "xml", ex.filled)
         if best is None or key > best[0]:
             best = (key, ex)
+    back = f"/checks/{check_id}/items/{cad_num}"
+    doc_facts: dict[str, Any] | None = None
     if best is not None:
-        parsed.append(rights.from_extract(best[1]))
+        ex = best[1]
+        if ex.cad_num and ex.cad_num != cad_num:
+            # выписка на другой участок: чужие права к этому отчёту не прикладываем
+            return RedirectResponse(back + "?err=rights_cad#rights", status_code=303)
+        parsed.append(rights.from_extract(ex))
+        # факты о самом участке из выписки (без сведений о людях) — для строки «данные расходятся»
+        doc_facts = {
+            "area_m2": ex.area_m2,
+            "category": ex.category,
+            "permitted_use": ex.permitted_use,
+        }
     if text.strip():
         lk = rights.parse_lk_text(text)
         if lk.parsed:
             parsed.append(lk)
-    back = f"/checks/{check_id}/items/{cad_num}"
     if not parsed:
         return RedirectResponse(back + "?err=rights#rights", status_code=303)
     with session() as db:
@@ -1155,6 +1168,8 @@ async def report_rights(
         data = dict(item.data)
         for r in parsed:
             data = rights.apply_to_item(data, r, purpose)
+        if doc_facts is not None:
+            data["rights_doc"] = doc_facts
         try:
             data["score"] = score_of(result_from_dict(data), request_from_dict(check.request))
         except Exception as exc:  # noqa: BLE001 — оценка не должна ломать сохранение

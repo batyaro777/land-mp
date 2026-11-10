@@ -487,6 +487,24 @@ class TorgiDeal(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class LandScan(Base):
+    """Поиск свободной публичной земли на территории (ТЗ v3, п. 8): квартал или окрестность
+    участка. Результат — список участков с отметками, хранится целиком в `result`."""
+
+    __tablename__ = "land_scans"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    scope: Mapped[str] = mapped_column(String(40))  # номер квартала или участка
+    kind: Mapped[str] = mapped_column(String(8), default="quarter")  # quarter | around
+    radius_m: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    state: Mapped[str] = mapped_column(String(12), default="queued")  # queued|running|done|error
+    result: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 _engine = None
 SessionLocal: sessionmaker[Session] | None = None
 

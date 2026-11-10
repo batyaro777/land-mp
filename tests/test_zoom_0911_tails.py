@@ -241,3 +241,90 @@ def test_listing_without_borders_has_no_point_and_no_map(client):  # noqa: F811
 
     with session() as db:
         assert db.get(Listing, lid).data["point"] is None
+
+
+# --- ТЗ v3, п. 6: «данные расходятся» — выписка ЕГРН ↔ НСПД по самому участку --------------
+def test_land_diff_area_category_vri():
+    from landcheck import egrn
+
+    same = {
+        "area_m2": 1010.0,
+        "category": "Земли населённых пунктов",
+        "permitted_use": "для индивидуального жилищного строительства",
+    }
+    nspd = dict(
+        area_m2=1000.0,
+        category="Земли населенных пунктов",
+        permitted_use="Для индивидуального жилищного строительства",
+    )
+    assert egrn.land_diff(same, **nspd) == []  # 1 % по площади и «ё» — не расхождение
+    other = {
+        "area_m2": 1500.0,
+        "category": "Земли сельскохозяйственного назначения",
+        "permitted_use": "Для сельскохозяйственного производства",
+    }
+    rows = egrn.land_diff(other, **nspd)
+    assert [r["what"] for r in rows] == [
+        "площадь",
+        "категория земли",
+        "вид разрешённого использования",
+    ]
+    assert "в выписке 1 500 м², по НСПД 1 000 м² (разница 33%)" in rows[0]["text"]
+    assert egrn.land_diff({"area_m2": None, "category": None, "permitted_use": None}, **nspd) == []
+
+
+def _check_item(client) -> str:  # noqa: F811
+    _register(client, "r@example.com", role="broker")
+    url = client.post("/checks", data={"numbers": CAD}).headers["location"]
+    return f"{url}/items/{CAD}"
+
+
+def _upload(client, item: str, xml: bytes):  # noqa: F811
+    import io
+
+    return client.post(
+        item + "/rights", files=[("files", ("egrn.xml", io.BytesIO(xml), "application/xml"))]
+    )
+
+
+def test_report_shows_extract_vs_nspd_discrepancy(client):  # noqa: F811
+    from tests.test_egrn_xml import build
+
+    item = _check_item(client)
+    # выписка сходится с НСПД — строки «данные расходятся» нет
+    assert _upload(client, item, build()).headers["location"].endswith("#rights")
+    assert "Данные расходятся" not in client.get(item).text
+    # в выписке другая категория и ВРИ, а площадь 1 200 м² против 1 000 м² в НСПД
+    xml = build(
+        category="Земли сельскохозяйственного назначения",
+        vri="Для сельскохозяйственного производства",
+    )
+    xml = xml.replace(b"<area><value>1000</value>", b"<area><value>1200</value>")
+    assert _upload(client, item, xml).status_code == 303
+    page = client.get(item).text
+    assert "Данные расходятся" in page
+    assert "Выписка ↔ НСПД, площадь" in page and "в выписке 1 200 м², по НСПД 1 000 м²" in page
+    assert "Выписка ↔ НСПД, категория земли" in page
+    assert "Выписка ↔ НСПД, вид разрешённого использования" in page
+    from landcheck.web.db import CheckItem, session
+
+    with session() as db:
+        doc = db.scalar(select(CheckItem)).data["rights_doc"]
+        assert set(doc) == {"area_m2", "category", "permitted_use"}  # людей в фактах нет
+
+
+def test_extract_for_another_parcel_is_rejected(client):  # noqa: F811
+    from tests.test_egrn_xml import build
+
+    item = _check_item(client)
+    xml = build().replace(b"<cad_number>50:09:0060202:101", b"<cad_number>50:09:0060202:777")
+    r = _upload(client, item, xml)
+    assert r.status_code == 303 and r.headers["location"].endswith("?err=rights_cad#rights")
+    page = client.get(r.headers["location"]).text
+    assert "Выписка выдана на другой кадастровый номер" in page
+    from landcheck.web.db import CheckItem, session
+
+    with session() as db:
+        data = db.scalar(select(CheckItem)).data
+        assert "rights_doc" not in data  # чужие права к отчёту не приложены
+        assert (data.get("rights") or {}).get("source") in (None, "nspd")

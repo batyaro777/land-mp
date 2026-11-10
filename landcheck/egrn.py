@@ -503,6 +503,55 @@ def _land_items(ex: Extract, category: str | None, permitted_use: str | None) ->
     return out
 
 
+AREA_TOLERANCE = 0.03  # расхождение площади документа и НСПД, которое считаем опиской
+
+
+def land_diff(
+    doc: dict[str, Any],
+    *,
+    area_m2: float | None,
+    category: str | None,
+    permitted_use: str | None,
+) -> list[dict[str, str]]:
+    """Где выписка ЕГРН расходится с НСПД по самому участку: площадь, категория, ВРИ (ТЗ v3,
+    п. 6 — «данные расходятся»). `doc` — факты из выписки без сведений о людях: `area_m2`,
+    `category`, `permitted_use`. Пустое с любой стороны не сравниваем."""
+    from landcheck.listing import normalize_category
+
+    out: list[dict[str, str]] = []
+    d_area = doc.get("area_m2")
+    if d_area and area_m2:
+        diff = abs(d_area - area_m2) / max(d_area, area_m2)
+        if diff > AREA_TOLERANCE:
+
+            def m2(v: float) -> str:
+                return f"{v:,.0f}".replace(",", " ")
+
+            out.append(
+                {
+                    "what": "площадь",
+                    "text": f"в выписке {m2(d_area)} м², по НСПД {m2(area_m2)} м² "
+                    f"(разница {diff:.0%}) — уточните, какая запись свежее",
+                }
+            )
+    d_cat = doc.get("category")
+    if d_cat and category:
+        a, b = normalize_category(d_cat), normalize_category(category)
+        if a and b and _fold(a) != _fold(b):
+            out.append(
+                {"what": "категория земли", "text": f"в выписке «{d_cat}», по НСПД «{category}»"}
+            )
+    d_vri = doc.get("permitted_use")
+    if d_vri and permitted_use and not _similar(d_vri, permitted_use):
+        out.append(
+            {
+                "what": "вид разрешённого использования",
+                "text": f"в выписке «{d_vri}», по НСПД «{permitted_use}»",
+            }
+        )
+    return out
+
+
 def _fold(s: str) -> str:
     return re.sub(r"\s+", " ", s.lower().replace("ё", "е")).strip()
 
