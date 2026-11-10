@@ -57,6 +57,16 @@ ROLES: dict[str, str] = {
 # код приглашения с флагом --admin или `landcheck admin <email>`: видит всю картину целиком.
 PUBLIC_ROLES: tuple[str, ...] = ("buyer", "seller", "broker")
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+ENTITIES: dict[str, str] = {"person": "Физическое лицо", "company": "Организация или ИП"}
+# Вид организации → (название, роль в кабинете по умолчанию). Роль можно сменить в меню.
+ORG_KINDS: dict[str, tuple[str, str]] = {
+    "agency": ("Агентство недвижимости, брокер", "broker"),
+    "developer": ("Застройщик, девелопер, владелец земли", "seller"),
+    "investor": ("Инвестор, фонд", "buyer"),
+    "agro": ("Сельхозпредприятие, КФХ", "buyer"),
+    "other": ("Другая организация", "broker"),
+}
+INN_RE = re.compile(r"^(\d{10}|\d{12})$")
 MIN_PASSWORD = 8
 
 
@@ -90,12 +100,30 @@ class User(Base):
     test_mode: Mapped[bool] = mapped_column(default=False, server_default="0")
     # Регион интереса (зум 09.11, Влад): витрина и поиск открываются по нему, а не пустыми.
     region: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # Инструменты торгов (анализатор, калькулятор, ликвидность) — команде без прав
+    # администратора: включает админ на странице пользователей (решение зума 09.11).
+    pro_tools: Mapped[bool] = mapped_column(default=False, server_default="0")
+    # Физлицо или юрлицо/ИП (зум 09.11, Влад: «сначала кто ты, потом роль»): у организации —
+    # вид деятельности и ИНН (необязательный).
+    entity: Mapped[str] = mapped_column(String(8), default="person", server_default="person")
+    org_kind: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    inn: Mapped[str | None] = mapped_column(String(12), nullable=True)
 
     checks: Mapped[list[Check]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
     @property
     def role_label(self) -> str:
         return ROLES.get(self.role or "broker", "Брокер")
+
+    @property
+    def can_torgi(self) -> bool:
+        return bool(self.is_admin or self.pro_tools)
+
+    @property
+    def org_label(self) -> str | None:
+        if self.entity != "company":
+            return None
+        return ORG_KINDS.get(self.org_kind or "other", ORG_KINDS["other"])[0]
 
 
 class Invite(Base):
@@ -317,6 +345,148 @@ class Favorite(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class TorgiLot(Base):
+    """Лот torgi.gov.ru по земле (анализатор торгов; ТЗ v3, п. 9): идущие и завершённые за год.
+    Одна строка на лот; данные поиска дополняются карточкой (итог, заявки, шаг, ГПЗУ) и
+    сведениями НСПД (кадастровая стоимость, точка на карте). Имён участников нет."""
+
+    __tablename__ = "torgi_lots"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    region: Mapped[str | None] = mapped_column(String(2), index=True, nullable=True)
+    district: Mapped[str | None] = mapped_column(String(8), index=True, nullable=True)
+    quarter: Mapped[str | None] = mapped_column(String(24), index=True, nullable=True)
+    cad_num: Mapped[str | None] = mapped_column(String(40), index=True, nullable=True)
+    kind: Mapped[str] = mapped_column(String(8), default="sale")
+    form: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    bidd_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    bidd_type_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    status: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
+    area_m2: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_start: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_step: Mapped[float | None] = mapped_column(Float, nullable=True)
+    deposit: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_fin: Mapped[float | None] = mapped_column(Float, nullable=True)
+    published: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    bidd_end: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    auction_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    vri: Mapped[str | None] = mapped_column(String(400), nullable=True)
+    vri_group: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    category: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    address: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    notice: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    applied: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    admitted: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    second_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    winner_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    has_gpzu: Mapped[bool | None] = mapped_column(nullable=True)
+    annulled: Mapped[bool] = mapped_column(default=False)
+    stopped: Mapped[bool] = mapped_column(default=False)
+    appeals: Mapped[bool] = mapped_column(default=False)
+    cad_cost: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lon: Mapped[float | None] = mapped_column(Float, nullable=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    card_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    nspd_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    FIELDS = (
+        "id region district quarter cad_num kind form bidd_type bidd_type_name status area_m2 "
+        "price_start price_step deposit price_fin published bidd_end auction_date vri vri_group "
+        "category address name notice applied admitted second_price winner_type has_gpzu "
+        "annulled stopped appeals cad_cost lat lon"
+    ).split()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {f: getattr(self, f) for f in self.FIELDS}
+
+
+class TorgiSync(Base):
+    """Состояние сбора торгов по региону: фаза, прогресс, когда собрано, ошибка."""
+
+    __tablename__ = "torgi_sync"
+
+    region: Mapped[str] = mapped_column(String(2), primary_key=True)
+    state: Mapped[str] = mapped_column(String(12), default="idle")  # idle|queued|running|error
+    phase: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    progress: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    backfill_done: Mapped[bool] = mapped_column(default=False)
+    auto: Mapped[bool] = mapped_column(default=True)  # пересобирать раз в сутки
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    stats: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class TorgiMarket(Base):
+    """Слой рынка: цена перепродажи за сотку по кварталу или району (как полигоны эксперта в
+    Google My Maps: «240 — край по торгам, рынок 320–350») и срок экспозиции. Источник —
+    ручной ввод, свои сделки или объявления из поиска."""
+
+    __tablename__ = "torgi_market"
+    __table_args__ = (
+        UniqueConstraint("scope", "kind", "vri_group", "source", name="uq_torgi_market"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    scope: Mapped[str] = mapped_column(String(24), index=True)  # 40:13 или 40:13:120101
+    kind: Mapped[str] = mapped_column(String(8), default="sale")  # sale | rent (переуступка)
+    vri_group: Mapped[str] = mapped_column(String(12), default="any")
+    price_min: Mapped[float | None] = mapped_column(Float, nullable=True)  # ₽ за сотку
+    price_mid: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_max: Mapped[float | None] = mapped_column(Float, nullable=True)
+    exposure_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    liquid: Mapped[str | None] = mapped_column(String(10), nullable=True)  # liquid|illiquid
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(String(8), default="manual")  # manual|deals|ads
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "scope": self.scope,
+            "kind": self.kind,
+            "vri_group": self.vri_group,
+            "price_min": self.price_min,
+            "price_mid": self.price_mid,
+            "price_max": self.price_max,
+            "exposure_days": self.exposure_days,
+            "liquid": self.liquid,
+            "note": self.note,
+            "source": self.source,
+            "updated_at": self.updated_at,
+        }
+
+
+class TorgiDeal(Base):
+    """Журнал своих сделок с торгов (слой эксперта «Моя переуступка прав»): за сколько взяли,
+    за сколько выставили и продали, сколько дней ушло. Из закрытых сделок считается
+    фактическая доходность и срок экспозиции района (ТЗ v3, п. 9, этапы 2–3)."""
+
+    __tablename__ = "torgi_deals"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    cad_num: Mapped[str] = mapped_column(String(40), index=True)
+    district: Mapped[str | None] = mapped_column(String(8), index=True, nullable=True)
+    kind: Mapped[str] = mapped_column(String(8), default="sale")
+    vri_group: Mapped[str] = mapped_column(String(12), default="any")
+    area_m2: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lot_url: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    bought_at: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    buy_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    extra_costs: Mapped[float | None] = mapped_column(Float, nullable=True)
+    listed_at: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    list_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sold_at: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    sell_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 _engine = None
 SessionLocal: sessionmaker[Session] | None = None
 
@@ -352,6 +522,10 @@ _NEW_COLUMNS: dict[str, dict[str, str]] = {
         "api_key": "VARCHAR(64)",
         "test_mode": "BOOLEAN NOT NULL DEFAULT 0",
         "region": "VARCHAR(120)",
+        "pro_tools": "BOOLEAN NOT NULL DEFAULT 0",
+        "entity": "VARCHAR(8) NOT NULL DEFAULT 'person'",
+        "org_kind": "VARCHAR(16)",
+        "inn": "VARCHAR(12)",
     },
     "invites": {"role": "VARCHAR(16)"},
     "watches": {"docs": "JSON", "docs_checked_at": "DATETIME"},

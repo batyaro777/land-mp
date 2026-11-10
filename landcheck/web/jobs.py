@@ -415,6 +415,12 @@ def fetch_auctions(cad_num: str, *, refresh: bool = False) -> dict[str, Any]:
         cached = cached_auctions(cad_num)
         if cached is not None:
             return cached
+    # Регион собран анализатором торгов — сводка района из базы, без обхода сайта.
+    from landcheck.web import torgi_sync
+
+    stored = torgi_sync.auctions_from_store(cad_num)
+    if stored is not None:
+        return stored
     result = torgi.nearby_auctions(cad_num)
     if not result.get("error"):
         cache = ParcelCache(settings.cache_path, ttl_days=settings.torgi_ttl_days)

@@ -186,10 +186,18 @@ def create_app() -> FastAPI:
     from landcheck.web.api import router as api_router
 
     app.include_router(api_router)
+    from landcheck.web import torgi_sync
+    from landcheck.web.torgi_views import router as torgi_router
+
+    app.include_router(torgi_router)
     resumed = jobs.resume_pending()
     if resumed:
         log.warning("возобновлено незавершённых проверок после рестарта: %s", resumed)
     jobs.start_watch_loop()
+    regions = torgi_sync.resume_interrupted()
+    if regions:
+        log.warning("возобновлён сбор торгов после рестарта: %s", ", ".join(regions))
+    torgi_sync.start_auto_loop()
     return app
 
 
@@ -1341,8 +1349,9 @@ def report_location(request: Request, user: UserDep, check_id: int, cad_num: str
 def _auctions_for(
     db, item: CheckItem, user: User, cad_num: str, refresh: bool
 ) -> dict[str, Any] | None:
-    """Сводка торгов для админа: из данных строки / кэша, иначе фоновый сбор и заглушка."""
-    if not user.is_admin:
+    """Сводка торгов (админ и аккаунты с доступом к торгам): из данных строки / кэша, иначе
+    фоновый сбор и заглушка."""
+    if not user.can_torgi:
         return None
     data = item.data or {}
     auctions = data.get("auctions")
@@ -1361,8 +1370,8 @@ def _auctions_for(
 
 @router.get("/checks/{check_id}/items/{cad_num}/auctions", response_class=HTMLResponse)
 def report_auctions(request: Request, user: UserDep, check_id: int, cad_num: str, refresh: int = 0):
-    """Блок «Торги рядом за год» (HTMX-опрос, пока фоновый сбор не закончил; только админу)."""
-    if not user.is_admin:
+    """Блок «Торги рядом за год» (HTMX-опрос, пока фоновый сбор не закончил; внутренний режим)."""
+    if not user.can_torgi:
         raise HTTPException(404)
     with session() as db:
         check = _own_check(db, user, check_id)
@@ -1386,7 +1395,7 @@ def report_auctions(request: Request, user: UserDep, check_id: int, cad_num: str
 def _torgi_calc_page(request: Request, user: User, raw: dict[str, Any], **ctx: Any) -> HTMLResponse:
     from landcheck import torgi_calc
 
-    if not user.is_admin:
+    if not user.can_torgi:
         raise HTTPException(404)
     result = torgi_calc.compute(raw)
     return render(request, "torgi_calc.html", calc=result, raw=raw, user=user, **ctx)
@@ -1408,7 +1417,7 @@ def report_torgi_calc(request: Request, user: UserDep, check_id: int, cad_num: s
     """
     from landcheck import torgi_calc
 
-    if not user.is_admin:
+    if not user.can_torgi:
         raise HTTPException(404)
     with session() as db:
         check = _own_check(db, user, check_id)
@@ -2952,6 +2961,18 @@ def admin_user_test_mode(admin: AdminDep, user_id: int, action: Annotated[str, F
         if u is None:
             raise HTTPException(404)
         set_test_mode(db, u, on=action != "off")
+    return RedirectResponse("/admin/users", status_code=303)
+
+
+@router.post("/admin/users/{user_id}/pro-tools")
+def admin_user_pro_tools(admin: AdminDep, user_id: int, action: Annotated[str, Form()] = "on"):
+    """Доступ к инструментам торгов (анализатор, ликвидность, калькулятор) без прав админа."""
+    with session() as db:
+        target = db.get(User, user_id)
+        if target is None:
+            raise HTTPException(404)
+        target.pro_tools = action != "off"
+        db.commit()
     return RedirectResponse("/admin/users", status_code=303)
 
 

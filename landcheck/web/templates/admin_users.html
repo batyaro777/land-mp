@@ -6,12 +6,12 @@
   <p>Все аккаунты системы: роль, контакты, активность, кто кого привёл. Видно только администратору.</p>
 </hgroup>
 <table class="small">
-  <thead><tr><th>№</th><th>Имя / бренд</th><th>Роль</th><th>Email</th><th>Контакт</th><th>Зарегистрирован</th><th>Как вошёл</th><th>Проверок</th><th>Объявлений</th><th>Запросов</th><th>Привёл</th><th>Тест</th></tr></thead>
+  <thead><tr><th>№</th><th>Имя / бренд</th><th>Роль</th><th>Email</th><th>Контакт</th><th>Зарегистрирован</th><th>Как вошёл</th><th>Проверок</th><th>Объявлений</th><th>Запросов</th><th>Привёл</th><th>Тест</th><th>Торги</th></tr></thead>
   <tbody>
   {% for u in users %}
   <tr>
     <td>{{ u.id }}</td>
-    <td>{{ u.brand or u.name }}{% if u.brand and u.brand != u.name %} <span class="muted">({{ u.name }})</span>{% endif %}</td>
+    <td>{{ u.brand or u.name }}{% if u.brand and u.brand != u.name %} <span class="muted">({{ u.name }})</span>{% endif %}{% if u.org_label %}<div class="muted">{{ u.org_label }}{% if u.inn %} · ИНН {{ u.inn }}{% endif %}</div>{% endif %}</td>
     <td>{{ u.role_label|lower }}{% if u.is_admin and u.role != 'admin' %} · <span class="badge">админ</span>{% endif %}</td>
     <td>{{ u.email or '—' }}</td>
     <td>{{ u.contact or '—' }}</td>
@@ -22,9 +22,10 @@
     <td>{{ requests.get(u.id, 0) }}</td>
     <td>{{ referred.get(u.id, 0) }}</td>
     <td><form method="post" action="/admin/users/{{ u.id }}/test-mode" class="inline">{% if u.test_mode %}<input type="hidden" name="action" value="off"><button class="outline sm" title="Тестовый режим: публикует объявления без проверки права со статусом «тест». Нажмите, чтобы выключить.">тест ✓</button>{% else %}<input type="hidden" name="action" value="on"><button class="outline secondary sm" title="Включить тестовый режим: объявления без проверки права, статус «тест», на витрине только для админов и тестовых аккаунтов.">выкл</button>{% endif %}</form></td>
+    <td>{% if u.is_admin %}<span class="muted" title="Администратору инструменты торгов доступны всегда">админ</span>{% else %}<form method="post" action="/admin/users/{{ u.id }}/pro-tools" class="inline">{% if u.pro_tools %}<input type="hidden" name="action" value="off"><button class="outline sm" title="Доступ к анализатору торгов, ликвидности, калькулятору и блокам торгов в отчёте. Нажмите, чтобы выключить.">торги ✓</button>{% else %}<input type="hidden" name="action" value="on"><button class="outline secondary sm" title="Открыть инструменты торгов этому аккаунту (внутренний режим для команды).">выкл</button>{% endif %}</form>{% endif %}</td>
   </tr>
   {% endfor %}
   </tbody>
 </table>
-<p class="small muted">Права администратора выдаются только из командной строки сервера: <code>landcheck admin &lt;email&gt;</code> или код приглашения <code>landcheck invite --admin</code>. Тестовый режим — кнопкой в колонке «Тест» или <code>landcheck test-mode &lt;email&gt;</code>: объявления такого аккаунта публикуются без проверки права со статусом «тест» и видны на витрине только администраторам и тестовым аккаунтам.</p>
+<p class="small muted">Права администратора выдаются только из командной строки сервера: <code>landcheck admin &lt;email&gt;</code> или код приглашения <code>landcheck invite --admin</code>. Тестовый режим — кнопкой в колонке «Тест» или <code>landcheck test-mode &lt;email&gt;</code>: объявления такого аккаунта публикуются без проверки права со статусом «тест» и видны на витрине только администраторам и тестовым аккаунтам. Колонка «Торги» открывает аккаунту анализатор торгов, ликвидность, калькулятор входа и блоки торгов в отчёте — без прав администратора.</p>
 {% endblock %}

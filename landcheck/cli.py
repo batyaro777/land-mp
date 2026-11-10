@@ -565,5 +565,91 @@ def test_mode(
         print(f"{user.id} {user.name} ({who_s}): test_mode={user.test_mode}")
 
 
+@app.command("pro-tools")
+def pro_tools(
+    who: Annotated[str, typer.Argument(help="email или id пользователя")],
+    off: Annotated[bool, typer.Option("--off", help="Закрыть доступ")] = False,
+):
+    """Доступ к инструментам торгов (анализатор, ликвидность, калькулятор, блоки торгов в
+    отчёте) без прав администратора — для команды."""
+    from sqlalchemy import select
+
+    from landcheck.web.config import settings
+    from landcheck.web.db import User, init_db, normalize_email, session
+
+    init_db(settings.db_path)
+    with session() as db:
+        user = (
+            db.get(User, int(who))
+            if who.isdigit()
+            else db.scalar(select(User).where(User.email == normalize_email(who)))
+        )
+        if user is None:
+            print("пользователь не найден")
+            raise typer.Exit(code=1)
+        user.pro_tools = not off
+        db.commit()
+        who_s = user.email or user.invite_code
+        print(f"{user.id} {user.name} ({who_s}): pro_tools={user.pro_tools}")
+
+
+@app.command("torgi-probe")
+def torgi_probe(
+    region: Annotated[str, typer.Argument(help="Код региона, например 40")],
+):
+    """Проверка связи с torgi.gov.ru через RU-шлюз: три запроса поиска (идущие, состоявшиеся,
+    не состоявшиеся) — сколько лотов и какие поля отдаёт API. Значений полей не печатает."""
+    from datetime import UTC, datetime, timedelta
+
+    from landcheck import ruproxy, torgi, torgi_scan
+
+    if not ruproxy.enabled():
+        print("RU-шлюз не настроен (LANDCHECK_RU_PROXY)")
+        raise typer.Exit(code=1)
+    api = torgi.TorgiClient(interval=torgi.REQUEST_INTERVAL_S)
+    pub_from = (datetime.now(UTC) - timedelta(days=365)).date().isoformat()
+    try:
+        for name, statuses in (
+            ("идут", torgi.STATUS_ACTIVE),
+            ("состоялись", torgi.STATUS_SUCCEED),
+            ("не состоялись", torgi.STATUS_FAILED),
+        ):
+            data = api.search(
+                region=region.zfill(2), statuses=statuses, pub_from=pub_from, form=None
+            )
+            hits = data.get("content") or []
+            print(f"{name}: лотов {data.get('totalElements')}, страниц {data.get('totalPages')}")
+            if hits:
+                hit = hits[0]
+                row = torgi_scan.lot_row(hit) or {}
+                filled = sorted(k for k, v in row.items() if v not in (None, "", False))
+                chars = sorted(
+                    str(c.get("code")) for c in hit.get("characteristics") or [] if c.get("code")
+                )
+                print(f"  поля ответа: {', '.join(sorted(hit))}")
+                print(f"  характеристики: {', '.join(chars)}")
+                print(f"  разобрано: {', '.join(filled)}")
+    finally:
+        api.close()
+    print(f"запросов: {api.requests}, повторов: {api.retries}")
+
+
+@app.command("torgi-status")
+def torgi_status(
+    region: Annotated[str, typer.Argument(help="Код региона, например 40")],
+):
+    """Состояние сбора торгов региона в базе: сколько лотов, фаза, ошибка."""
+    from landcheck.web import torgi_sync
+    from landcheck.web.config import settings
+    from landcheck.web.db import init_db
+
+    init_db(settings.db_path)
+    st = torgi_sync.state_of(region.zfill(2))
+    keys = "state phase backfill_done lots active succeed failed succeed_priced cards_left".split()
+    print(", ".join(f"{k}={st[k]}" for k in keys))
+    print(f"progress={st['progress']}")
+    print(f"finished_at={st['finished_at']}, error={st['error']}, stats={st['stats']}")
+
+
 if __name__ == "__main__":  # pragma: no cover
     sys.exit(app())

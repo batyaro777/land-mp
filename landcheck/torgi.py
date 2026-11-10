@@ -129,16 +129,16 @@ class TorgiClient:
         self,
         *,
         region: str,
-        text: str,
         statuses: str,
         pub_from: str,
+        text: str | None = None,
         page: int = 0,
         form: str | None = "EA",
     ) -> dict[str, Any]:
+        """Страница поиска лотов по земле. Без `text` — все лоты региона (анализатор торгов)."""
         params = {
             "catCode": "2",
             "subjRF": region,
-            "text": text,
             "lotStatus": statuses,
             "pubFrom": pub_from,
             "byFirstVersion": "true",
@@ -146,6 +146,8 @@ class TorgiClient:
             "page": str(page),
             "sort": "firstVersionPublicationDate,desc",
         }
+        if text:
+            params["text"] = text
         if form:
             params["biddForm"] = form
         return self._get(f"{API}/lotcards/search", params)

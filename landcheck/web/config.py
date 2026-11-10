@@ -71,6 +71,21 @@ class Settings:
     torgi_ttl_days: float = field(
         default_factory=lambda: float(os.environ.get("LANDCHECK_TORGI_TTL_DAYS", "1"))
     )
+    # Анализатор торгов: глубина истории в месяцах, сколько карточек завершённых лотов и
+    # участков НСПД читать за один проход (torgi пропускает запрос раз в 6 с), период
+    # автосбора в часах (0 — только по кнопке).
+    torgi_scan_months: int = field(
+        default_factory=lambda: int(os.environ.get("LANDCHECK_TORGI_SCAN_MONTHS", "12"))
+    )
+    torgi_scan_cards: int = field(
+        default_factory=lambda: int(os.environ.get("LANDCHECK_TORGI_SCAN_CARDS", "300"))
+    )
+    torgi_scan_nspd: int = field(
+        default_factory=lambda: int(os.environ.get("LANDCHECK_TORGI_SCAN_NSPD", "300"))
+    )
+    torgi_scan_hours: float = field(
+        default_factory=lambda: float(os.environ.get("LANDCHECK_TORGI_SCAN_HOURS", "24"))
+    )
     # Документы администрации (ТЗ v3, п. 2.5): кэш автопоиска по муниципалитету
     admin_docs_ttl_days: float = field(
         default_factory=lambda: float(os.environ.get("LANDCHECK_ADMIN_DOCS_TTL_DAYS", "7"))

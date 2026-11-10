@@ -3,8 +3,7 @@
 {% set vclass = {'стоп':'stop','проверить':'check','ок':'ok'}[d.verdict] %}
 {% block title %}Отчёт {{ p.cad_num }} — {{ brand }}{% endblock %}
 {% block head %}
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
+{% include "_leaflet.html" %}
 {% endblock %}
 {% block content %}
 <div class="report-brand{% if not public %} print-only{% endif %}">

@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}Ликвидность торгов{% if region_name %} — {{ region_name }}{% endif %}{% endblock %}
+{% block content %}
+{% set tab = 'liquidity' %}
+<h2>Ликвидность и рынок <span class="badge mini">внутренний режим</span></h2>
+{% include "_torgi_nav.html" %}
+<p class="muted small">Карта ликвидности таблицей: по каждому кадастровому району или кварталу — чем кончились торги за год, насколько росла цена и почём уходила земля. Справа — слой рынка: цена перепродажи за сотку, которую вы знаете сами. Она главнее итогов торгов при оценке лотов.</p>
+
+<form method="get" class="grid no-print">
+  <label>Регион
+    <select name="region" onchange="this.form.submit()">
+      {% if not region %}<option value="">— выберите —</option>{% endif %}
+      {% for r in regions %}<option value="{{ r.code }}"{% if r.code == region %} selected{% endif %}>{{ r.name }}{% if r.synced %} · собран{% endif %}</option>{% endfor %}
+    </select></label>
+  <label>Разрез
+    <select name="level" onchange="this.form.submit()">
+      <option value="district">по районам</option>
+      <option value="quarter"{% if level == 'quarter' %} selected{% endif %}>по кварталам</option>
+    </select></label>
+  <label>Назначение
+    <select name="group" onchange="this.form.submit()">
+      <option value="">любое</option>
+      {% for key, label in groups.items() %}<option value="{{ key }}"{% if key == group %} selected{% endif %}>{{ label }}</option>{% endfor %}
+    </select></label>
+  <label>Район или квартал <input name="d" value="{{ place }}" placeholder="40:13"></label>
+</form>
+
+{% if not region %}
+<article><p>Выберите регион. Если он ещё не собран — соберите его на вкладке «Лоты».</p></article>
+{% else %}
+{% include "_torgi_sync.html" %}
+{% if total and total.closed %}
+<p class="small">По выборке: завершено {{ total.closed }}, с борьбой {{ total.sold }}, единственному участнику {{ total.single }}, без заявок {{ total.none }}{% if total.failed_unknown %}, не состоялись без прочитанной карточки {{ total.failed_unknown }}{% endif %}; нашли хозяина {{ (total.sell_through * 100)|round|int if total.sell_through is not none else '—' }} %; рост цены к старту ×{{ total.growth_median or '—' }}; индекс {{ total.index if total.index is not none else '—' }}.</p>
+{% endif %}
+{% if rows %}
+<div class="table-wrap">
+<table class="results torgi">
+  <thead><tr>
+    <th>{{ 'Квартал' if level == 'quarter' else 'Район' }}</th>
+    <th class="num" title="Индекс 0–100: доля участков, нашедших хозяина (60), заявок на лот (20), рост цены к старту (20)">Индекс</th>
+    <th class="num">Завершено</th>
+    <th class="num" title="Состоялись: была борьба, цена выросла">С борьбой</th>
+    <th class="num" title="Одна заявка: договор с единственным участником по начальной цене (ст. 39.12 ЗК)">Одному</th>
+    <th class="num">Без заявок</th>
+    <th class="num" title="Доля участков, которые нашли хозяина">Продано</th>
+    <th class="num" title="Во сколько раз цена победителя выше начальной, медиана">Рост</th>
+    <th class="num">Заявок на лот</th>
+    <th class="num" title="Медиана итоговой цены состоявшихся торгов продажи">Продажа, ₽/сот.</th>
+    <th class="num" title="Медиана итоговой годовой платы">Аренда, ₽/сот. в год</th>
+    <th class="num">Идёт</th>
+    <th>Рынок (ваш слой)</th>
+  </tr></thead>
+  <tbody>
+  {% for r in rows %}
+  <tr>
+    <td><a href="/tools/torgi-scan?region={{ region }}&amp;d={{ r.key }}"><code>{{ r.key }}</code></a>{% if level == 'district' %}<div class="small muted">{{ names.get(r.key, '') }}</div><a class="small" href="/tools/torgi-liquidity?region={{ region }}&amp;level=quarter&amp;d={{ r.key }}">кварталы</a>{% endif %}</td>
+    <td class="num">{% if r.index is not none %}<span class="badge mini v-{{ 'ok' if r.index >= 55 else ('check' if r.index >= 30 else 'stop') }}">{{ r.index }}</span><div class="small muted">{{ r.label }}</div>{% else %}<span class="muted small">мало данных</span>{% endif %}</td>
+    <td class="num">{{ r.closed }}</td><td class="num">{{ r.sold }}</td><td class="num">{{ r.single }}</td>
+    <td class="num">{{ r.none }}{% if r.failed_unknown %}<div class="small muted" title="Не состоялись, карточка ещё не прочитана: число заявок неизвестно">+{{ r.failed_unknown }} ?</div>{% endif %}</td>
+    <td class="num">{% if r.sell_through is not none %}{{ (r.sell_through * 100)|round|int }} %{% else %}—{% endif %}</td>
+    <td class="num">{% if r.growth_median %}×{{ r.growth_median }}{% else %}—{% endif %}</td>
+    <td class="num">{{ r.applied_median if r.applied_median is not none else '—' }}</td>
+    <td class="num">{% if r.sale.median_m2 %}{{ (r.sale.median_m2 * sotka)|money }}<div class="small muted">{{ r.sale.n }} лот.</div>{% else %}—{% endif %}</td>
+    <td class="num">{% if r.rent.median_m2 %}{{ (r.rent.median_m2 * sotka)|money }}<div class="small muted">{{ r.rent.n }} лот.</div>{% else %}—{% endif %}</td>
+    <td class="num">{{ r.active or '' }}</td>
+    <td class="small">{% for m in by_scope.get(r.key, []) %}<div>{{ kinds.get(m.kind, m.kind) }}: <strong>{{ m.price_mid|money if m.price_mid else '—' }}</strong>{% if m.exposure_days %} · {{ m.exposure_days }} дн.{% endif %}{% if m.liquid %} · {{ 'ликвид' if m.liquid == 'liquid' else 'неликвид' }}{% endif %} <span class="muted">({{ {'manual': 'вручную', 'deals': 'сделки', 'ads': 'объявления'}.get(m.source, m.source) }})</span></div>{% endfor %}
+      <a href="#market-form" onclick="document.getElementById('market-scope').value='{{ r.key }}'">задать</a></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if not group %}<p class="muted small">Цены за сотку здесь — по всем назначениям сразу: поле и участок под дом в одной строке. Чтобы сравнивать цены, выберите назначение. Для оценки лота сравниваются только торги того же назначения и сопоставимой площади.</p>{% endif %}
+{% else %}
+<article><p>{% if sync and sync.state == 'never' %}Регион ещё не собирали — соберите его на вкладке «Лоты».{% else %}Завершённых торгов по этим условиям нет.{% endif %}</p></article>
+{% endif %}
+
+<article id="market-form">
+  <h4>Слой рынка: цена перепродажи за сотку</h4>
+  <p class="small muted">Как полигоны на вашей карте: «край по торгам 240, рынок 320–350». Запись по кварталу главнее записи по району. Для аренды задаётся цена переуступки права.</p>
+  <form method="post" action="/tools/torgi-market">
+    <input type="hidden" name="back" value="/tools/torgi-liquidity?region={{ region }}&amp;level={{ level }}">
+    <div class="grid">
+      <label>Район или квартал <input name="scope" id="market-scope" required placeholder="{{ region }}:13 или {{ region }}:13:120101" value="{{ place }}"></label>
+      <label>Сделка <select name="kind">{% for key, label in kinds.items() %}<option value="{{ key }}">{{ label }}{% if key == 'rent' %} (переуступка){% endif %}</option>{% endfor %}</select></label>
+      <label>Назначение <select name="vri_group"><option value="any">любое</option>{% for key, label in groups.items() %}<option value="{{ key }}"{% if key == group %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+      <label>Оценка <select name="liquid"><option value="">—</option><option value="liquid">ликвид</option><option value="illiquid">неликвид</option></select></label>
+    </div>
+    <div class="grid">
+      <label>Цена, ₽ за сотку <input name="price_mid" inputmode="decimal"></label>
+      <label>от <input name="price_min" inputmode="decimal"></label>
+      <label>до <input name="price_max" inputmode="decimal"></label>
+      <label>Срок продажи, дней <input name="exposure_days" inputmode="numeric"></label>
+    </div>
+    <label>Заметка <input name="note" placeholder="направление, откуда цифра"></label>
+    <button class="sm">Сохранить</button>
+  </form>
+  {% set manual = layer|rejectattr('source', 'equalto', 'deals')|list %}
+  {% if manual %}
+  <table class="facts">
+    <tr><th>Где</th><th>Сделка · назначение</th><th class="num">₽ за сотку: от – середина – до</th><th class="num">Срок</th><th>Заметка</th><th></th></tr>
+    {% for m in manual %}
+    <tr><td><code>{{ m.scope }}</code></td><td>{{ kinds.get(m.kind, m.kind) }} · {{ groups.get(m.vri_group, 'любое') }}</td>
+      <td class="num">{{ m.price_min|money if m.price_min else '—' }} – <strong>{{ m.price_mid|money if m.price_mid else '—' }}</strong> – {{ m.price_max|money if m.price_max else '—' }}</td>
+      <td class="num">{{ m.exposure_days ~ ' дн.' if m.exposure_days else '—' }}</td>
+      <td class="small">{{ {'manual': 'вручную', 'ads': 'объявления'}.get(m.source, m.source) }}{% if m.liquid %} · {{ 'ликвид' if m.liquid == 'liquid' else 'неликвид' }}{% endif %}{% if m.note %} · {{ m.note }}{% endif %}</td>
+      <td><form method="post" action="/tools/torgi-market/{{ m.id }}/delete" class="inline"><input type="hidden" name="back" value="/tools/torgi-liquidity?region={{ region }}"><button class="outline secondary sm">убрать</button></form></td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+</article>
+{% endif %}
+{% endblock %}

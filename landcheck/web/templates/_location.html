@@ -136,7 +136,7 @@
   </div>
 
   {% set fl = loc.free_land if loc.free_land is defined else none %}
-  {% if fl and user is defined and user and user.is_admin %}
+  {% if fl and user is defined and user and user.can_torgi %}
   <details class="free-land">
     <summary><strong>Свободная земля рядом</strong> <span class="badge mini">внутренний режим</span> — публичных участков в {{ loc.radius_m.neighbors }} м: {{ fl.total }}{% if fl.on_auction %}, из них на аукционе {{ fl.on_auction }}{% endif %}{% if fl.excluded %} <span class="muted small">(ещё {{ fl.excluded }} исключены: лесфонд, сети, дороги, учреждения)</span>{% endif %}</summary>
     {% if fl['items'] %}
@@ -160,7 +160,7 @@
   </details>
   {% endif %}
 
-  {% if auctions is defined and auctions and user is defined and user and user.is_admin %}{% include "_auctions.html" %}{% endif %}
+  {% if auctions is defined and auctions and user is defined and user and user.can_torgi %}{% include "_auctions.html" %}{% endif %}
 
   {% set n = loc.neighbors %}
   <strong>Ориентир стоимости по соседям</strong>

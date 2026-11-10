@@ -1,0 +1,39 @@
+{# Состояние сбора торгов региона; пока идёт сбор, блок сам себя опрашивает #}
+{% set running = sync and sync.state in ('running', 'queued') %}
+<div id="torgi-sync" class="torgi-sync"{% if running %} hx-get="/tools/torgi-scan/status?region={{ region }}" hx-trigger="every 15s" hx-swap="outerHTML"{% endif %}>
+  {% if not sync or not sync.gateway %}
+  <p class="err small">RU-шлюз не настроен: torgi.gov.ru из-за рубежа закрыт, собрать торги нельзя (переменная LANDCHECK_RU_PROXY на сервере).</p>
+  {% endif %}
+  {% if sync %}
+  <p class="small">
+    <strong>В базе:</strong> идут сейчас {{ sync.active }}, завершены за год {{ sync.succeed + sync.failed }}
+    (состоялись {{ sync.succeed }}, с итоговой ценой {{ sync.succeed_priced }}; не состоялись {{ sync.failed }}){% if sync.cards_left %}, карточек ещё не прочитано {{ sync.cards_left }}{% endif %}.
+    {% if running %}
+      <span aria-busy="true">Идёт сбор: {{ phase_ru.get(sync.progress.get('phase') or sync.phase or 'queued', sync.phase or 'в очереди') }}{% if sync.progress.get('pages') %}, {{ sync.progress.get('page') }} из {{ sync.progress.get('pages') }}{% endif %}.</span>
+      <span class="muted">Сайт пропускает один запрос в 6 секунд; первый сбор региона занимает от получаса до нескольких часов, страницу можно закрыть.</span>
+    {% elif sync.state == 'error' %}
+      <span class="err">{{ sync.error }}.</span>
+    {% elif sync.state == 'interrupted' %}
+      <span class="warn">Сбор прервался при перезапуске сервиса — запустите ещё раз, продолжит с того же места.</span>
+    {% elif sync.state == 'never' %}
+      <span class="muted">Регион ещё не собирали.</span>
+    {% elif sync.finished_at %}
+      <span class="muted">Обновлено {{ sync.finished_at|dt }}{% if not sync.backfill_done %}; история за год собрана не полностью — следующий сбор продолжит{% endif %}{% if sync.cards_left %}; цены и заявки дочитываются по {{ sync.stats.get('cards', 0) or 'несколько сотен' }} карточек за проход{% endif %}.</span>
+    {% endif %}
+  </p>
+  {% if not running and sync.gateway %}
+  <form method="post" action="/tools/torgi-scan/sync" class="inline no-print">
+    <input type="hidden" name="region" value="{{ region }}">
+    <input type="hidden" name="back" value="{{ request.url.path if request.url.path != '/tools/torgi-scan/status' else '/tools/torgi-scan' }}?region={{ region }}">
+    <button class="sm">{% if sync.state == 'never' %}Собрать торги региона{% else %}Обновить сейчас{% endif %}</button>
+  </form>
+  {% if sync.state != 'never' %}
+  <form method="post" action="/tools/torgi-scan/auto" class="inline no-print">
+    <input type="hidden" name="region" value="{{ region }}">
+    <input type="hidden" name="action" value="{{ 'off' if sync.auto else 'on' }}">
+    <button class="outline secondary sm" title="Автосбор раз в сутки">Автообновление: {{ 'включено' if sync.auto else 'выключено' }}</button>
+  </form>
+  {% endif %}
+  {% endif %}
+  {% endif %}
+</div>

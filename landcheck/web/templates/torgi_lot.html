@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{% block title %}Лот {{ lot.cad_num or lot.id }} — торги{% endblock %}
+{% block content %}
+{% set tab = 'scan' %}{% set region = lot.region %}
+<h2>Лот <code>{{ lot.cad_num or 'без кадастрового номера' }}</code> <span class="badge v-{{ {'go': 'ok', 'edge': 'check', 'no': 'stop'}.get(s.verdict, '') }}">{{ s.verdict_label }}</span> <span class="badge mini">внутренний режим</span></h2>
+{% include "_torgi_nav.html" %}
+<p class="small"><a href="/tools/torgi-scan?{{ qs or 'region=' ~ lot.region }}">← к списку лотов</a> · <a href="{{ lot_url }}" target="_blank" rel="noopener">лот на torgi.gov.ru</a>{% if lot.cad_num %} · <a href="/single?cad_num={{ lot.cad_num }}&amp;purpose=auction">разовая проверка участка</a>{% endif %}</p>
+{% if saved == 'ads' %}<p class="ok-msg small">Объявления найдены — цена за сотку записана в слой рынка района, оценка пересчитана.</p>
+{% elif saved == 'noads' %}<p class="warn small">Сопоставимых объявлений с ценой и площадью рядом не нашлось — задайте рынок района вручную.</p>
+{% elif saved == 'noloc' %}<p class="warn small">Из адреса лота не удалось понять населённый пункт — задайте рынок района вручную.</p>{% endif %}
+
+<div class="grid two">
+<article>
+  <h4>Лот</h4>
+  <table class="facts">
+    <tr><th>Сделка</th><td>{{ kinds.get(lot.kind, lot.kind) }}{% if lot.form == 'IPS' %} · извещение о предоставлении (ст. 39.18 ЗК){% elif lot.form %} · {{ lot.form }}{% endif %}{% if lot.bidd_type_name %}<div class="small muted">{{ lot.bidd_type_name }}</div>{% endif %}</td></tr>
+    <tr><th>Статус</th><td>{{ status_ru.get(lot.status, lot.status or '—') }}{% if lot.annulled %} · извещение аннулировано{% endif %}{% if lot.stopped %} · торги приостановлены{% endif %}{% if lot.appeals %} · есть жалобы{% endif %}</td></tr>
+    <tr><th>Адрес</th><td>{{ (lot.address or '—')|short_address }}{% if district_name %}<div class="small muted">{{ district_name }}, кадастровый район {{ lot.district }}</div>{% endif %}</td></tr>
+    <tr><th>Назначение</th><td>{{ lot.vri or '—' }}<div class="small muted">{{ groups.get(lot.vri_group, '') }}{% if lot.category %} · {{ lot.category|short_category }}{% endif %}</div></td></tr>
+    <tr><th>Площадь</th><td>{% if lot.area_m2 %}{{ (lot.area_m2 / 100)|round(2) }} сот. ({{ lot.area_m2|round|int }} м²){% else %}—{% endif %}</td></tr>
+    <tr><th>{{ 'Годовая плата на старте' if lot.kind == 'rent' else 'Начальная цена' }}</th><td>{% if lot.price_start %}<strong>{{ lot.price_start|money }}</strong>{% if s.start_sotka %} · {{ s.start_sotka|money }} за сотку{% endif %}{% else %}—{% endif %}</td></tr>
+    <tr><th>Шаг · задаток</th><td>{{ lot.price_step|money }} · {{ lot.deposit|money }}</td></tr>
+    <tr><th>Заявки до</th><td>{{ lot.bidd_end or '—' }}{% if s.days_left is not none and lot.status in ('PUBLISHED', 'APPLICATIONS_SUBMISSION') %} <span class="{{ 'err' if s.days_left < 3 else 'muted' }}">({% if s.days_left < 0 %}приём закончен{% else %}осталось {{ s.days_left }} дн.{% endif %})</span>{% endif %}</td></tr>
+    <tr><th>Торги</th><td>{{ lot.auction_date or '—' }}{% if lot.published %} <span class="muted small">· опубликован {{ lot.published }}</span>{% endif %}</td></tr>
+    {% if lot.price_fin %}<tr><th>Итог</th><td><strong>{{ lot.price_fin|money }}</strong>{% if lot.price_start %} · ×{{ (lot.price_fin / lot.price_start)|round(2) }} к старту{% endif %}{% if lot.applied is not none %} · заявок {{ lot.applied }}{% endif %}{% if lot.winner_type %} · победитель — {{ lot.winner_type }}{% endif %}</td></tr>{% endif %}
+    {% if lot.cad_cost %}<tr><th>Кадастровая стоимость</th><td>{{ lot.cad_cost|money }}{% if lot.price_start and lot.kind == 'sale' %} · старт — {{ (lot.price_start / lot.cad_cost * 100)|round|int }} % от неё{% elif lot.price_start %} · годовая плата — {{ (lot.price_start / lot.cad_cost * 100)|round(1) }} % от неё{% endif %}</td></tr>{% endif %}
+    <tr><th>ГПЗУ в документах лота</th><td>{% if lot.has_gpzu %}приложен{% elif lot.has_gpzu is none %}<span class="muted">не проверяли (карточка не прочитана)</span>{% else %}нет{% endif %}</td></tr>
+  </table>
+</article>
+<article>
+  <h4>Почему «{{ s.verdict_label }}»</h4>
+  <ul class="checklist">
+    {% for t in s.stop %}<li><span class="dot stop"></span><strong>{{ t }}</strong></li>{% endfor %}
+    {% for t in s.minus %}<li><span class="dot check"></span>{{ t }}</li>{% endfor %}
+    {% for t in s.plus %}<li><span class="dot ok"></span>{{ t }}</li>{% endfor %}
+    {% for t in s.ask %}<li><span class="dot"></span>{{ t }}</li>{% endfor %}
+  </ul>
+  <form method="get" class="no-print torgi-inline">
+    <label class="small">Цель, % <input name="roi" inputmode="decimal" value="{{ (params.target_roi * 100)|round|int }}"></label>
+    <label class="small">Расходы, ₽ <input name="extra" inputmode="decimal" value="{{ params.extra|int if params.extra else '' }}"></label>
+    <label class="small">Налог, % <input name="tax" inputmode="decimal" value="{{ (params.tax * 100)|round(1) }}"></label>
+    <button class="sm outline">Пересчитать</button>
+  </form>
+</article>
+</div>
+
+<article>
+  <h4>Экономика при цели {{ (params.target_roi * 100)|round|int }} % на сделку</h4>
+  {% if s.market %}
+  <table class="results econ">
+    <tr><th>Сценарий</th><th class="num">Цена перепродажи</th><th class="num">Предельная цена входа</th><th class="num">Запас к старту</th></tr>
+    {% for key, name in (('min', 'MIN'), ('mid', 'MEDIUM'), ('max', 'MAX')) %}
+    <tr><td>{{ name }}</td>
+      <td class="num">{% if s.sale[key] %}{{ s.sale[key]|money }}{% else %}—{% endif %}</td>
+      <td class="num">{% if s.limits[key] is not none %}<strong>{{ s.limits[key]|money }}</strong>{% else %}—{% endif %}</td>
+      <td class="num">{% if s.limits[key] is not none and lot.price_start %}{% set gap = s.limits[key] - lot.price_start %}{% if gap >= 0 %}+{{ gap|money }}{% if lot.price_step %} ({{ (gap // lot.price_step)|int }} шаг.){% endif %}{% else %}<span class="err">{{ gap|money }}</span>{% endif %}{% else %}—{% endif %}</td></tr>
+    {% endfor %}
+  </table>
+  <p class="small">Источник цены: <strong>{{ s.market.source_label }}</strong>, надёжность {{ s.confidence }}{% if s.market.note %} ({{ s.market.note }}){% endif %}.
+    Ожидаемая цена победителя — {{ s.expected_price|money }}{% if s.liquidity.growth %} (в районе цена растёт к старту в {{ s.liquidity.growth }} раза){% endif %}.
+    {% if s.roi_start is not none %}При входе по старту: ROI {{ (s.roi_start * 100)|round|int }} %{% if s.annual_start is not none %}, {{ (s.annual_start * 100)|round|int }} % годовых при сроке до продажи {{ s.hold_months }} мес.{% endif %}{% endif %}
+    {% if s.roi_expected is not none %} При входе по ожидаемой цене: ROI {{ (s.roi_expected * 100)|round|int }} %.{% endif %}
+    {% if s.safe is not none %} Безопасный ориентир — {{ s.safe|money }} (минимум из предельных).{% endif %}</p>
+  {% if s.market.source == 'auctions' %}<p class="small muted">Цена взята из итогов торгов района: это то, почём землю уже покупали у государства, рынок обычно выше. Если знаете рынок — задайте его ниже, расчёт станет точнее.</p>{% endif %}
+  {% else %}
+  <p class="small">Цены перепродажи нет: в районе мало завершённых торгов с ценой и рынок не задан. Задайте рынок района ниже или найдите объявления рядом.</p>
+  {% endif %}
+  <div class="toolbar no-print">
+    {% if lot.price_start %}<a href="{{ calc_url }}" role="button" class="sm">Расчёт по шагам аукциона</a>{% endif %}
+    <form method="post" action="/tools/torgi-lot/{{ lot.id }}/ads" class="inline"><button class="outline sm" title="Поиск объявлений о продаже участков в этом населённом пункте; медиана за сотку запишется в слой рынка района">Найти объявления рядом</button></form>
+    {% if lot.cad_num %}<form method="post" action="/tools/torgi-scan/check" class="inline"><input type="hidden" name="lot" value="{{ lot.id }}"><button class="outline sm">Полная проверка участка</button></form>{% endif %}
+    <a href="/tools/torgi-deals?lot={{ lot.id }}" role="button" class="outline secondary sm">Записать в мои сделки</a>
+  </div>
+</article>
+
+<article>
+  <h4>Рынок района и квартала</h4>
+  {% if layer %}
+  <table class="facts">
+    <tr><th>Где</th><th>Сделка · назначение</th><th class="num">₽ за сотку: мин – середина – макс</th><th class="num">Срок продажи</th><th>Источник</th></tr>
+    {% for m in layer %}
+    <tr><td><code>{{ m.scope }}</code></td><td>{{ kinds.get(m.kind, m.kind) }} · {{ groups.get(m.vri_group, 'любое') }}</td>
+      <td class="num">{{ m.price_min|money if m.price_min else '—' }} – <strong>{{ m.price_mid|money if m.price_mid else '—' }}</strong> – {{ m.price_max|money if m.price_max else '—' }}</td>
+      <td class="num">{{ m.exposure_days ~ ' дн.' if m.exposure_days else '—' }}</td>
+      <td class="small">{{ {'manual': 'вручную', 'deals': 'свои сделки', 'ads': 'объявления'}.get(m.source, m.source) }}{% if m.liquid %} · {{ 'ликвид' if m.liquid == 'liquid' else 'неликвид' }}{% endif %}{% if m.note %}<div class="muted">{{ m.note }}</div>{% endif %}</td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+  <details{% if not layer %} open{% endif %}>
+    <summary class="small">Задать рынок вручную</summary>
+    <form method="post" action="/tools/torgi-market">
+      <input type="hidden" name="back" value="/tools/torgi-lot/{{ lot.id }}">
+      <input type="hidden" name="kind" value="{{ lot.kind }}">
+      <div class="grid">
+        <label>Где
+          <select name="scope">
+            {% if lot.district %}<option value="{{ lot.district }}">район {{ lot.district }}</option>{% endif %}
+            {% if lot.quarter %}<option value="{{ lot.quarter }}">квартал {{ lot.quarter }}</option>{% endif %}
+          </select></label>
+        <label>Назначение
+          <select name="vri_group"><option value="{{ lot.vri_group }}">{{ groups.get(lot.vri_group, 'как у лота') }}</option><option value="any">любое</option></select></label>
+        <label>{{ 'Переуступка' if lot.kind == 'rent' else 'Рынок' }}, ₽ за сотку <input name="price_mid" inputmode="decimal" required></label>
+        <label>от <input name="price_min" inputmode="decimal"></label>
+        <label>до <input name="price_max" inputmode="decimal"></label>
+        <label>Срок продажи, дней <input name="exposure_days" inputmode="numeric"></label>
+      </div>
+      <label>Заметка <input name="note" placeholder="откуда цифра"></label>
+      <button class="sm">Сохранить</button>
+    </form>
+  </details>
+</article>
+
+<div class="grid two">
+<article>
+  <h4>Ликвидность</h4>
+  <table class="facts">
+    <tr><th></th><th class="num">Квартал {{ lot.quarter or '' }}</th><th class="num">Район {{ lot.district or '' }}</th></tr>
+    {% set qs_ = quarter_stats or {} %}{% set ds = district_stats or {} %}
+    <tr><td>Индекс</td><td class="num">{{ qs_.index if qs_.index is not none else '—' }} <span class="muted small">{{ qs_.label or '' }}</span></td><td class="num">{{ ds.index if ds.index is not none else '—' }} <span class="muted small">{{ ds.label or '' }}</span></td></tr>
+    <tr><td>Завершено торгов за год</td><td class="num">{{ qs_.closed or 0 }}</td><td class="num">{{ ds.closed or 0 }}</td></tr>
+    <tr><td>Состоялись с борьбой</td><td class="num">{{ qs_.sold or 0 }}</td><td class="num">{{ ds.sold or 0 }}</td></tr>
+    <tr><td>Ушли единственному участнику</td><td class="num">{{ qs_.single or 0 }}</td><td class="num">{{ ds.single or 0 }}</td></tr>
+    <tr><td>Без заявок</td><td class="num">{{ qs_.none or 0 }}</td><td class="num">{{ ds.none or 0 }}</td></tr>
+    <tr><td>Рост цены к старту, медиана</td><td class="num">{% if qs_.growth_median %}×{{ qs_.growth_median }}{% else %}—{% endif %}</td><td class="num">{% if ds.growth_median %}×{{ ds.growth_median }}{% else %}—{% endif %}</td></tr>
+    <tr><td>Заявок на лот, медиана</td><td class="num">{{ qs_.applied_median if qs_.applied_median is not none else '—' }}</td><td class="num">{{ ds.applied_median if ds.applied_median is not none else '—' }}</td></tr>
+    <tr><td>Идёт сейчас</td><td class="num">{{ qs_.active or 0 }}</td><td class="num">{{ ds.active or 0 }}</td></tr>
+  </table>
+  <p class="small"><a href="/tools/torgi-liquidity?region={{ lot.region }}&amp;level=quarter&amp;d={{ lot.district }}">Все кварталы района</a></p>
+</article>
+<article>
+  <h4>Этот участок на торгах раньше</h4>
+  {% if same_parcel %}
+  <table class="facts">
+    {% for x in same_parcel %}
+    <tr><td><a href="/tools/torgi-lot/{{ x.id }}">{{ x.published or x.auction_date or 'лот' }}</a></td><td>{{ kinds.get(x.kind, x.kind) }} · {{ status_ru.get(x.status, x.status) }}</td><td class="num">{{ x.price_start|money }}{% if x.price_fin %} → {{ x.price_fin|money }}{% endif %}</td></tr>
+    {% endfor %}
+  </table>
+  {% else %}<p class="muted small">За год других лотов по этому участку нет.</p>{% endif %}
+</article>
+</div>
+
+<article>
+  <h4>Похожие завершённые торги рядом</h4>
+  {% if comparables %}
+  <div class="table-wrap">
+  <table class="results">
+    <thead><tr><th>Участок</th><th>Назначение</th><th class="num">Площадь</th><th class="num">Старт</th><th class="num">Итог</th><th class="num">₽ за сотку</th><th class="num">К старту</th><th class="num">Заявок</th><th>Дата</th></tr></thead>
+    {% for x in comparables %}
+    <tr><td><a href="/tools/torgi-lot/{{ x.id }}"><code>{{ x.cad_num }}</code></a>{% if x.quarter == lot.quarter %} <span class="badge mini">тот же квартал</span>{% endif %}</td>
+      <td class="small">{{ (x.vri or '')|truncate(45) }}</td>
+      <td class="num">{% if x.area_m2 %}{{ (x.area_m2 / 100)|round(1) }} сот.{% else %}—{% endif %}</td>
+      <td class="num">{{ x.price_start|money }}</td><td class="num">{{ x.price_fin|money }}</td>
+      <td class="num">{% if x.area_m2 %}{{ (x.price_fin / x.area_m2 * 100)|money }}{% else %}—{% endif %}</td>
+      <td class="num">{% if x.price_start %}×{{ (x.price_fin / x.price_start)|round(2) }}{% else %}—{% endif %}</td>
+      <td class="num">{{ x.applied if x.applied is not none else '—' }}</td>
+      <td class="small">{{ x.auction_date or x.published or '—' }}</td></tr>
+    {% endfor %}
+  </table>
+  </div>
+  {% else %}<p class="muted small">В районе пока нет состоявшихся торгов такой же сделки с прочитанной итоговой ценой.</p>{% endif %}
+</article>
+{% endblock %}
