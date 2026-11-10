@@ -268,6 +268,7 @@ def torgi_note(lot: dict[str, Any]) -> dict[str, Any]:
             "date": date,
             "lot_id": lot.get("id"),
             "kind": kind,
+            "final": status not in torgi_scan.ACTIVE,
         }
     if status in torgi_scan.ACTIVE:
         text, busy = "идут торги", True
@@ -281,7 +282,15 @@ def torgi_note(lot: dict[str, Any]) -> dict[str, Any]:
         text, busy = "выставлялся на торги, заявок не было", False
     else:
         text, busy = "торги отменены", False
-    return {"text": text, "busy": busy, "date": date, "lot_id": lot.get("id"), "kind": kind}
+    return {
+        "text": text,
+        "busy": busy,
+        "date": date,
+        "lot_id": lot.get("id"),
+        "kind": kind,
+        # торги уже закончились: отметка «на аукционе» из слоя НСПД устарела
+        "final": status not in torgi_scan.ACTIVE,
+    }
 
 
 XLSX_COLUMNS = (

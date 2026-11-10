@@ -645,6 +645,9 @@ def test_auto_sync_returns_soon_while_auction_cards_remain(client):  # noqa: F81
     fake = _seed(client)
     st = _sync(fake, provider=FakeNspd(), max_cards=5)
     assert st["cards_left"] == 16
+    # первыми читаются не состоявшиеся: по карточке видно, была ли единственная заявка;
+    # цена состоявшихся приходит уже в поиске
+    assert all(i.startswith("F_") for i in _card_ids(fake)[-5:])
     done = finished_at()
     assert torgi_sync.due_regions(done + timedelta(minutes=5)) == []
     assert torgi_sync.due_regions(done + timedelta(minutes=11)) == ["40"]

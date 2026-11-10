@@ -259,6 +259,12 @@ def free_land_result(request: Request, user: TorgiDep, scan_id: int):
         state = _state(scan)
         result = scan.result or {}
         items = _filtered(db, scan, q) if state == "done" else []
+        # сколько кандидатов без отметок аукциона, проекта межевания и торгов — по всему списку
+        clear = (
+            len(freeland.filter_items(_with_torgi(db, result.get("items") or []), hide_busy=True))
+            if state == "done"
+            else 0
+        )
         ctx = {
             "scan": {
                 "id": scan.id,
@@ -289,6 +295,7 @@ def free_land_result(request: Request, user: TorgiDep, scan_id: int):
         state=state,
         result=result,
         items=items,
+        clear=clear,
         points=points,
         hows=hows,
         howto=freeland.HOWTO,

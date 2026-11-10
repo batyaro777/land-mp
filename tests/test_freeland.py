@@ -194,7 +194,9 @@ def test_filter_items_and_torgi_note():
         "date": "2026-10-23",
         "lot_id": "L1",
         "kind": "rent",
+        "final": True,
     }
+    assert freeland.torgi_note({"status": "PUBLISHED"})["final"] is False
     assert freeland.torgi_note({**lot, "kind": "sale"})["text"] == "продан с торгов"
     assert freeland.torgi_note({"status": "APPLICATIONS_SUBMISSION"})["text"] == "идут торги"
     # извещение о предоставлении (ст. 39.18): участок уже просит заявитель
@@ -212,6 +214,7 @@ def test_filter_items_and_torgi_note():
         "date": None,
         "lot_id": None,
         "kind": None,
+        "final": True,
     }
 
 
@@ -325,7 +328,10 @@ def test_quarter_scan_result_filters_export_and_check(client, monkeypatch):  # n
     assert fake.calls == [{"quarter": Q}]
     page = client.get(url).text
     assert "участков 9, из них частных 1, без зарегистрированного права 0" in page
-    assert "Кандидатов без видимых препятствий: 4" in page
+    assert "Кандидатов: 4" in page
+    # участок 2 на аукционе, участок 8 в проекте межевания и сдан с торгов
+    assert "из них без отметок аукциона, проекта межевания и торгов: 2" in page
+    assert ">на аукционе</span>" in page
     assert "с публичной собственностью 4, без зарегистрированного права 0" in page
     assert "категория не передаётся гражданам и бизнесу — 1" in page
     for cad in (f"{Q}:1", f"{Q}:2", f"{Q}:8", f"{Q}:9"):
@@ -343,6 +349,28 @@ def test_quarter_scan_result_filters_export_and_check(client, monkeypatch):  # n
     free = client.get(url + "?free=1").text
     assert f"{Q}:9" in free and f"{Q}:8</code>" not in free and f"{Q}:2</code>" not in free
     assert "ничего не подошло" in client.get(url + "?amin=100000").text
+    # торги по участку 2 уже прошли: отметка «на аукционе» из слоя НСПД устарела — не показываем
+    with session() as db:
+        db.add(
+            TorgiLot(
+                id="LOT_2",
+                region="40",
+                district="40:10",
+                quarter=Q,
+                cad_num=f"{Q}:2",
+                kind="sale",
+                status="SUCCEED",
+                published="2026-09-01",
+                first_seen_at=now,
+                seen_at=now,
+            )
+        )
+        db.commit()
+    stale = client.get(url).text
+    assert ">на аукционе</span>" not in stale and "продан с торгов" in stale
+    with session() as db:
+        db.delete(db.get(TorgiLot, "LOT_2"))
+        db.commit()
     # выгрузка с тем же фильтром
     x = client.get(url + "/export.xlsx?how=agri")
     assert x.status_code == 200 and x.headers["content-type"].startswith(
@@ -375,7 +403,7 @@ def test_scan_around_parcel_and_errors(client, monkeypatch):  # noqa: F811
     ).headers["location"]
     assert fake.calls[0]["radius_m"] == 2000 and fake.calls[0]["center"] is not None
     page = client.get(url).text
-    assert "± 2000 м" in page and "без видимых препятствий: 4" in page
+    assert "± 2000 м" in page and "Кандидатов: 4" in page
     # квартал не найден — понятная ошибка и подсказка
     broken = FakeArea(
         {
@@ -399,7 +427,7 @@ def test_scan_around_parcel_and_errors(client, monkeypatch):  # noqa: F811
     # подставной НСПД отдаёт участки квартала 160500: для квартала 999999 все они — соседи
     page = client.get(url).text
     assert "участков 0 (ещё 9 из соседних кварталов касаются границы — не считаем)" in page
-    assert "без видимых препятствий: 0" in page
+    assert "Кандидатов: 0" in page
 
 
 def test_other_users_scan_is_hidden(client, monkeypatch):  # noqa: F811
