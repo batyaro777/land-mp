@@ -8,7 +8,7 @@ from datetime import date
 import pytest
 
 from landcheck import torgi_scan as ts
-from tests.test_torgi import _card
+from tests.test_torgi import _card, _notice
 
 TODAY = date(2026, 11, 10)
 
@@ -395,3 +395,97 @@ def test_auction_comparables_same_purpose_and_similar_area():
     # «рынок выше торгов в 1,3 раза» — множитель применяется и назван в пометке
     m = ts.market_for(house, stats, markup=1.3)
     assert m["mid_m2"] == 195 and "в 1.3 раза выше торгов" in m["note"]
+
+
+# --- извещения о предоставлении (ст. 39.18 ЗК): не торги ------------------------------------
+def test_notice_row_takes_project_area_and_quarter_from_text():
+    row = ts.lot_row(_notice("I_1"))
+    assert row["form"] == "IPS" and ts.is_notice(row)
+    assert row["cad_num"] is None and row["price_start"] is None and row["region"] == "40"
+    assert row["quarter"] == "40:13:120105" and row["district"] == "40:13"
+    assert row["area_m2"] == 1500 and row["bidd_end"] == "2026-12-01"
+    assert ts.bidd_label(row) == "извещение о предоставлении (ст. 39.18 ЗК)"
+    # номер участка — не квартал; обычный аукцион подписи не получает
+    assert ts.quarter_from_text({"lotName": "участок 40:13:120101:22"}) is None
+    lot = _lot("A1", "40:13:120101:203")
+    assert ts.bidd_label(lot) == "" and not ts.is_notice(lot)
+    assert ts.bidd_label(lot | {"bidd_type": "229FZ"}) == "имущество должников"
+    assert ts.bidd_label(lot | {"bidd_type": "XX", "bidd_type_name": "Иное"}) == "Иное"
+
+
+def test_notices_stay_out_of_liquidity_and_default_scan():
+    lots = _district()  # 6 с борьбой, 2 одному, 2 без заявок
+    done = [ts.lot_row(_notice(f"IS_{i}", status="SUCCEED")) for i in range(40)]
+    base, mixed = ts.stats_of(lots), ts.stats_of(lots + done)
+    # 40 «состоявшихся» извещений не делают район ликвидным
+    assert mixed["closed"] == base["closed"] == 10 and mixed["sold"] == 6
+    assert mixed["sell_through"] == base["sell_through"] and mixed["index"] == base["index"]
+    assert (base["notices"], mixed["notices"]) == (0, 40)
+    assert ts.repeats_of(done) == {}
+
+    active = _lot(
+        "A1", "40:13:120101:203", area=1000, start=100_000, fin=None, status="PUBLISHED"
+    ) | {"bidd_end": "2026-11-30"}
+    live = ts.lot_row(_notice("I_live"))
+    everything = lots + done + [active, live]
+    r = ts.scan(everything, today=TODAY)
+    assert [x["id"] for x in r["rows"]] == ["A1"]
+    assert r["forms"] == {"auction": 1, "notice": 1} and r["counts"]["notice"] == 0
+
+    only = ts.scan(everything, ts.ScanParams(forms="notice"), today=TODAY)
+    assert [x["id"] for x in only["rows"]] == ["I_live"] and only["counts"]["notice"] == 1
+    s = only["rows"][0]["s"]
+    assert s["verdict"] == "notice" and s["verdict_label"] == "извещение 39.18"
+    assert any("39.18" in t for t in s["ask"])
+    assert not any("начальная цена" in t or "цены перепродажи" in t for t in s["ask"])
+
+    both = ts.scan(everything, ts.ScanParams(forms="all"), today=TODAY)
+    # при цели 100 % лот получает «нет» и уходит в конец; извещения — выше отказов
+    assert [x["id"] for x in both["rows"]] == ["I_live", "A1"]
+    assert both["rows"][1]["s"]["verdict"] == "no"
+    table = ts.xlsx_rows(both["rows"])
+    assert all(len(row) == len(ts.XLSX_COLUMNS) for row in table)
+    assert table[0][-2].startswith("извещение о предоставлении") and table[1][-2] == ""
+    # срок вышел — своё заявление уже не подать
+    late = ts.score_lot(live | {"bidd_end": "2026-11-01"}, {}, today=TODAY)
+    assert late["verdict"] == "no" and "приём заявок закончен" in late["stop"]
+
+
+def test_rent_lot_priced_as_share_of_ownership_price_when_ratio_given():
+    """Аренда под переуступку: цены переуступки в слое нет — берём долю от цены участка в
+    собственности, если долю задали в критериях. Без доли аренда остаётся без оценки."""
+    lots = _district()  # продажи района: 150 ₽/м² → участок 1000 м² = 150 тыс.
+    rent = _lot(
+        "R1", "40:13:120101:300", area=1000, start=10_000, fin=None, kind="rent", status="PUBLISHED"
+    ) | {"bidd_end": "2026-11-30"}
+    stats = ts.index_by(lots)
+    plain = ts.score_lot(rent, stats, ts.ScanParams(target_roi=0.4), today=TODAY)
+    assert plain["verdict"] == "unknown" and plain["sale"]["mid"] is None
+    assert any("долю от цены участка в собственности" in t for t in plain["ask"])
+
+    p = ts.ScanParams(target_roi=0.4, assign_ratio=0.5)
+    s = ts.score_lot(rent, stats, p, today=TODAY)
+    assert s["sale"]["mid"] == 75_000  # 150 тыс. × 50 %
+    assert s["market"]["source"] == "auctions" and s["market"]["assign_ratio"] == 0.5
+    assert s["market"]["source_label"].startswith("переуступка = 50% цены в собственности")
+    assert s["limit"] is not None and s["limit"] > rent["price_start"]
+    assert s["verdict"] in ("go", "edge")
+    # своя цена переуступки в слое рынка важнее доли
+    layer = [
+        {
+            "scope": "40:13",
+            "kind": "rent",
+            "vri_group": "any",
+            "price_mid": 20_000,
+            "source": "manual",
+        }
+    ]
+    own = ts.score_lot(rent, stats, p, layer=layer, today=TODAY)
+    assert own["sale"]["mid"] == 200_000 and own["market"]["source"] == "manual"
+    # продаже доля не мешает; нет цены собственности — нет и оценки аренды
+    sale = _lot("A1", "40:13:120101:203", area=1000, start=100_000, fin=None, status="PUBLISHED")
+    assert ts.score_lot(sale, stats, p, today=TODAY)["sale"]["mid"] == 150_000
+    assert ts.score_lot(rent, {}, p, today=TODAY)["verdict"] == "unknown"
+    # только кадастр: нижний ориентир, вердикт не выше «на грани»
+    low = ts.score_lot(rent | {"cad_cost": 300_000}, {}, p, today=TODAY)
+    assert low["sale"] == {"min": 150_000, "mid": None, "max": None} and low["verdict"] == "edge"

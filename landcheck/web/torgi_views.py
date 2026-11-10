@@ -127,6 +127,11 @@ def _scan_params(q) -> torgi_scan.ScanParams:
         p.kinds = (q.get("kind"),)
     groups = [g for g in q.getlist("group") if g in torgi_scan.GROUPS]
     p.groups = tuple(groups)
+    if q.get("form") in ("notice", "all"):
+        p.forms = q.get("form")
+    if q.get("assign") not in (None, ""):
+        ratio = torgi_calc._pct(q.get("assign"), 0.0)
+        p.assign_ratio = min(ratio, 2.0) if ratio > 0 else None
     return p
 
 
@@ -298,6 +303,8 @@ def torgi_scan_page(request: Request, user: TorgiDep, page: int = 1):
         pages=pages,
         qs=_query(q, region=region),
         qs_nosort=_query(q, region=region, sort=None),
+        qs_form=_query(q, region=region, form=None),
+        bidd_short=torgi_scan.BIDD_TYPE_SHORT,
         today=datetime.now(UTC).date().isoformat(),
         **ctx,
     )

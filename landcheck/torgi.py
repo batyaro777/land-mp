@@ -193,7 +193,12 @@ def cad_num_of(card: dict[str, Any]) -> str | None:
 
 
 def area_of(card: dict[str, Any]) -> float | None:
-    val = _chars(card).get("SquareZU")
+    """Площадь участка. У извещений о предоставлении участок часто ещё не образован: площадь
+    там проектная (`SquareZU_project`), кадастрового номера нет (прод, Карелия, 10.11)."""
+    chars = _chars(card)
+    val = chars.get("SquareZU")
+    if val is None:
+        val = chars.get("SquareZU_project")
     try:
         area = float(val) if val is not None else None
     except (TypeError, ValueError):

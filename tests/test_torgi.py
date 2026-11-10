@@ -57,6 +57,42 @@ def _card(
     return card
 
 
+def _notice(
+    lot_id: str,
+    *,
+    quarter: str = "40:13:120105",
+    status: str = "APPLICATIONS_SUBMISSION",
+    kind: str = "rent",
+    area: float = 1500.0,
+) -> dict:
+    """Извещение о предоставлении (ст. 39.18 ЗК) — как его отдаёт поиск torgi.gov.ru (прод,
+    Карелия, 10.11.2026): цены нет, участок не образован — условный номер и проектная площадь,
+    квартал только в описании."""
+    return {
+        "id": lot_id,
+        "lotName": "Земельный участок для индивидуального жилищного строительства",
+        "lotDescription": f"Участок в кадастровом квартале {quarter}, площадь {area:.0f} кв. м",
+        "lotStatus": status,
+        "biddForm": {"code": "IPS", "name": "Сообщение о предоставлении (реализации)"},
+        "biddType": {"code": "ZK", "name": "Аренда и продажа земельных участков"},
+        "subjectRFCode": quarter.split(":")[0],
+        "characteristics": [
+            {"code": "ConditionalNumber", "characteristicValue": "ЗУ1"},
+            {"code": "SquareZU_project", "characteristicValue": area},
+            {
+                "code": "PermittedUse",
+                "characteristicValue": [
+                    {"code": "2.1", "name": "Для индивидуального жилищного строительства"}
+                ],
+            },
+        ],
+        "category": {"code": "3", "name": "Земли населённых пунктов"},
+        "typeTransaction": kind,
+        "noticeFirstVersionPublicationDate": "2026-11-01T10:00:00Z",
+        "biddEndTime": "2026-12-01T06:00:00Z",
+    }
+
+
 SUCCEED = [
     _card("A_1", "40:13:120101:22", area=2000, start=100_000, fin=150_000),  # 75 ₽/м²
     _card("A_2", "40:13:020705:7", area=1000, start=50_000, fin=50_000, date="2026-09-01"),  # 50

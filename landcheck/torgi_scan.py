@@ -169,6 +169,44 @@ def quarter_of(cad_num: str | None) -> str | None:
     return f"{parts[0].zfill(2)}:{parts[1].zfill(2)}:{parts[2]}"
 
 
+# Извещения о предоставлении (ст. 39.18 ЗК) лежат в том же поиске, что и аукционы, но это не
+# торги: цены нет, участок часто ещё не образован. В Карелии их 319 из 392 идущих лотов (прод,
+# 10.11.2026) — в ликвидность и вердикты они не идут, показываются отдельно.
+NOTICE_FORMS = frozenset({"IPS"})
+_QUARTER_RE = re.compile(r"(?<![\d:])(\d{2}):(\d{2}):(\d{6,7})(?![\d:])")
+
+
+def is_notice(lot: dict[str, Any]) -> bool:
+    return lot.get("form") in NOTICE_FORMS
+
+
+# Вид торгов, когда это не обычный земельный аукцион (ZK): у них свои правила и сроки.
+BIDD_TYPE_SHORT = {
+    "229FZ": "имущество должников",
+    "178FZ": "приватизация",
+    "200FZ": "лесной участок",
+    "127FZ": "банкротство",
+}
+
+
+def bidd_label(lot: dict[str, Any]) -> str:
+    """Короткая подпись вида торгов для таблицы: пусто у обычного земельного аукциона."""
+    if is_notice(lot):
+        return "извещение о предоставлении (ст. 39.18 ЗК)"
+    code = lot.get("bidd_type")
+    if not code or code == "ZK":
+        return ""
+    return BIDD_TYPE_SHORT.get(code) or lot.get("bidd_type_name") or code
+
+
+def quarter_from_text(card: dict[str, Any]) -> str | None:
+    """Кадастровый квартал из названия и описания лота — когда участок не образован и номера
+    нет («…в кадастровом квартале 10:20:0060108»)."""
+    text = f"{card.get('lotName') or ''} {card.get('lotDescription') or ''}"
+    m = _QUARTER_RE.search(text)
+    return f"{m.group(1)}:{m.group(2)}:{m.group(3)}" if m else None
+
+
 def _vri_code(card: dict[str, Any]) -> str | None:
     val = torgi._chars(card).get("PermittedUse")
     first = val[0] if isinstance(val, list) and val else val
@@ -191,7 +229,8 @@ def lot_row(card: dict[str, Any]) -> dict[str, Any] | None:
     if not lot_id:
         return None
     cad = torgi.cad_num_of(card)
-    region = card.get("subjectRFCode") or torgi.region_of(cad)
+    quarter = quarter_of(cad) or quarter_from_text(card)
+    region = card.get("subjectRFCode") or torgi.region_of(cad or quarter)
     vri = torgi.vri_of(card)
     category = (card.get("category") or {}).get("name")
     type_code, type_name = _bidd_type(card)
@@ -199,8 +238,8 @@ def lot_row(card: dict[str, Any]) -> dict[str, Any] | None:
     row: dict[str, Any] = {
         "id": str(lot_id),
         "region": str(region).zfill(2) if region else None,
-        "district": torgi.district_of(cad),
-        "quarter": quarter_of(cad),
+        "district": torgi.district_of(cad or quarter),
+        "quarter": quarter,
         "cad_num": cad,
         "kind": "rent" if card.get("typeTransaction") == "rent" else "sale",
         "form": torgi._code(card.get("biddForm")),
@@ -263,7 +302,9 @@ def _outcome(lot: dict[str, Any]) -> str:
     """Чем кончились торги для ликвидности: `sold` — была борьба; `single` — одна заявка,
     договор с единственным участником по старту (ст. 39.12 ЗК): участок нашёл хозяина;
     `none` — заявок не было; `failed` — не состоялись, число заявок неизвестно (карточка
-    не прочитана); `active`, `canceled`."""
+    не прочитана); `active`, `canceled`; `notice` — извещение о предоставлении, не торги."""
+    if is_notice(lot):
+        return "notice"
     status = lot.get("status")
     if status == "SUCCEED":
         return "sold"
@@ -309,6 +350,8 @@ def stats_of(lots: list[dict[str, Any]]) -> dict[str, Any]:
         "none": len(none),
         "failed_unknown": len(failed),
         "active": len(by.get("active", [])),
+        # извещения о предоставлении за период: спрос на землю без торгов (ст. 39.18 ЗК)
+        "notices": len(by.get("notice", [])),
         "sell_through": sell_through,
         "growth_median": _median(growth),
         "applied_median": _median([float(a) for a in applied]),
@@ -415,6 +458,10 @@ class ScanParams:
     area_max_m2: float | None = None
     kinds: tuple[str, ...] = ()
     groups: tuple[str, ...] = ()
+    forms: str = "auction"  # что показывать: auction — торги, notice — извещения 39.18, all
+    # Аренда под переуступку: цена переуступки как доля цены такого же участка в собственности.
+    # None — не оцениваем: цену переуступки задают в слое рынка района.
+    assign_ratio: float | None = None
     liquid_area: dict[str, tuple[float, float]] = field(
         default_factory=lambda: {
             "housing": (400.0, 2500.0),
@@ -457,10 +504,14 @@ def market_for(
     stats: dict[str, dict[str, Any]],
     layer: list[dict[str, Any]] | None = None,
     markup: float = 1.0,
+    assign_ratio: float | None = None,
 ) -> dict[str, Any] | None:
     """Три сценария цены перепродажи за м² и источник. `layer` — строки слоя рынка
     (`scope`, `vri_group`, `kind`, `price_min/mid/max` за сотку, `exposure_days`, `source`),
-    от ручного ввода, своих сделок или объявлений; сначала квартал, потом район."""
+    от ручного ввода, своих сделок или объявлений; сначала квартал, потом район.
+
+    Аренда: если цены переуступки в слое нет, а задана `assign_ratio`, берём цену такого же
+    участка в собственности (тем же порядком источников) и умножаем на эту долю."""
     kind, group = lot.get("kind"), lot.get("vri_group")
     scopes = [s for s in (lot.get("quarter"), lot.get("district")) if s]
     for scope in scopes:
@@ -524,6 +575,31 @@ def market_for(
             "liquid": None,
             "note": None,
         }
+    if kind == "rent" and assign_ratio:
+        own = market_for({**lot, "kind": "sale"}, stats, layer, markup)
+        if own:
+            share = f"{assign_ratio:.0%}"
+            return {
+                **own,
+                **{
+                    key: own[key] * assign_ratio if own.get(key) else None
+                    for key in ("min_m2", "mid_m2", "max_m2")
+                },
+                "source_label": f"переуступка = {share} цены в собственности; "
+                + own["source_label"],
+                # доля задана критерием, а не сделками: выше «средней» достоверности не ставим
+                "confidence": min(own["confidence"], 2),
+                "note": "; ".join(
+                    t
+                    for t in (
+                        f"цена переуступки принята как {share} цены такого же участка в "
+                        "собственности — доля из критериев отбора",
+                        own.get("note"),
+                    )
+                    if t
+                ),
+                "assign_ratio": assign_ratio,
+            }
     return None
 
 
@@ -553,8 +629,14 @@ VERDICTS = {
     "edge": "на грани",
     "no": "нет",
     "unknown": "нет цены перепродажи",
+    "notice": "извещение 39.18",
 }
-_RANK = {"go": 0, "edge": 1, "unknown": 2, "no": 3}
+_RANK = {"go": 0, "edge": 1, "unknown": 2, "notice": 3, "no": 4}
+NOTICE_TEXT = (
+    "это извещение о предоставлении (ст. 39.18 ЗК), не торги: участок просит конкретный "
+    "заявитель, цены нет. До конца срока можно подать своё заявление — тогда участок выставят "
+    "на аукцион"
+)
 
 
 def score_lot(
@@ -596,7 +678,7 @@ def score_lot(
     if start and growth and growth > 1 and fought:
         expected = round(start * (1 + (growth - 1) * min(fought * 1.5, 1.0)))
 
-    mk = market_for(lot, stats, layer, p.market_markup)
+    mk = market_for(lot, stats, layer, p.market_markup, p.assign_ratio)
     sale = {"min": None, "mid": None, "max": None}
     if mk and area:
         for key in ("min", "mid", "max"):
@@ -630,13 +712,11 @@ def score_lot(
         plus.append(f"до конца приёма заявок {days} дн.")
     if not area:
         ask.append("площадь в лоте не указана")
-    if not start:
+    notice = is_notice(lot)
+    if notice:
+        ask.append(NOTICE_TEXT)
+    elif not start:
         ask.append("начальная цена не указана")
-    if lot.get("form") == "IPS":
-        ask.append(
-            "это извещение о предоставлении (ст. 39.18 ЗК): цены нет, за 30 дней можно подать "
-            "заявление — тогда назначат аукцион"
-        )
     if p.budget and start and start + p.extra > p.budget:
         stop.append("начальная цена с расходами выше бюджета")
     elif p.budget and lot.get("deposit") and lot["deposit"] > p.budget:
@@ -694,10 +774,15 @@ def score_lot(
     # --- вердикт --------------------------------------------------------------------------
     if stop:
         verdict = "no"
+    elif notice:
+        verdict = "notice"
     elif limit is None or not start:
         verdict = "unknown"
         if lot.get("kind") == "rent":
-            ask.append("для аренды нужна цена переуступки — задайте её в слое рынка района")
+            ask.append(
+                "для аренды нужна цена переуступки — задайте её в слое рынка района или долю "
+                "от цены участка в собственности в критериях"
+            )
         else:
             ask.append("нет цены перепродажи — задайте рынок района или дождитесь сбора торгов")
     elif limit < start:
@@ -787,8 +872,13 @@ def scan(
     stats = index_by(lots)
     repeats = repeats_of(lots)
     rows = []
+    forms = {"auction": 0, "notice": 0}
     for lot in lots:
         if lot.get("status") not in ACTIVE:
+            continue
+        form = "notice" if is_notice(lot) else "auction"
+        forms[form] += 1
+        if p.forms in forms and form != p.forms:
             continue
         if p.kinds and lot.get("kind") not in p.kinds:
             continue
@@ -806,7 +896,7 @@ def scan(
     counts = {key: 0 for key in VERDICTS}
     for r in rows:
         counts[r["s"]["verdict"]] += 1
-    return {"rows": rows, "counts": counts, "total": len(rows), "stats": stats}
+    return {"rows": rows, "counts": counts, "total": len(rows), "stats": stats, "forms": forms}
 
 
 # --- выгрузки ------------------------------------------------------------------------------
@@ -839,6 +929,7 @@ XLSX_COLUMNS = (
     "Что за",
     "Что против",
     "Что уточнить",
+    "Вид торгов",
     "Лот",
 )
 
@@ -878,6 +969,7 @@ def xlsx_rows(rows: list[dict[str, Any]]) -> list[list[Any]]:
                 "; ".join(s["plus"]),
                 "; ".join(s["minus"] + s["stop"]),
                 "; ".join(s["ask"]),
+                bidd_label(r),
                 torgi.LOT_URL.format(lot_id=r["id"]),
             ]
         )
@@ -917,7 +1009,13 @@ def to_xlsx(rows: list[dict[str, Any]], path: Any, *, title: str = "Торги")
     return path
 
 
-_KML_STYLE = {"go": "ff3c8f3c", "edge": "ff1fa5e6", "no": "ff4040d0", "unknown": "ff999999"}
+_KML_STYLE = {
+    "go": "ff3c8f3c",
+    "edge": "ff1fa5e6",
+    "no": "ff4040d0",
+    "unknown": "ff999999",
+    "notice": "ffb07a3a",
+}
 
 
 def to_kml(rows: list[dict[str, Any]], *, name: str = "Торги: идущие лоты") -> str:

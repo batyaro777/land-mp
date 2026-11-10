@@ -181,6 +181,24 @@ def torgi_note(lot: dict[str, Any]) -> dict[str, Any]:
     status, kind = lot.get("status"), lot.get("kind")
     date = lot.get("auction_date") or lot.get("bidd_end") or lot.get("published")
     applied = lot.get("admitted") if lot.get("admitted") is not None else lot.get("applied")
+    if torgi_scan.is_notice(lot):
+        # Извещение о предоставлении (ст. 39.18 ЗК): участок уже просит заявитель.
+        if status in torgi_scan.ACTIVE:
+            text = (
+                "на участок подано заявление, идёт извещение о предоставлении (ст. 39.18): "
+                "до конца срока можно подать своё — тогда будет аукцион"
+            )
+        elif status == "CANCELED":
+            text = "извещение о предоставлении отозвано"
+        else:
+            text = "по участку было извещение о предоставлении (ст. 39.18) — скорее всего, занят"
+        return {
+            "text": text,
+            "busy": status != "CANCELED",
+            "date": date,
+            "lot_id": lot.get("id"),
+            "kind": kind,
+        }
     if status in torgi_scan.ACTIVE:
         text, busy = "идут торги", True
     elif status == "SUCCEED":

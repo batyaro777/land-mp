@@ -114,6 +114,12 @@ def test_filter_items_and_torgi_note():
     }
     assert freeland.torgi_note({**lot, "kind": "sale"})["text"] == "продан с торгов"
     assert freeland.torgi_note({"status": "APPLICATIONS_SUBMISSION"})["text"] == "идут торги"
+    # извещение о предоставлении (ст. 39.18): участок уже просит заявитель
+    asked = freeland.torgi_note({"status": "APPLICATIONS_SUBMISSION", "form": "IPS"})
+    assert asked["busy"] is True and "можно подать своё" in asked["text"]
+    past = freeland.torgi_note({"status": "SUCCEED", "form": "IPS", "kind": "rent"})
+    assert past["busy"] is True and "скорее всего, занят" in past["text"]
+    assert freeland.torgi_note({"status": "CANCELED", "form": "IPS"})["busy"] is False
     single = freeland.torgi_note({"status": "FAILED", "applied": 1})
     assert single["busy"] is True and "единственным участником" in single["text"]
     empty = freeland.torgi_note({"status": "FAILED", "applied": 0})

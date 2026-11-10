@@ -18,6 +18,12 @@ torgi.gov.ru пропускает один запрос в 6 секунд и о�
 
 Любая фаза идемпотентна: лоты пишутся по ключу, повтор ничего не портит. Имена участников
 торгов не сохраняются нигде — только число заявок и тип победителя.
+
+Извещения о предоставлении (ст. 39.18 ЗК, `form == "IPS"`) приходят тем же поиском, и их
+большинство: в Карелии 319 из 392 идущих лотов (прод, 10.11.2026). Цены и протоколов у них нет,
+поэтому карточки завершённых извещений не читаем вовсе, а идущих — после аукционов и только
+когда история региона уже собрана. Пока у аукционов остаются непрочитанные карточки, следующий
+проход начинается через `CARDS_RETRY_MIN` минут, а не через сутки.
 """
 
 from __future__ import annotations
@@ -29,7 +35,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from landcheck import ruproxy, torgi, torgi_scan
 from landcheck.web.config import settings
@@ -45,6 +51,14 @@ SHALLOW_PAGES = 5  # после первого полного сбора — с�
 STALE_RUNNING_MIN = 20  # нет отметок прогресса дольше — считаем, что процесс умер
 NSPD_PAUSE_S = 1.0
 ERROR_RETRY_HOURS = 1.0
+CARDS_RETRY_MIN = 10.0  # остались непрочитанные карточки аукционов — следующий проход скоро
+NOTICE_FORMS = sorted(torgi_scan.NOTICE_FORMS)
+
+
+def _is_auction():
+    """Условие запроса: лот — торги, а не извещение о предоставлении."""
+    return TorgiLot.form.is_(None) | TorgiLot.form.not_in(NOTICE_FORMS)
+
 
 _executor: ThreadPoolExecutor | None = None
 _lock = threading.Lock()
@@ -221,11 +235,14 @@ def state_of(region: str) -> dict[str, Any]:
     """Состояние сбора для страницы: что собрано, идёт ли сбор, сколько лотов в базе."""
     with session() as db:
         st = db.get(TorgiSync, region)
-        lots = db.execute(
-            select(TorgiLot.status, TorgiLot.card_at, TorgiLot.price_fin, TorgiLot.nspd_at).where(
+        rows = db.execute(
+            select(TorgiLot.status, TorgiLot.card_at, TorgiLot.price_fin, TorgiLot.form).where(
                 TorgiLot.region == region
             )
         ).all()
+    # Счётчики — по торгам; извещения о предоставлении отдельной строкой.
+    lots = [row for row in rows if row[3] not in torgi_scan.NOTICE_FORMS]
+    notices = [row for row in rows if row[3] in torgi_scan.NOTICE_FORMS]
     active = sum(1 for s, *_ in lots if s in torgi.ACTIVE)
     succeed = [row for row in lots if row[0] == "SUCCEED"]
     failed = [row for row in lots if row[0] == "FAILED"]
@@ -241,6 +258,8 @@ def state_of(region: str) -> dict[str, Any]:
         "error": None,
         "stats": {},
         "lots": len(lots),
+        "notices": len(notices),
+        "notices_active": sum(1 for s, *_ in notices if s in torgi.ACTIVE),
         "active": active,
         "succeed": len(succeed),
         "failed": len(failed),
@@ -378,13 +397,19 @@ def sync_region(
         # 1б. карточки идущих: шаг, задаток, дата торгов и ГПЗУ есть только в карточке ---------
         with session() as db:
             fresh_active = db.execute(
-                select(TorgiLot.id, TorgiLot.published).where(
+                select(TorgiLot.id, TorgiLot.published, TorgiLot.form).where(
                     TorgiLot.region == region,
                     TorgiLot.status.in_(sorted(torgi.ACTIVE)),
                     TorgiLot.card_at.is_(None),
                 )
             ).all()
+        # сначала аукционы; извещениям карточка даёт только адрес — их читаем, когда история
+        # региона уже собрана, на остаток лимита
+        fresh_active = [
+            r for r in fresh_active if backfill_done or r[2] not in torgi_scan.NOTICE_FORMS
+        ]
         fresh_active.sort(key=lambda r: r[1] or "", reverse=True)
+        fresh_active.sort(key=lambda r: r[2] in torgi_scan.NOTICE_FORMS)
         _read_cards(
             api,
             region,
@@ -437,6 +462,7 @@ def sync_region(
                     TorgiLot.region == region,
                     TorgiLot.status.in_(HISTORY_STATUSES),
                     TorgiLot.card_at.is_(None),
+                    _is_auction(),
                 )
             ).all()
         # сначала состоявшиеся (нужна итоговая цена), внутри — новые первыми
@@ -672,17 +698,34 @@ def due_regions(now: datetime | None = None) -> list[str]:
     now = now or utcnow()
     with session() as db:
         rows = db.execute(
-            select(TorgiSync.region, TorgiSync.finished_at, TorgiSync.state).where(
+            select(TorgiSync.region, TorgiSync.finished_at, TorgiSync.state, TorgiSync.stats).where(
                 TorgiSync.auto.is_(True)
             )
         ).all()
+        unread = dict(
+            db.execute(
+                select(TorgiLot.region, func.count())
+                .where(
+                    TorgiLot.status.in_(HISTORY_STATUSES),
+                    TorgiLot.card_at.is_(None),
+                    _is_auction(),
+                )
+                .group_by(TorgiLot.region)
+            ).all()
+        )
     out = []
-    for region, finished, state in rows:
+    for region, finished, state, stats in rows:
         if state in ("running", "queued"):
             continue
         finished = _aware(finished)
-        # после сбоя (шлюз, сайт) пробуем снова через час, а не через сутки
-        wait = timedelta(hours=min(hours, ERROR_RETRY_HOURS) if state == "error" else hours)
+        wait = timedelta(hours=hours)
+        if state == "error":
+            # после сбоя (шлюз, сайт) пробуем снова через час, а не через сутки
+            wait = timedelta(hours=min(hours, ERROR_RETRY_HOURS))
+        elif unread.get(region) and (stats or {}).get("cards"):
+            # цены и заявки дочитываются: прошлый проход карточки читал и они ещё остались.
+            # Если не прочитал ни одной — карточки не отдаются, ждём обычный срок.
+            wait = timedelta(minutes=CARDS_RETRY_MIN)
         if finished is None or now - finished >= wait:
             out.append(region)
     return out

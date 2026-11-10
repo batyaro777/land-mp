@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -12,7 +12,7 @@ from sqlalchemy import select
 
 from landcheck import torgi
 from tests.helpers import make_payload
-from tests.test_torgi import _card, _page
+from tests.test_torgi import _card, _notice, _page
 from tests.test_verification import _make_admin, _register
 from tests.test_web import client  # noqa: F401 — фикстура клиента кабинета
 
@@ -587,3 +587,76 @@ def test_sync_stops_when_cards_do_not_answer_and_rereads_finished(client):  # no
         _, what = torgi_sync.upsert(db, row, NOW)
         assert what == "changed" and lot.card_at is None  # карточку нужно перечитать: итог
         db.rollback()
+
+
+# --- извещения о предоставлении и дочитывание карточек ---------------------------------------
+def _card_ids(fake: FakeTorgi) -> list[str]:
+    return [s["path"].rsplit("/", 1)[-1] for s in fake.seen if "/lotcards/search" not in s["path"]]
+
+
+def test_sync_skips_notice_cards_and_counts_auctions_only(client):  # noqa: F811
+    fake = _seed(client)
+    fake.lists[torgi.STATUS_ACTIVE] += [_notice(f"IA_{i}") for i in range(5)]
+    fake.lists[torgi.STATUS_SUCCEED] += [_notice(f"IS_{i}", status="SUCCEED") for i in range(30)]
+    st = _sync(fake, provider=FakeNspd())
+    assert st["state"] == "idle" and st["backfill_done"] is True
+    # первый проход: карточки только у аукционов
+    assert not [i for i in _card_ids(fake) if i.startswith("I")]
+    assert (st["active"], st["succeed"], st["failed"]) == (12, 15, 6)
+    assert st["succeed_priced"] == 15 and st["cards_left"] == 0
+    assert (st["notices"], st["notices_active"]) == (35, 5)
+    # история собрана: идущим извещениям дочитываем карточку (адрес), завершённым — никогда
+    fake.seen.clear()
+    _sync(fake, provider=FakeNspd())
+    read = _card_ids(fake)
+    assert sorted(i for i in read if i.startswith("IA_")) == [f"IA_{i}" for i in range(5)]
+    assert not [i for i in read if i.startswith("IS_")]
+
+    _admin(client)
+    page = client.get("/tools/torgi-scan?region=40&roi=40").text
+    assert "Всего 12" in page and "IA_0" not in page
+    assert "Извещений о предоставлении (ст. 39.18): 35, из них идут 5" in page
+    assert "сейчас 5 извещений о предоставлении" in page and "form=notice" in page
+    notices = client.get("/tools/torgi-scan?region=40&form=notice").text
+    assert "Всего 5" in notices and "извещений 5" in notices and "извещение 39.18" in notices
+    assert "квартал 40:13:120105" in notices and "/tools/torgi-lot/IA_0" in notices
+    assert "Всего 17" in client.get("/tools/torgi-scan?region=40&form=all").text
+    # критерий переуступки доезжает до формы и до расчёта
+    page = client.get("/tools/torgi-scan?region=40&roi=40&assign=50").text
+    assert 'name="assign" inputmode="decimal" value="50"' in page
+    # ликвидность района считается по аукционам: 15 с борьбой, 3 одному, 3 без заявок
+    liq = client.get("/tools/torgi-liquidity?region=40").text
+    assert "завершено 21, с борьбой 15" in liq
+    assert client.get("/tools/torgi-lot/IA_0").status_code == 200
+
+
+def test_auto_sync_returns_soon_while_auction_cards_remain(client):  # noqa: F811
+    from landcheck.web import torgi_sync
+    from landcheck.web.db import TorgiSync, session
+
+    def finished_at() -> datetime:
+        with session() as db:
+            row = db.get(TorgiSync, "40")
+            row.auto = True
+            db.commit()
+            return row.finished_at.replace(tzinfo=UTC)
+
+    fake = _seed(client)
+    st = _sync(fake, provider=FakeNspd(), max_cards=5)
+    assert st["cards_left"] == 16
+    done = finished_at()
+    assert torgi_sync.due_regions(done + timedelta(minutes=5)) == []
+    assert torgi_sync.due_regions(done + timedelta(minutes=11)) == ["40"]
+    # прошлый проход не прочитал ни одной карточки — не крутимся, ждём обычный срок
+    with session() as db:
+        row = db.get(TorgiSync, "40")
+        row.stats = {**row.stats, "cards": 0}
+        db.commit()
+    assert torgi_sync.due_regions(done + timedelta(minutes=11)) == []
+    assert torgi_sync.due_regions(done + timedelta(hours=25)) == ["40"]
+    # всё дочитано — следующий сбор через сутки
+    st = _sync(fake, provider=FakeNspd())
+    assert st["cards_left"] == 0
+    done = finished_at()
+    assert torgi_sync.due_regions(done + timedelta(hours=2)) == []
+    assert torgi_sync.due_regions(done + timedelta(hours=25)) == ["40"]
