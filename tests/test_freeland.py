@@ -445,3 +445,36 @@ def test_other_users_scan_is_hidden(client, monkeypatch):  # noqa: F811
     assert client.get("/tools/free-land").status_code == 200
     assert client.get(url).status_code == 404  # чужой поиск
     assert f"<code>{Q}</code>" not in client.get("/tools/free-land").text
+
+
+def test_cli_nspd_probe_prints_fields_and_ownership(monkeypatch):
+    """Проба слоёв НСПД: счётчики, имена полей, формы собственности — без значений."""
+    from typer.testing import CliRunner
+
+    from landcheck.cli import app
+    from landcheck.providers import nspd
+
+    raw = _area()
+    raw["landplots"].append(
+        copy.deepcopy(make_payload("40:10:160501:7", ownership=None)["landplot"])
+    )
+    raw["landplots"].append(_plot(77, ownership=None, shift=0.05))
+    raw["auction"] = [{"properties": {"options": {"Кадастровый номер": f"{Q}:2"}}}]
+
+    class Probe:
+        def __init__(self, **kw):
+            pass
+
+        def fetch_area_raw(self, **kw):
+            assert kw == {"quarter": Q}
+            return raw
+
+    monkeypatch.setattr(nspd, "LiveNspdProvider", Probe)
+    out = CliRunner().invoke(app, ["nspd-probe", Q]).output
+    assert "участки: 12" in out and "на аукционе: 1, с границами 0" in out
+    assert "Кадастровый номер×1" in out and "ownership_type×" in out
+    # проба считает признаки слоя как есть: дубль участка 1 из соседней плитки тоже здесь
+    assert "участков этого квартала: 11, соседних: 1" in out
+    assert "пусто — 1" in out and "Частная собственность — 1" in out
+    assert "'no_right': 1" in out and "'outside': 1" in out
+    assert "Синтетический адрес" not in out  # значения полей не печатаются

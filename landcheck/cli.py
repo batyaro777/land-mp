@@ -634,6 +634,40 @@ def torgi_probe(
     print(f"запросов: {api.requests}, повторов: {api.retries}")
 
 
+@app.command("nspd-probe")
+def nspd_probe(
+    quarter: Annotated[str, typer.Argument(help="Кадастровый квартал, например 10:20:0060108")],
+):
+    """Что НСПД отдаёт по кварталу в слоях «участки», «на аукционе», «проекты межевания»:
+    счётчики, имена заполненных полей, формы собственности и статусы. Значений, кроме этих
+    двух справочных полей, не печатает. Нужна, чтобы формат слоя не брать по аналогии."""
+    from collections import Counter
+
+    from landcheck import freeland
+    from landcheck.providers.nspd import LiveNspdProvider
+    from landcheck.web.config import settings
+
+    provider = LiveNspdProvider(
+        with_zones=False, proxy=settings.proxy, timeout=settings.nspd_timeout
+    )
+    raw = provider.fetch_area_raw(quarter=quarter)
+    print(f"ошибки: {raw['errors'] or 'нет'}; прочитано не целиком: {raw['truncated'] or 'нет'}")
+    for key, title in (("landplots", "участки"), ("auction", "на аукционе"), ("pmt", "ПМТ")):
+        opts = [freeland._opts(f) for f in raw[key]]
+        filled = Counter(k for o in opts for k, v in o.items() if v not in (None, ""))
+        with_geom = sum(1 for f in raw[key] if f.get("geometry"))
+        print(f"{title}: {len(opts)}, с границами {with_geom}")
+        print(f"  поля: {', '.join(f'{k}×{n}' for k, n in sorted(filled.items()))}")
+    plots = [freeland._opts(f) for f in raw["landplots"]]
+    inside = [o for o in plots if str(o.get("cad_num") or "").startswith(quarter + ":")]
+    print(f"участков этого квартала: {len(inside)}, соседних: {len(plots) - len(inside)}")
+    for field in ("ownership_type", "status"):
+        tally = Counter(str(o.get(field) or "пусто") for o in inside).most_common()
+        print(f"  {field}: {', '.join(f'{v} — {n}' for v, n in tally)}")
+    result = freeland.analyze(raw["landplots"], raw["auction"], raw["pmt"], quarter=quarter)
+    print(f"отбор: {result['counts']}")
+
+
 @app.command("torgi-enable")
 def torgi_enable(
     region: Annotated[str, typer.Argument(help="Код региона, например 40")],
