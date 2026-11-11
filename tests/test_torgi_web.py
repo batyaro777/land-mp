@@ -25,6 +25,10 @@ def M(v: float) -> str:
 
 
 NOW = datetime(2026, 11, 10, 9, 0, tzinfo=UTC)
+# Страницы считают «осталось дней» от сегодняшней даты, поэтому срок заявок у идущих лотов —
+# от неё же: с жёсткой датой тесты страниц падали на следующий день после написания.
+BIDD_END = (datetime.now(UTC).date() + timedelta(days=40)).isoformat()
+BIDD_END_TS = f"{BIDD_END}T06:00:00Z"
 SECRET_NAME = "Сидоров Пётр Петрович"
 
 
@@ -38,7 +42,7 @@ def _active(i: int, **kw) -> dict:
         status="APPLICATIONS_SUBMISSION",
         **kw,
     )
-    card["biddEndTime"] = "2026-12-20T06:00:00Z"
+    card["biddEndTime"] = BIDD_END_TS
     return card
 
 
@@ -165,7 +169,7 @@ def test_sync_region_collects_lots_cards_and_nspd(client):  # noqa: F811
         assert lot.winner_type == "физлицо" and lot.has_gpzu is True and lot.card_at is not None
         assert lot.district == "40:13" and lot.quarter == "40:13:120102" and lot.region == "40"
         act = db.get(TorgiLot, "ACT_3")
-        assert act.status == "APPLICATIONS_SUBMISSION" and act.bidd_end == "2026-12-20"
+        assert act.status == "APPLICATIONS_SUBMISSION" and act.bidd_end == BIDD_END
         assert act.cad_cost == 250_000 and act.lat is not None
         assert act.price_step == 3_000 and act.deposit == 20_000 and act.card_at is not None
         # имён участников в базе нет
@@ -599,7 +603,7 @@ def _card_ids(fake: FakeTorgi) -> list[str]:
 
 def test_sync_skips_notice_cards_and_counts_auctions_only(client):  # noqa: F811
     fake = _seed(client)
-    fake.lists[torgi.STATUS_ACTIVE] += [_notice(f"IA_{i}") for i in range(5)]
+    fake.lists[torgi.STATUS_ACTIVE] += [_notice(f"IA_{i}", end=BIDD_END_TS) for i in range(5)]
     fake.lists[torgi.STATUS_SUCCEED] += [_notice(f"IS_{i}", status="SUCCEED") for i in range(30)]
     st = _sync(fake, provider=FakeNspd())
     assert st["state"] == "idle" and st["backfill_done"] is True
@@ -666,3 +670,21 @@ def test_auto_sync_returns_soon_while_auction_cards_remain(client):  # noqa: F81
     done = finished_at()
     assert torgi_sync.due_regions(done + timedelta(hours=2)) == []
     assert torgi_sync.due_regions(done + timedelta(hours=25)) == ["40"]
+
+
+def test_district_name_drops_region_prefix():
+    """Район в адресах лотов пишут вразнобой (прод, Карелия и Калуга, 11.11.2026)."""
+    from landcheck.web.torgi_views import _REGION_PREFIX
+
+    cases = {
+        "Респ Карелия Питкярантский район": "Питкярантский район",
+        "обл. Калужская Барятинский район": "Барятинский район",
+        "обл Калужская Спас-Деменский район": "Спас-Деменский район",
+        "Калужская обл Жуковский р-н": "Жуковский р-н",
+        "Краснодарский край Анапский район": "Анапский район",
+        "м.р-н Лахденпохский": "м.р-н Лахденпохский",
+        "Кировский р-н": "Кировский р-н",
+        "Юхновский район": "Юхновский район",
+    }
+    for raw, want in cases.items():
+        assert _REGION_PREFIX.sub("", raw) == want

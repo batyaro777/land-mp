@@ -64,6 +64,7 @@ def _notice(
     status: str = "APPLICATIONS_SUBMISSION",
     kind: str = "rent",
     area: float = 1500.0,
+    end: str = "2026-12-01T06:00:00Z",
 ) -> dict:
     """Извещение о предоставлении (ст. 39.18 ЗК) — как его отдаёт поиск torgi.gov.ru (прод,
     Карелия, 10.11.2026): цены нет, участок не образован — условный номер и проектная площадь,
@@ -89,7 +90,7 @@ def _notice(
         "category": {"code": "3", "name": "Земли населённых пунктов"},
         "typeTransaction": kind,
         "noticeFirstVersionPublicationDate": "2026-11-01T10:00:00Z",
-        "biddEndTime": "2026-12-01T06:00:00Z",
+        "biddEndTime": end,
     }
 
 
