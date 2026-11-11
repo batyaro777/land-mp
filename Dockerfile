@@ -12,8 +12,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends openssl libengi
     && rm -rf /var/lib/apt/lists/*
 
 ARG ASR_LOCAL=0
-COPY pyproject.toml README.md constraints.txt ./
+# Слой зависимостей стоит ДО кода и зависит только от pyproject.toml и constraints.txt. Пока список
+# зависимостей не менялся, Docker берёт этот слой из кэша: правка кода пересобирает лишь последний,
+# маленький слой. Раньше `COPY landcheck` стоял выше `pip install`, и каждая выкладка заново
+# собирала ~750 МБ зависимостей — по ~2 ГБ образа и кэша на сервере за выкладку.
+COPY pyproject.toml constraints.txt ./
+RUN python -c "import os, tomllib; \
+project = tomllib.load(open('pyproject.toml', 'rb'))['project']; \
+extra = project['optional-dependencies']['asr-local'] if os.environ['ASR_LOCAL'] == '1' else []; \
+print('\n'.join(project['dependencies'] + extra))" > /tmp/requirements.txt \
+    && pip install --no-cache-dir -c constraints.txt -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
+
+COPY README.md ./
 COPY landcheck ./landcheck
+# Та же команда, что и раньше: зависимости уже стоят из слоя выше, поэтому здесь ставится только сам
+# landcheck. Если список выше разойдётся с pyproject, недостающее доставится тут — итог не изменится.
 # constraints.txt: версии, с которыми принят прод — сборка без правок кода не тянет новые пакеты
 RUN if [ "$ASR_LOCAL" = "1" ]; then pip install --no-cache-dir -c constraints.txt ".[asr-local]"; \
     else pip install --no-cache-dir -c constraints.txt .; fi
