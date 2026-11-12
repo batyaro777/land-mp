@@ -74,6 +74,15 @@ def region_of(cad_num: str | None) -> str | None:
     return d.split(":")[0] if d else None
 
 
+def subject_code(region: str | None) -> str:
+    """Код субъекта для запроса к torgi.gov.ru — без ведущего нуля. У нас код региона — две
+    цифры, как в кадастровом номере («04»), а сайт хранит регионы 01–09 как «1»–«9»: прод,
+    12.11.2026, Республика Алтай — поиск с «04» вернул 0 лотов, с «4» — 2096. В ответе код
+    приходит так же, без нуля; в базу он пишется двумя цифрами (`torgi_scan.lot_row`)."""
+    r = (region or "").strip()
+    return str(int(r)) if r.isdigit() else r
+
+
 # --- клиент ------------------------------------------------------------------------------
 _throttle_lock = threading.Lock()
 _last_request_at = 0.0
@@ -138,7 +147,7 @@ class TorgiClient:
         """Страница поиска лотов по земле. Без `text` — все лоты региона (анализатор торгов)."""
         params = {
             "catCode": "2",
-            "subjRF": region,
+            "subjRF": subject_code(region),
             "lotStatus": statuses,
             "pubFrom": pub_from,
             "byFirstVersion": "true",

@@ -143,6 +143,43 @@ def _handler(seen: list[dict]):
     return handler
 
 
+def test_region_code_goes_to_torgi_without_leading_zero():
+    """Прод, 12.11.2026: torgi.gov.ru хранит регионы 01–09 как «1»–«9». Поиск по Республике
+    Алтай с кодом «04» вернул 0 лотов, с «4» — 2096. В базе регион остаётся двумя цифрами."""
+    from landcheck import torgi_scan
+
+    assert torgi.subject_code("04") == "4" and torgi.subject_code("40") == "40"
+    assert torgi.subject_code("4") == "4" and torgi.subject_code("") == ""
+    seen: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = urlparse(str(req.url))
+        hit = _card("A_1", "04:05:030701:30", fin=None, status="PUBLISHED")
+        hit["subjectRFCode"] = "4"  # так код приходит с сайта
+        if not url.path.endswith("/lotcards/search"):
+            return httpx.Response(200, json=hit)  # карточка лота: кода региона в запросе нет
+        seen.append({k: v[0] for k, v in parse_qs(url.query).items()})
+        return httpx.Response(200, json=_page([hit], 1))
+
+    api = torgi.TorgiClient(httpx.Client(transport=httpx.MockTransport(handler)), interval=0)
+    data = api.search(region="04", statuses="PUBLISHED", pub_from="2025-11-12", form=None)
+    assert seen[0]["subjRF"] == "4"
+    row = torgi_scan.lot_row(data["content"][0])
+    assert row["region"] == "04" and row["district"] == "04:05"
+    # двузначный регион уходит как есть
+    api.search(region="40", statuses="PUBLISHED", pub_from="2025-11-12", form=None)
+    assert seen[1]["subjRF"] == "40"
+    # сводка по району участка («Торги рядом за год») идёт тем же клиентом
+    seen.clear()
+    a = torgi.nearby_auctions(
+        "04:05:030701:30",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        now=NOW,
+        interval=0,
+    )
+    assert a["region"] == "04" and seen and all(q["subjRF"] == "4" for q in seen)
+
+
 def test_nearby_auctions_stats_and_district_filter():
     seen: list[dict] = []
     client = httpx.Client(transport=httpx.MockTransport(_handler(seen)))
