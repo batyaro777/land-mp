@@ -27,7 +27,7 @@ def _login(c, email: str) -> None:
     assert r.status_code == 303
 
 
-def test_test_account_publishes_without_proof_and_market_hides_it(client):  # noqa: F811
+def test_test_account_publishes_without_proof_and_market_marks_it(client, monkeypatch):  # noqa: F811
     _register(client, "tester@example.com")
     url = client.post("/listing", data={"cad_num": CAD, "price": "2500000"}).headers["location"]
     lid = int(url.rsplit("/", 1)[1])
@@ -59,12 +59,21 @@ def test_test_account_publishes_without_proof_and_market_hides_it(client):  # no
         assert row.status == "test" and row.published and row.verified_at is None
     client.post("/logout")
     client.cookies.clear()
-    # без входа и для обычных пользователей витрина тестовое объявление не показывает
-    assert CAD not in client.get("/market").text
+    # решение Тони 12.11.2026: тестовые объявления видны на витрине всем, с честной пометкой
+    guest = client.get("/market").text
+    assert CAD in guest and "тест: право не проверялось" in guest
+    assert "размещены для проверки сервиса: право по ним не проверялось" in guest
+    assert "право подтверждено" not in guest
     _register(client, "buyer@example.com", role="buyer")
+    assert CAD in client.get("/market").text
+    # настройка возвращает прежнее поведение: только администратору и тестовым аккаунтам
+    from landcheck.web.config import settings
+
+    monkeypatch.setattr(settings, "market_tests", False)
     assert CAD not in client.get("/market").text
     client.post("/logout")
     client.cookies.clear()
+    assert CAD not in client.get("/market").text
     # администратор видит
     _register(client, "adm@example.com", role="broker")
     _make_admin("adm@example.com")
@@ -205,3 +214,49 @@ def test_migration_adds_test_mode_column(tmp_path):
     con = sqlite3.connect(p)
     cols = {r[1] for r in con.execute("PRAGMA table_info(users)")}
     assert "test_mode" in cols
+
+
+def test_moderator_publishes_pending_listing_as_test(client):  # noqa: F811
+    """Сооснователь, 12.11.2026: объявление «на проверке», правообладатель в выписке другой —
+    подтвердить право нельзя, а в общий доступ оно нужно. Модератор публикует его как тест:
+    честная пометка вместо «право подтверждено», файлы подтверждения удаляются."""
+    from landcheck.web import materials
+    from landcheck.web.db import Listing, Notification, User, session
+
+    _register(client, "seller9@example.com")
+    url = client.post("/listing", data={"cad_num": CAD, "price": "2500000"}).headers["location"]
+    lid = int(url.rsplit("/", 1)[1])
+    client.post(
+        url + "/verify",
+        data={"proof_kind": "owner"},
+        files=[("proofs", ("egrn.pdf", io.BytesIO(PDF), "application/pdf"))],
+    )
+    with session() as db:
+        assert db.get(Listing, lid).status == "pending"
+    assert materials.proofs_dir(lid).exists()
+    assert client.get(f"/l/{lid}").status_code == 404
+    client.post("/logout")
+    client.cookies.clear()
+    _register(client, "adm9@example.com", role="broker")
+    _make_admin("adm9@example.com")
+    page = client.get("/admin/listings").text
+    assert 'value="test"' in page and "Опубликовать как тест" in page
+    r = client.post(f"/admin/listings/{lid}/decide", data={"decision": "test"})
+    assert r.status_code == 303 and r.headers["location"] == "/admin/listings"
+    with session() as db:
+        row = db.get(Listing, lid)
+        assert row.status == "test" and row.published and row.verified_at is None
+        seller = db.scalar(select(User).where(User.email == "seller9@example.com"))
+        notes = [n.text for n in db.scalars(select(Notification)) if n.user_id == seller.id]
+        assert any("опубликовано модератором как тестовое" in t for t in notes)
+    assert not materials.proofs_dir(lid).exists()  # файлы удалены, как после любого решения
+    client.post("/logout")
+    client.cookies.clear()
+    # гость видит объявление на витрине и по ссылке — с пометкой, без «право подтверждено»
+    m = client.get("/market").text
+    assert CAD in m and "тест: право не проверялось" in m and "право подтверждено" not in m
+    pub = client.get(f"/l/{lid}").text
+    assert "Право на участок не проверялось" in pub and "право подтверждено" not in pub
+    # неизвестное решение не принимается
+    _login(client, "adm9@example.com")
+    assert client.post(f"/admin/listings/{lid}/decide", data={"decision": "x"}).status_code == 400

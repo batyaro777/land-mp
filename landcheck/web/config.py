@@ -64,6 +64,13 @@ class Settings:
     auto_verify: bool = field(
         default_factory=lambda: os.environ.get("LANDCHECK_AUTO_VERIFY", "1") != "0"
     )
+    # Тестовые объявления на витрине видны всем, с пометкой «тест: право не проверялось»
+    # (решение Тони, 12.11.2026: витрина пилота пуста, объявления сооснователей должны быть
+    # в общем доступе, но без ложного «право подтверждено»). LANDCHECK_MARKET_TESTS=0 —
+    # как было с 09.11: только администратору и тестовым аккаунтам.
+    market_tests: bool = field(
+        default_factory=lambda: os.environ.get("LANDCHECK_MARKET_TESTS", "1") != "0"
+    )
     # RU-шлюз (ТЗ v3, п. 9): SOCKS5 на российский сервер для torgi.gov.ru и набор
     # сертификатов с корнем Минцифры. Пусто — слой торгов честно пишет «не настроен».
     ru_proxy: str | None = field(

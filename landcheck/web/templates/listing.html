@@ -63,7 +63,7 @@
       <span class="small muted">Объявление появится на витрине <a href="/market" target="_blank">/market</a> и по публичной ссылке.</span>
     {% endif %}
   {% elif row.status == 'test' %}
-    <p><span class="badge v-check">тест: без проверки права</span> Опубликовано в тестовом режиме: на витрине его видят только администраторы и тестовые аккаунты, покупателям не рассылается.
+    <p><span class="badge v-check">тест: без проверки права</span> Опубликовано в тестовом режиме: {% if market_tests_on() %}на витрине оно видно всем с пометкой «тест: право не проверялось»{% else %}на витрине его видят только администраторы и тестовые аккаунты{% endif %}, покупателям не рассылается.
       Публичная страница: <a href="/l/{{ row.id }}" target="_blank">{{ public_url }}</a></p>
     <form method="post" action="/listing/{{ row.id }}/publish" class="inline"><input type="hidden" name="action" value="off"><button class="outline secondary sm">Снять с публикации</button></form>
     <p class="small muted">Для настоящей публикации подтвердите право — электронная выписка ЕГРН (PDF с Госуслуг или XML с .sig), сформированная после {{ row.created_at|dt }}.</p>
@@ -88,7 +88,7 @@
     <p class="small"><span class="badge v-check">тестовый аккаунт</span>
       {% if d.warnings %}Тестовая публикация откроется, когда в тексте не останется противоречий с кадастром.{% else %}
       <form method="post" action="/listing/{{ row.id }}/publish" class="inline"><input type="hidden" name="action" value="on"><button class="outline sm">Опубликовать как тест (без проверки права)</button></form>
-      Объявление получит статус «тест»: видно только администраторам и тестовым аккаунтам.{% endif %}</p>
+      Объявление получит статус «тест»: {% if market_tests_on() %}на витрине оно видно всем с пометкой «право не проверялось»{% else %}видно только администраторам и тестовым аккаунтам{% endif %}.{% endif %}</p>
   {% endif %}
   {% if d.skipped_proofs %}<p class="small err">Не приняты файлы: {{ d.skipped_proofs|join(', ') }}</p>{% endif %}
   {% if d.proof_check and row.status != 'draft' %}{% include "_proof_check.html" %}{% endif %}

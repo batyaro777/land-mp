@@ -11,6 +11,7 @@
   {% endfor %}
   <a href="/admin/listings?status=all" role="button" class="outline sm {{ 'secondary' if status != 'all' else '' }}">все</a>
 </div>
+{% if err == 'warnings' %}<p class="err">Как тест не опубликовано: в тексте объявления есть противоречия с кадастром — сначала их должен убрать продавец.</p>{% endif %}
 {% if not rows %}<p class="muted">Пусто.</p>{% endif %}
 {% for r in rows %}
 {% set o = owners.get(r.user_id) %}
@@ -27,6 +28,7 @@
   <form method="post" action="/admin/listings/{{ r.id }}/decide" class="decide">
     <input name="note" placeholder="Заметка продавцу (при отказе — причина)">
     <button name="decision" value="approve" class="sm">Право подтверждено</button>
+    <button name="decision" value="test" class="outline sm" title="Право не подтверждается. Объявление выходит на витрину и по прямой ссылке с пометкой «тест: право не проверялось», покупателям не рассылается; файлы подтверждения удаляются. Для проверки сервиса, когда подтвердить право нельзя.">Опубликовать как тест</button>
     <button name="decision" value="reject" class="outline secondary sm">Отклонить</button>
   </form>
   {% endif %}

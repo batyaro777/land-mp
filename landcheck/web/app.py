@@ -161,6 +161,7 @@ templates.env.globals.update(
     ENTITIES=ENTITIES,
     ORG_KINDS=ORG_KINDS,
     REGION_NAMES=sorted(set(CADASTRAL_REGIONS.values())),
+    market_tests_on=lambda: settings.market_tests,
 )
 
 
@@ -2473,7 +2474,8 @@ def listing_publish(user: UserDep, listing_id: int, action: Annotated[str, Form(
             err = "warnings"
         elif test_ok:
             # тестовый аккаунт (Тони, 09.11): публикация без проверки права, статус «тест» —
-            # на витрине видят только администраторы и тестовые аккаунты, рассылки покупателям нет
+            # на витрине с пометкой «тест: право не проверялось» (всем — с 12.11, см.
+            # settings.market_tests), рассылки покупателям нет
             row.status = "test"
             row.published = True
         else:
@@ -2754,7 +2756,8 @@ def market(
     sort: str = "",
     applied: int = 0,
 ):
-    """Витрина: только объявления с подтверждённым правом, публично, без входа."""
+    """Витрина, публично, без входа: объявления с подтверждённым правом и — пока включено
+    `settings.market_tests` — тестовые, с пометкой «тест: право не проверялось»."""
     from landcheck.inputs import parse_number
     from landcheck.listing import AVITO_OBJECT_TYPES
 
@@ -2777,7 +2780,8 @@ def market(
             price_max=pm,
             area_min=num(area_min),
             area_max=num(area_max),
-            include_test=bool(me is not None and (me.is_admin or me.test_mode)),
+            include_test=settings.market_tests
+            or bool(me is not None and (me.is_admin or me.test_mode)),
         )
     cards = sort_cards(cards, sort)
     resp = render(
@@ -2850,7 +2854,8 @@ def _nearby_listings(db, row, limit: int = 6) -> list[dict[str, Any]]:
     mine = parts((row.data or {}).get("address"))
     if not mine:
         return []
-    statuses = ("verified", "test") if row.status == "test" else ("verified",)
+    with_tests = row.status == "test" or settings.market_tests
+    statuses = ("verified", "test") if with_tests else ("verified",)
     rows = db.scalars(
         select(ListingRow)
         .where(
@@ -3828,7 +3833,7 @@ def admin_users(request: Request, admin: AdminDep):
 
 
 @router.get("/admin/listings", response_class=HTMLResponse)
-def admin_listings(request: Request, admin: AdminDep, status: str = "pending"):
+def admin_listings(request: Request, admin: AdminDep, status: str = "pending", err: str = ""):
     from landcheck.web.db import Listing as ListingRow
 
     if status not in LISTING_STATUSES and status != "all":
@@ -3851,6 +3856,7 @@ def admin_listings(request: Request, admin: AdminDep, status: str = "pending"):
         status=status,
         counts=counts,
         proofs={r.id: _proof_files(r.id) for r in rows},
+        err=err,
         user=admin,
     )
 
@@ -3862,7 +3868,13 @@ def admin_decide(
     decision: Annotated[str, Form()],
     note: Annotated[str, Form()] = "",
 ):
-    """Решение модератора: право подтверждено или отклонено; файлы подтверждения удаляются."""
+    """Решение модератора: право подтверждено, отклонено или объявление опубликовано как
+    тестовое; файлы подтверждения удаляются.
+
+    «Как тест» (12.11.2026): сооснователь просил вывести в общий доступ объявление, по которому
+    правообладатель в выписке не совпал с продавцом. Подтвердить право нельзя — страница
+    написала бы «право подтверждено»; тестовая публикация показывает объявление всем с честной
+    пометкой «право не проверялось». При противоречиях текста с кадастром не публикуется."""
     from datetime import UTC, datetime
 
     from landcheck.web.db import Listing as ListingRow
@@ -3877,6 +3889,12 @@ def admin_decide(
         elif decision == "reject":
             row.status = "rejected"
             row.published = False
+        elif decision == "test":
+            if _listing_warnings(row.data):
+                return RedirectResponse("/admin/listings?err=warnings", status_code=303)
+            row.status = "test"
+            row.published = True
+            row.verified_at = None
         else:
             raise HTTPException(400)
         row.moderation_note = note.strip()[:1000] or None
@@ -3889,6 +3907,12 @@ def admin_decide(
         title = (row.data or {}).get("title") or row.cad_num
         if decision == "approve":
             msg = f"Право на участок «{title}» подтверждено: можно публиковать в базу."
+        elif decision == "test":
+            msg = (
+                f"Объявление «{title}» опубликовано модератором как тестовое: право по нему не "
+                "проверялось, на витрине и на странице объявления стоит пометка «тест». Снять с "
+                "публикации можно в объявлении."
+            )
         else:
             msg = f"Подтверждение права по «{title}» отклонено" + (
                 f": {row.moderation_note}" if row.moderation_note else "."
