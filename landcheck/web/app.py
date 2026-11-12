@@ -2128,6 +2128,7 @@ async def listing_create(
                 row.data = {
                     **row.data,
                     "proof_check": check,
+                    "proof_rev": _parser_rev(),
                     "proof_files": saved,
                     "gpzu": materials.gpzu_of(taken.documents),
                 }
@@ -2290,15 +2291,24 @@ def listing_page(request: Request, user: UserDep, listing_id: int):
         if fresh != list(row.data.get("warnings") or []):
             row.data = {**row.data, "warnings": fresh}
             changed = True
-        # Автосверка выписки тоже пересчитывается, пока объявление на проверке и файлы на месте:
-        # разбор выписок дорабатывается (прод, 12.11: новая форма Росреестра читалась не вся),
-        # а сохранённый итог оставался прежним. Продавец — владелец объявления, не смотрящий.
-        if row.status == "pending" and _proof_files(row.id):
+        # Автосверка выписки пересчитывается, когда разбор выписок изменился, а объявление ещё
+        # на проверке и файлы на месте (прод, 12.11: новая форма Росреестра читалась не вся, а
+        # сохранённый итог оставался прежним). Один раз на версию разбора: у скана это
+        # распознавание текста. Продавец — владелец объявления, не тот, кто смотрит.
+        from landcheck import egrn
+
+        if (
+            row.status == "pending"
+            and row.data.get("proof_rev") != egrn.PARSER_REV
+            and _proof_files(row.id)
+        ):
             owner = db.get(User, row.user_id) or user
             again = _proof_check(row, owner, row.proof_kind or "owner")
-            if again is not None and again != row.data.get("proof_check"):
-                row.data = {**row.data, "proof_check": again}
-                changed = True
+            patch: dict[str, Any] = {"proof_rev": egrn.PARSER_REV}
+            if again is not None:
+                patch["proof_check"] = again
+            row.data = {**row.data, **patch}
+            changed = True
         if changed:
             db.commit()
         from landcheck.web import demand
@@ -2394,6 +2404,7 @@ async def listing_verify(
         data = dict(row.data)
         data["skipped_proofs"] = skipped
         data["proof_check"] = _proof_check(row, user, proof_kind, docs=docs)
+        data["proof_rev"] = _parser_rev()
         data["gpzu"] = materials.gpzu_of(docs) or data.get("gpzu")
         row.data = data
         auto = _auto_verify(db, row, user)
@@ -2403,6 +2414,12 @@ async def listing_verify(
     if auto:
         _delete_proofs(listing_id)  # как после решения модератора: в базе остаётся только итог
     return RedirectResponse(f"/listing/{listing_id}", status_code=303)
+
+
+def _parser_rev() -> int:
+    from landcheck import egrn
+
+    return egrn.PARSER_REV
 
 
 def _proof_check(row, user: User, proof_kind: str, docs=None) -> dict[str, Any] | None:

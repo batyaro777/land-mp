@@ -624,11 +624,25 @@ def test_pending_proof_check_is_recomputed_on_view(client, monkeypatch):  # noqa
     status, _, data = _row(url)
     by = {i["key"]: i["status"] for i in data["proof_check"]["items"]}
     assert status == "pending" and by["right"] == "unknown" and by["holder"] == "ok"
-    # разбор «научился» читать строку о праве — файл тот же
+    from landcheck import egrn
+
+    assert data["proof_rev"] == egrn.PARSER_REV
+    # разбор тот же — просмотр ничего не пересчитывает (у скана это распознавание текста)
     monkeypatch.setattr(intake, "pdf_text", lambda raw, max_pages=20: EXTRACT)
     assert client.get(url).status_code == 200
     by = {i["key"]: i["status"] for i in _row(url)[2]["proof_check"]["items"]}
-    assert by["right"] == "ok" and by["holder"] == "ok"
+    assert by["right"] == "unknown"
+    # разбор «научился» читать строку о праве (версия выросла) — файл тот же, итог обновился
+    monkeypatch.setattr(egrn, "PARSER_REV", egrn.PARSER_REV + 1)
+    assert client.get(url).status_code == 200
+    data = _row(url)[2]
+    by = {i["key"]: i["status"] for i in data["proof_check"]["items"]}
+    assert by["right"] == "ok" and by["holder"] == "ok" and data["proof_rev"] == egrn.PARSER_REV
+    # и только один раз: следующий просмотр файл уже не читает
+    monkeypatch.setattr(intake, "pdf_text", lambda raw, max_pages=20: 1 / 0)
+    assert client.get(url).status_code == 200
+    monkeypatch.setattr(egrn, "PARSER_REV", egrn.PARSER_REV + 1)
+    monkeypatch.setattr(intake, "pdf_text", lambda raw, max_pages=20: EXTRACT)
     # модератор открывает то же объявление: сверка идёт с именем продавца, а не модератора
     client.post("/logout")
     client.cookies.clear()
