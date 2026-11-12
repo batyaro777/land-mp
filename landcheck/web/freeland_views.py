@@ -24,10 +24,11 @@ from landcheck import freeland, torgi, torgi_scan
 from landcheck.inputs import normalize_cad
 from landcheck.models import Purpose
 from landcheck.models import Request as CheckRequest
+from landcheck.regions import CADASTRAL_REGIONS
 from landcheck.web import jobs
 from landcheck.web.app import render
 from landcheck.web.config import settings
-from landcheck.web.db import Check, LandScan, TorgiLot, session
+from landcheck.web.db import Check, LandScan, TorgiLot, TorgiSync, session
 from landcheck.web.serialize import request_to_dict
 from landcheck.web.torgi_views import GROUP_USE, TorgiDep
 
@@ -190,6 +191,7 @@ def _filtered(db, scan: LandScan, q) -> list[dict[str, Any]]:
         area_max_m2=amax * 100 if amax else None,
         hide_busy=q.get("free") == "1",
         own=q.get("own") if q.get("own") in freeland.OWN_KIND_LABEL else None,
+        strict=q.get("show") != "all",
     )
 
 
@@ -259,12 +261,13 @@ def free_land_result(request: Request, user: TorgiDep, scan_id: int):
         state = _state(scan)
         result = scan.result or {}
         items = _filtered(db, scan, q) if state == "done" else []
+        every = _with_torgi(db, result.get("items") or []) if state == "done" else []
         # сколько кандидатов без отметок аукциона, проекта межевания и торгов — по всему списку
-        clear = (
-            len(freeland.filter_items(_with_torgi(db, result.get("items") or []), hide_busy=True))
-            if state == "done"
-            else 0
-        )
+        clear = len(freeland.filter_items(every, hide_busy=True))
+        grades = freeland.grade_counts(every)
+        grades["strong_clear"] = len(freeland.filter_items(every, hide_busy=True, strict=True))
+        # торги региона не собраны — отметок «был на торгах» у участков быть не может
+        torgi_known = db.get(TorgiSync, scan.scope[:2]) is not None
         ctx = {
             "scan": {
                 "id": scan.id,
@@ -276,6 +279,7 @@ def free_land_result(request: Request, user: TorgiDep, scan_id: int):
                 "error": scan.error,
             },
         }
+        scan_region = scan.scope[:2]
     hows = sorted({i["how"] for i in (result.get("items") or [])})
     points = [
         {
@@ -294,8 +298,16 @@ def free_land_result(request: Request, user: TorgiDep, scan_id: int):
         "free_land_result.html",
         state=state,
         result=result,
-        items=items,
+        # слабые кандидаты, когда их показывают, идут после сильных
+        items=sorted(
+            ({**i, "weak": freeland.weak_reasons(i)} for i in items), key=lambda i: bool(i["weak"])
+        ),
         clear=clear,
+        grades=grades,
+        weak_label=freeland.WEAK_LABEL,
+        weak_note=freeland.WEAK_NOTE,
+        torgi_known=torgi_known,
+        region_name=CADASTRAL_REGIONS.get(scan_region, ""),
         points=points,
         hows=hows,
         howto=freeland.HOWTO,

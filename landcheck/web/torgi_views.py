@@ -44,6 +44,8 @@ from landcheck.web.serialize import request_to_dict
 router = APIRouter()
 PAGE_ROWS = 150
 MAX_CHECK_LOTS = 30
+MAX_POOL_ROWS = 60  # торгов в таблице «из чего взята цена»
+MAX_AD_ROWS = 15
 # Назначение лота → «что делать на участке» в проверке (цель — купить на торгах)
 GROUP_USE = {
     "housing": Purpose.IZHS,
@@ -457,20 +459,31 @@ def torgi_lot_page(request: Request, user: TorgiDep, lot_id: str, saved: str = "
         for x in lots
         if x.get("cad_num") and x["cad_num"] == lot.get("cad_num") and x["id"] != lot_id
     ]
-    comparables = [
-        x
-        for x in lots
-        if x["id"] != lot_id
-        and x.get("district") == lot.get("district")
-        and x.get("kind") == lot.get("kind")
-        and x.get("status") == "SUCCEED"
-        and x.get("price_fin")
-    ]
-    same_group = [x for x in comparables if x.get("vri_group") == lot.get("vri_group")]
-    if len(same_group) >= torgi_scan.MIN_SAMPLE:
-        comparables = same_group
-    near = [x for x in comparables if x.get("quarter") == lot.get("quarter")]
-    comparables = (near + [x for x in comparables if x not in near])[:12]
+    # Сначала — ровно те торги, из которых взяты цена перепродажи (продажа) или типичная
+    # годовая плата (аренда): эксперт должен видеть, на чём стоит оценка. Если выборки нет —
+    # просто похожие завершённые торги района.
+    pool_ids = set(torgi_scan.auction_pool_ids(lot, stats))
+    pool_total = len(pool_ids)
+    if pool_ids:
+        comparables = sorted(
+            (x for x in lots if x["id"] in pool_ids and x.get("price_fin") and x.get("area_m2")),
+            key=lambda x: x["price_fin"] / x["area_m2"],
+        )[:MAX_POOL_ROWS]
+    else:
+        comparables = [
+            x
+            for x in lots
+            if x["id"] != lot_id
+            and x.get("district") == lot.get("district")
+            and x.get("kind") == lot.get("kind")
+            and x.get("status") == "SUCCEED"
+            and x.get("price_fin")
+        ]
+        same_group = [x for x in comparables if x.get("vri_group") == lot.get("vri_group")]
+        if len(same_group) >= torgi_scan.MIN_SAMPLE:
+            comparables = same_group
+        near = [x for x in comparables if x.get("quarter") == lot.get("quarter")]
+        comparables = (near + [x for x in comparables if x not in near])[:12]
     calc = {
         "start": lot.get("price_start"),
         "step": lot.get("price_step"),
@@ -496,6 +509,7 @@ def torgi_lot_page(request: Request, user: TorgiDep, lot_id: str, saved: str = "
         lot_url=torgi.LOT_URL.format(lot_id=lot_id),
         same_parcel=sorted(same_parcel, key=lambda x: x.get("published") or "", reverse=True),
         comparables=comparables,
+        pool_total=pool_total,
         district_stats=stats.get(lot.get("district") or ""),
         quarter_stats=stats.get(lot.get("quarter") or ""),
         district_name=names.get(lot.get("district") or ""),
@@ -504,18 +518,46 @@ def torgi_lot_page(request: Request, user: TorgiDep, lot_id: str, saved: str = "
         groups=torgi_scan.GROUPS,
         kinds=torgi_scan.KIND_RU,
         status_ru=torgi.STATUS_RU,
-        qs=_query(q),
+        qs=_query(q, saved=None),
         saved=saved,
         user=user,
     )
 
 
+def _ad_rows(ads: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Объявления для показа в карточке: только то, что нужно глазам, и только веб-ссылки."""
+    out = []
+    for a in ads[:MAX_AD_ROWS]:
+        url = str(a.get("url") or "")
+        if not url.startswith(("https://", "http://")):
+            continue
+        out.append(
+            {
+                "title": str(a.get("title") or "")[:120],
+                "url": url[:500],
+                "host": str(a.get("host") or "")[:60],
+                "price_rub": a.get("price_rub"),
+                "area_m2": a.get("area_m2"),
+                "pps": a.get("pps"),
+                "scope": a.get("scope"),
+            }
+        )
+    return out
+
+
 @router.post("/tools/torgi-lot/{lot_id}/ads")
-def torgi_lot_ads(user: TorgiDep, lot_id: str):
+def torgi_lot_ads(request: Request, user: TorgiDep, lot_id: str):
     """Цены предложений рядом — через поиск объявлений (как блок «Оценка стоимости» в отчёте):
-    медиана и 25–75 % за сотку записываются в слой рынка района с источником «объявления»."""
+    медиана и 25–75 % за сотку записываются в слой рынка района с источником «объявления»,
+    сами объявления со ссылками — рядом, чтобы их можно было проверить глазами."""
     from landcheck.market_ads import MIN_N, collect_ads, district_fallback
     from landcheck.region import locality_from_address, short_place
+
+    back_qs = _query(request.query_params, saved=None)
+
+    def back(code: str) -> RedirectResponse:
+        tail = f"&{back_qs}" if back_qs else ""
+        return RedirectResponse(f"/tools/torgi-lot/{lot_id}?saved={code}{tail}", status_code=303)
 
     with session() as db:
         lot = db.get(TorgiLot, lot_id)
@@ -525,7 +567,7 @@ def torgi_lot_ads(user: TorgiDep, lot_id: str):
         category, vri = lot.category, lot.vri
     locality = locality_from_address(address)
     if not locality or not district:
-        return RedirectResponse(f"/tools/torgi-lot/{lot_id}?saved=noloc", status_code=303)
+        return back("noloc")
     from landcheck.web.content import land_kind
 
     ads = collect_ads(
@@ -535,7 +577,7 @@ def torgi_lot_ads(user: TorgiDep, lot_id: str):
         fallback=district_fallback(locality),
     )
     if ads.get("n", 0) < MIN_N or not ads.get("median"):
-        return RedirectResponse(f"/tools/torgi-lot/{lot_id}?saved=noads", status_code=303)
+        return back("noads")
     where = ads.get("scope_label") or short_place(locality)
     note = f"{ads['n']} объявл. с ценой и площадью, {where}; цены предложений, не сделок"
     _save_market(
@@ -550,8 +592,14 @@ def torgi_lot_ads(user: TorgiDep, lot_id: str):
         note=note,
         source="ads",
         user_id=user.id,
+        details={
+            "ads": _ad_rows(ads.get("ads") or []),
+            "where": where,
+            "lot_id": lot_id,
+            "fetched_at": ads.get("fetched_at"),
+        },
     )
-    return RedirectResponse(f"/tools/torgi-lot/{lot_id}?saved=ads", status_code=303)
+    return back("ads")
 
 
 # --- ликвидность и слой рынка ----------------------------------------------------------------
@@ -612,6 +660,7 @@ def _save_market(
     note: str | None,
     source: str,
     user_id: int | None,
+    details: dict[str, Any] | None = None,
 ) -> None:
     with session() as db:
         row = db.scalar(
@@ -629,6 +678,7 @@ def _save_market(
         row.exposure_days = exposure_days
         row.liquid = liquid
         row.note = (note or "").strip()[:500] or None
+        row.details = details
         row.user_id = user_id
         row.updated_at = datetime.now(UTC)
         db.commit()

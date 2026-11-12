@@ -292,13 +292,20 @@ def test_scan_page_lot_page_and_exports(client):  # noqa: F811
     # в квартале идущих лотов истории нет, по району все торги с борьбой → ждём ×1,5 → «на грани»
     assert "на грани 12" in page
     assert 'id="torgi-map"' in page and "Скачать XLSX" in page
+    # основание оценки названо: цена — по итогам торгов, не рынок; как проверить — рядом
+    assert "с ценой рынка: 0 из 12" in page and "Как определяется, выгодна ли цена" in page
+    assert "по одним торгам «интересен» не ставим" in page
+    assert 'formaction="/tools/torgi-lot/ACT_0/ads?roi=40&amp;region=40"' in page
     # при цели 100 % старт уже выше предела
     assert "нет 12" in client.get("/tools/torgi-scan?region=40&roi=100").text
     # фильтр по кварталу и вердикту
     assert "40:13:120101:100" not in client.get("/tools/torgi-scan?region=40&d=40:99").text
     lot = client.get("/tools/torgi-lot/ACT_0?region=40&roi=40").text
-    assert "Почему «на грани»" in lot and "Похожие завершённые торги рядом" in lot
-    assert "40:13:120102:1" in lot and "×1.5" in lot  # сопоставимые из района
+    assert "Почему «на грани»" in lot and "Торги, из которых взята цена перепродажи" in lot
+    assert "площадь от 1/5 до 5 площадей лота; 15 лот." in lot
+    assert "40:13:120102:1" in lot and "×1.5" in lot  # те самые торги района
+    assert "Это не цена рынка" in lot and "вся выборка, 15 лот.: от" in lot
+    assert "попадает в ±30 % от итога" in lot
     # рост в блоке ликвидности — по той же сделке, что и в расчёте ожидаемой цены
     assert "Рост цены к старту, продажа, медиана" in lot and "15 лот." in lot
     assert "Кадастровая стоимость" in lot and "старт — 40 % от неё" in lot
@@ -374,6 +381,18 @@ def test_ads_fill_market_layer(client, monkeypatch):  # noqa: F811
             "p25": 38_000.0,
             "p75": 52_000.0,
             "scope_label": "Малоярославецкий район",
+            "ads": [
+                {
+                    "title": "Продам участок 10 соток ИЖС",
+                    "url": "https://example-board.ru/sale/123456789",
+                    "host": "example-board.ru",
+                    "price_rub": 450_000.0,
+                    "area_m2": 1000.0,
+                    "pps": 45_000.0,
+                    "scope": "locality",
+                },
+                {"title": "не ссылка", "url": "javascript:alert(1)", "pps": 1.0},
+            ],
         }
 
     monkeypatch.setattr(market_ads, "collect_ads", fake_collect)
@@ -382,6 +401,18 @@ def test_ads_fill_market_layer(client, monkeypatch):  # noqa: F811
     lot = client.get("/tools/torgi-lot/ACT_0?saved=ads&roi=40").text
     assert "Объявления найдены" in lot and "объявления, 40:13" in lot and M(450_000) in lot
     assert "5 объявл. с ценой и площадью, Малоярославецкий район" in lot
+    # сами объявления — в карточке, со ссылками; не веб-ссылки отброшены
+    assert "Объявления, из которых взята цена: 1" in lot
+    assert 'href="https://example-board.ru/sale/123456789"' in lot and "javascript:" not in lot
+    assert "Продам участок 10 соток ИЖС" in lot and "Это не цена рынка" not in lot
+    # цена с рынка: при цели 40 % предел 308 тыс. выше ожидаемых 150 тыс. → «интересен»
+    assert "Почему «интересен»" in lot
+    page = client.get("/tools/torgi-scan?region=40&roi=40").text
+    assert "интересен 12" in page and "с ценой рынка: 12 из 12" in page
+    assert "/ads?region=40" not in page  # кнопка поиска объявлений больше не нужна
+    # поиск из списка лотов возвращает в карточку с теми же критериями
+    r = client.post("/tools/torgi-lot/ACT_2/ads?region=40&roi=40")
+    assert r.headers["location"] == "/tools/torgi-lot/ACT_2?saved=ads&region=40&roi=40"
     monkeypatch.setattr(market_ads, "collect_ads", lambda *a, **k: {"n": 1, "median": 1.0})
     assert client.post("/tools/torgi-lot/ACT_1/ads").headers["location"].endswith("saved=noads")
 

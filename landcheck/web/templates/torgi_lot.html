@@ -56,18 +56,20 @@
       <td class="num">{% if s.limits[key] is not none and lot.price_start %}{% set gap = s.limits[key] - lot.price_start %}{% if gap >= 0 %}+{{ gap|money }}{% if lot.price_step %} ({{ (gap // lot.price_step)|int }} шаг.){% endif %}{% else %}<span class="err">{{ gap|money }}</span>{% endif %}{% else %}—{% endif %}</td></tr>
     {% endfor %}
   </table>
-  <p class="small">Источник цены: <strong>{{ s.market.source_label }}</strong>, надёжность {{ s.confidence }}{% if s.market.note %} ({{ s.market.note }}){% endif %}.
-    Ожидаемая цена победителя — {{ s.expected_price|money }}{% if s.liquidity.growth %} ({{ s.liquidity.growth_where }}: на таких торгах — {{ kinds.get(lot.kind, lot.kind) }} — цена растёт к старту в {{ s.liquidity.growth }} раза){% elif lot.price_start %} (сколько прибавляют на таких торгах, данных мало — взят старт){% endif %}.
+  <p class="small">Цена перепродажи: <strong>{{ s.market.source_label }}</strong>{% if s.sale_sotka.mid %} — {{ s.sale_sotka.min|money if s.sale_sotka.min else '—' }} – <strong>{{ s.sale_sotka.mid|money }}</strong> – {{ s.sale_sotka.max|money if s.sale_sotka.max else '—' }} за сотку{% elif s.sale_sotka.min %} — {{ s.sale_sotka.min|money }} за сотку{% endif %}{% if s.market.n %}; вся выборка, {{ s.market.n }} лот.: от {{ (s.market.lo_m2 * 100)|money }} до {{ (s.market.hi_m2 * 100)|money }} за сотку{% endif %}; надёжность {{ s.confidence }}{% if s.market.note %} ({{ s.market.note }}){% endif %}.
+    Ожидаемая цена победителя — {{ s.expected_price|money }}{% if s.liquidity.growth %} ({{ s.liquidity.growth_where }}: на таких торгах — {{ kinds.get(lot.kind, lot.kind) }} — цена растёт к старту в {{ s.liquidity.growth }} раза){% elif lot.price_start %} (сколько прибавляют на таких торгах, данных мало — взят старт){% endif %}; оценка грубая: на завершённых торгах она попадает в ±30 % от итога в 3–4 случаях из 10.
     {% if s.roi_start is not none %}При входе по старту: ROI {{ (s.roi_start * 100)|round|int }} %{% if s.annual_start is not none %}, {{ (s.annual_start * 100)|round|int }} % годовых при сроке до продажи {{ s.hold_months }} мес.{% endif %}{% endif %}
     {% if s.roi_expected is not none %} При входе по ожидаемой цене: ROI {{ (s.roi_expected * 100)|round|int }} %.{% endif %}
     {% if s.safe is not none %} Безопасный ориентир — {{ s.safe|money }} (минимум из предельных).{% endif %}</p>
-  {% if s.market.source == 'auctions' %}<p class="small muted">Цена взята из итогов торгов района: это то, почём землю уже покупали у государства, рынок обычно выше. Если знаете рынок — задайте его ниже, расчёт станет точнее.</p>{% endif %}
+  {% if s.market.source == 'auctions' %}<p class="small warn">Это не цена рынка. Она взята из итогов торгов района — того, почём такие участки покупали у государства; сами торги перечислены в таблице внизу страницы. Рынок обычно выше, но насколько — по торгам не видно, поэтому «интересен» здесь не ставится. Нажмите «Найти объявления рядом» или задайте рынок района ниже — оценка пересчитается.</p>
+  {% elif s.market.source == 'cadastre' %}<p class="small warn">Рыночной цены нет: расчёт сделан по кадастровой стоимости, это нижний ориентир. По ней не ставится ни «интересен», ни «нет». Нажмите «Найти объявления рядом» или задайте рынок района ниже.</p>
+  {% elif s.market.source == 'ads' %}<p class="small muted">Цена взята из объявлений о продаже: это цены предложений, а не сделок, торг обычно снижает их. Сами объявления — в блоке «Рынок района и квартала» ниже.</p>{% endif %}
   {% else %}
   <p class="small">Цены перепродажи нет: в районе мало завершённых торгов с ценой и рынок не задан. Задайте рынок района ниже или найдите объявления рядом.</p>
   {% endif %}
   <div class="toolbar no-print">
     {% if lot.price_start %}<a href="{{ calc_url }}" role="button" class="sm">Расчёт по шагам аукциона</a>{% endif %}
-    <form method="post" action="/tools/torgi-lot/{{ lot.id }}/ads" class="inline"><button class="outline sm" title="Поиск объявлений о продаже участков в этом населённом пункте; медиана за сотку запишется в слой рынка района">Найти объявления рядом</button></form>
+    <form method="post" action="/tools/torgi-lot/{{ lot.id }}/ads{% if qs %}?{{ qs }}{% endif %}" class="inline"><button class="outline sm" title="Поиск объявлений о продаже участков в этом населённом пункте; медиана за сотку запишется в слой рынка района">Найти объявления рядом</button></form>
     {% if lot.cad_num %}<form method="post" action="/tools/torgi-scan/check" class="inline"><input type="hidden" name="lot" value="{{ lot.id }}"><button class="outline sm">Полная проверка участка</button></form>{% endif %}
     <a href="/tools/torgi-deals?lot={{ lot.id }}" role="button" class="outline secondary sm">Записать в мои сделки</a>
   </div>
@@ -85,6 +87,23 @@
       <td class="small">{{ {'manual': 'вручную', 'deals': 'свои сделки', 'ads': 'объявления'}.get(m.source, m.source) }}{% if m.liquid %} · {{ 'ликвид' if m.liquid == 'liquid' else 'неликвид' }}{% endif %}{% if m.note %}<div class="muted">{{ m.note }}</div>{% endif %}</td></tr>
     {% endfor %}
   </table>
+  {% for m in layer %}{% set found = (m.details or {}).get('ads') or [] %}{% if found %}
+  <details{% if saved == 'ads' %} open{% endif %}>
+    <summary class="small">Объявления, из которых взята цена: {{ found|length }} — {{ (m.details or {}).get('where') or m.scope }}, {{ groups.get(m.vri_group, 'любое назначение') }}{% if m.updated_at %}, найдены {{ m.updated_at|dt }}{% endif %}</summary>
+    <div class="table-wrap">
+    <table class="results">
+      <thead><tr><th>Объявление</th><th class="num">Площадь</th><th class="num">Цена</th><th class="num">₽ за сотку</th></tr></thead>
+      {% for a in found %}
+      <tr><td class="small"><a href="{{ a.url }}" target="_blank" rel="noopener nofollow">{{ a.title or a.host }}</a> <span class="muted">{{ a.host }}{% if a.scope == 'district' %} · по району{% endif %}</span></td>
+        <td class="num">{% if a.area_m2 %}{{ (a.area_m2 / 100)|round(1) }} сот.{% else %}—{% endif %}</td>
+        <td class="num">{{ a.price_rub|money }}</td>
+        <td class="num">{{ a.pps|money }}</td></tr>
+      {% endfor %}
+    </table>
+    </div>
+    <p class="small muted">Это цены предложений, не сделок. Отбирались объявления с ценой и площадью, сопоставимые по площади с лотом, для которого шёл поиск. Откройте их и проверьте, похожи ли они на участок лота; если нет — задайте диапазон «от – до» вручную, ручная запись главнее.</p>
+  </details>
+  {% endif %}{% endfor %}
   {% endif %}
   <details{% if not layer %} open{% endif %}>
     <summary class="small">Задать рынок вручную</summary>
@@ -141,7 +160,12 @@
 </div>
 
 <article>
+  {% if pool_total %}
+  <h4>{{ 'Торги, из которых взята цена перепродажи' if s.market and s.market.source == 'auctions' else ('Торги, по которым видна типичная годовая плата' if lot.kind == 'rent' else 'Сопоставимые завершённые торги') }}</h4>
+  <p class="small muted">Та же сделка, то же назначение, площадь от 1/5 до 5 площадей лота; {{ pool_total }} лот.{% if comparables|length < pool_total %} Показаны {{ comparables|length }} самых дешёвых за сотку.{% endif %} От дешёвых к дорогим: по столбцу «₽ за сотку» видно разброс.</p>
+  {% else %}
   <h4>Похожие завершённые торги рядом</h4>
+  {% endif %}
   {% if comparables %}
   <div class="table-wrap">
   <table class="results">

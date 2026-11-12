@@ -45,8 +45,8 @@
     <th class="num" title="Доля участков, которые нашли хозяина">Продано</th>
     <th class="num" title="Во сколько раз цена победителя выше начальной, медиана; аренда и продажа отдельно — годовую плату на аукционах аренды разгоняют сильнее">Рост</th>
     <th class="num">Заявок на лот</th>
-    <th class="num" title="Медиана итоговой цены состоявшихся торгов продажи">Продажа, ₽/сот.</th>
-    <th class="num" title="Медиана итоговой годовой платы">Аренда, ₽/сот. в год</th>
+    <th class="num" title="Медиана итоговой цены состоявшихся торгов продажи; ниже — число лотов и середина выборки (от 25 до 75 %)">Продажа, ₽/сот.</th>
+    <th class="num" title="Медиана итоговой годовой платы; ниже — число лотов и середина выборки (от 25 до 75 %)">Аренда, ₽/сот. в год</th>
     <th class="num">Идёт</th>
     <th>Рынок (ваш слой)</th>
   </tr></thead>
@@ -60,8 +60,8 @@
     <td class="num">{% if r.sell_through is not none %}{{ (r.sell_through * 100)|round|int }} %{% else %}—{% endif %}</td>
     <td class="num small">{% if r.rent.growth_median %}аренда ×{{ r.rent.growth_median }}{% endif %}{% if r.rent.growth_median and r.sale.growth_median %}<br>{% endif %}{% if r.sale.growth_median %}продажа ×{{ r.sale.growth_median }}{% endif %}{% if not r.rent.growth_median and not r.sale.growth_median %}—{% endif %}</td>
     <td class="num">{{ r.applied_median if r.applied_median is not none else '—' }}</td>
-    <td class="num">{% if r.sale.median_m2 %}{{ (r.sale.median_m2 * sotka)|money }}<div class="small muted">{{ r.sale.n }} лот.</div>{% else %}—{% endif %}</td>
-    <td class="num">{% if r.rent.median_m2 %}{{ (r.rent.median_m2 * sotka)|money }}<div class="small muted">{{ r.rent.n }} лот.</div>{% else %}—{% endif %}</td>
+    <td class="num">{% if r.sale.median_m2 %}{{ (r.sale.median_m2 * sotka)|money }}<div class="small muted">{{ r.sale.n }} лот.{% if r.sale.n > 1 and r.sale.p25_m2 and r.sale.p75_m2 %}<br>{{ (r.sale.p25_m2 * sotka)|money }} – {{ (r.sale.p75_m2 * sotka)|money }}{% endif %}</div>{% else %}—{% endif %}</td>
+    <td class="num">{% if r.rent.median_m2 %}{{ (r.rent.median_m2 * sotka)|money }}<div class="small muted">{{ r.rent.n }} лот.{% if r.rent.n > 1 and r.rent.p25_m2 and r.rent.p75_m2 %}<br>{{ (r.rent.p25_m2 * sotka)|money }} – {{ (r.rent.p75_m2 * sotka)|money }}{% endif %}</div>{% else %}—{% endif %}</td>
     <td class="num">{{ r.active or '' }}</td>
     <td class="small">{% for m in by_scope.get(r.key, []) %}<div>{{ kinds.get(m.kind, m.kind) }}: <strong>{{ m.price_mid|money if m.price_mid else '—' }}</strong>{% if m.exposure_days %} · {{ m.exposure_days }} дн.{% endif %}{% if m.liquid %} · {{ 'ликвид' if m.liquid == 'liquid' else 'неликвид' }}{% endif %} <span class="muted">({{ {'manual': 'вручную', 'deals': 'сделки', 'ads': 'объявления'}.get(m.source, m.source) }})</span></div>{% endfor %}
       <a href="#market-form" onclick="document.getElementById('market-scope').value='{{ r.key }}'">задать</a></td>
@@ -78,6 +78,7 @@
 <article id="market-form">
   <h4>Слой рынка: цена перепродажи за сотку</h4>
   <p class="small muted">Как полигоны на вашей карте: «край по торгам 240, рынок 320–350». Запись по кварталу главнее записи по району. Для аренды задаётся цена переуступки права.</p>
+  <p class="small">Не знаете рынок района — не вводите цифру на глаз. Откройте идущий лот этого района на вкладке «Лоты» и нажмите «объявления рядом»: сервис найдёт объявления о продаже похожих участков в том же населённом пункте, покажет их списком со ссылками и сам запишет сюда медиану и разброс за сотку. Потом диапазон можно поправить руками. Столбец «Продажа, ₽/сот.» в таблице выше — нижняя граница для сверки: почём землю покупали у государства. Если рынок вы знаете, задайте «от» и «до»: вердикт «интересен» проверяется и по нижней цене.</p>
   <form method="post" action="/tools/torgi-market">
     <input type="hidden" name="back" value="/tools/torgi-liquidity?region={{ region }}&amp;level={{ level }}">
     <div class="grid">

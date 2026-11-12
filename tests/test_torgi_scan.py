@@ -173,6 +173,8 @@ def test_score_go_when_limit_beats_expected_price():
     # ожидаемая цена победителя: в квартале лота все шесть торгов прошли с борьбой, рост ×1,5
     assert s["expected_price"] == 150_000
     assert s["verdict"] == "go" and s["verdict_label"] == "интересен"
+    assert s["market_based"] and s["sale_sotka"] == {"min": 51_000, "mid": 60_000, "max": 69_000}
+    assert s["spread"] == 1.4 and any("237\u202f273" in t for t in s["plus"])
     assert s["steps_left"] == 59 and s["headroom"] == 2.79
     assert s["roi_start"] == 4.35 and s["days_left"] == 15
     assert any("ГПЗУ" in p for p in s["plus"]) and any("ликвидный" in p for p in s["plus"])
@@ -188,13 +190,24 @@ def test_score_edge_and_no_and_unknown():
     assert s["market"]["source"] == "auctions" and s["limit"] == 69_786
     # предел выше старта, но ниже ожидаемой цены победителя (87 тыс.) → на грани
     assert s["verdict"] == "edge" and any("слабой конкуренции" in m for m in s["minus"])
-    # при пороге 40 % тот же лот проходит: предел 102 756 выше ожидаемых 87 тыс.
+    # при пороге 40 % предел 102 756 выше ожидаемых 87 тыс., но цена перепродажи — только итоги
+    # торгов района, а не рынок: по одним торгам «интересен» не ставим (Антон М., 12.11.2026)
     s40 = ts.score_lot(cheap, stats, ts.ScanParams(target_roi=0.4), today=TODAY)
-    assert s40["limit"] == 102_756 and s40["verdict"] == "go"
+    assert s40["limit"] == 102_756 and s40["verdict"] == "edge" and not s40["market_based"]
+    assert "по одним торгам «интересен» не ставим" in s40["minus"][0]
+    assert s40["sale_sotka"] == {"min": 15_000, "mid": 15_000, "max": 15_000}
+    assert s40["market"]["n"] == 6 and s40["market"]["lo_m2"] == s40["market"]["hi_m2"] == 150
+    # тот же лот с ценой из объявлений (рынок) — «интересен»
+    ads = [{"scope": "40:13", "kind": "sale", "vri_group": "any", "price_mid": 15_000}]
+    ads[0]["source"] = "ads"
+    s_ads = ts.score_lot(cheap, stats, ts.ScanParams(target_roi=0.4), layer=ads, today=TODAY)
+    assert s_ads["verdict"] == "go" and s_ads["market_based"] and s_ads["limit"] == 102_756
+    assert any("по нижней цене перепродажи" in t for t in s_ads["plus"])
     # старт уже выше предела
     dear = _lot("B2", "40:13:120105:2", start=140_000, **base)
     s = ts.score_lot(dear, stats, ts.ScanParams(target_roi=1.0), today=TODAY)
-    assert s["verdict"] == "no" and any("старт выше предельной" in m for m in s["minus"])
+    assert s["verdict"] == "no" and "старт выше предельной" in s["minus"][0]
+    assert "по итогам торгов района" in s["minus"][0]
     # район без истории и без слоя рынка — вердикта нет, сказано, чего не хватает
     lone = _lot("B3", "40:99:000001:1", start=50_000, **base)
     s = ts.score_lot(lone, stats, today=TODAY)
@@ -254,6 +267,65 @@ def test_score_illiquid_district_and_repeats_and_cadastre():
     r = ts.scan(dead + [lot], ts.ScanParams(target_roi=0.4), today=TODAY)
     s = r["rows"][0]["s"]
     assert s["market"]["source"] == "cadastre" and s["base"] == "min" and s["verdict"] == "edge"
+    assert any("даже по кадастровой стоимости" in t for t in s["plus"])
+    assert "нижний ориентир" in s["minus"][0]
+    # старт равен кадастровой стоимости (так обычно и назначают): по нижнему ориентиру сделка
+    # не проходит, но это не «нет» — рыночной цены просто нет
+    at_cost = {**lot, "id": "D2", "cad_num": "40:10:160500:6", "price_start": 100_000.0}
+    r = ts.scan(dead + [at_cost], ts.ScanParams(target_roi=0.4), today=TODAY)
+    s = r["rows"][0]["s"]
+    assert s["market"]["source"] == "cadastre" and s["limit"] < 100_000
+    assert s["verdict"] == "unknown" and r["counts"] == {**r["counts"], "no": 0, "unknown": 1}
+    assert any("«нет» по ней не ставим" in a for a in s["ask"])
+
+
+def test_wide_price_range_blocks_go_when_low_scenario_fails():
+    """Большой разброс цен рынка: по середине сделка проходит, по нижней цене — уже старт выше
+    предела. Это «на грани», и причина названа первой."""
+    stats = ts.index_by(_district())
+    lot = _lot(
+        "W1",
+        "40:13:120101:500",
+        area=1000,
+        start=150_000,
+        fin=None,
+        status="PUBLISHED",
+        bidd_end="2026-11-30",
+    )
+    wide = [
+        {
+            "scope": "40:13",
+            "kind": "sale",
+            "vri_group": "any",
+            "price_min": 20_000,
+            "price_mid": 60_000,
+            "price_max": 100_000,
+        }
+    ]
+    s = ts.score_lot(lot, stats, ts.ScanParams(target_roi=0.4), layer=wide, today=TODAY)
+    # середина: 600 тыс. → предел 411 тыс.; низ: 200 тыс. → 137 тыс., ниже старта 150 тыс.
+    assert s["limits"]["mid"] == 411_024 and s["limits"]["min"] == 137_008
+    assert s["verdict"] == "edge" and s["spread"] == 5.0
+    assert "по нижней цене перепродажи сделка не проходит уже на старте" in s["minus"][0]
+    assert any("разброс цен перепродажи большой" in t for t in s["minus"])
+    # узкий диапазон того же рынка — «интересен»
+    narrow = [{**wide[0], "price_min": 50_000, "price_max": 70_000}]
+    s = ts.score_lot(lot, stats, ts.ScanParams(target_roi=0.4), layer=narrow, today=TODAY)
+    assert s["verdict"] == "go" and s["spread"] == 1.4
+    assert not any("разброс" in t for t in s["minus"])
+
+
+def test_auction_pool_ids_are_the_lots_behind_the_price():
+    stats = ts.index_by(_district())
+    lot = _lot("P1", "40:13:120101:600", area=1000, start=60_000, fin=None, status="PUBLISHED")
+    assert sorted(ts.auction_pool_ids(lot, stats)) == [f"S{i}" for i in range(6)]
+    # завершённый лот сам себе не образец
+    done = ts.index_by(_district())
+    own = next(x for x in _district() if x["id"] == "S0")
+    assert "S0" not in ts.auction_pool_ids(own, done) and len(ts.auction_pool_ids(own, done)) == 5
+    # поле с участками под дом не сравниваем — выборки нет
+    field = _lot("P2", "40:13:120101:601", area=50_000, vri="Сенокошение", fin=None)
+    assert ts.auction_pool_ids(field, stats) == []
 
 
 def test_rent_lot_needs_assignment_price():

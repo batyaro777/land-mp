@@ -196,6 +196,59 @@ def analyze(
     }
 
 
+# Слабые кандидаты. Прод, 12.11.2026, поиск вокруг участка (радиус 2 км, 818 участков): из 86
+# строк 27 меньше сотки (опоры, вышки, обрезки — минимум 0,04 м²), 34 ранее учтённых без права,
+# у 34 не указан вид использования. Эксперт: «выдал много как бы свободных участков, нужны
+# условия, чтобы ограничить выборку». Страница по умолчанию показывает только сильных.
+TINY_M2 = 100.0
+WEAK_LABEL = {
+    "tiny": "меньше сотки",
+    "no_area": "площадь не указана",
+    "prior": "ранее учтённый без права",
+    "no_vri": "вид использования не указан",
+}
+WEAK_NOTE = {
+    "tiny": "меньше сотки: опора, вышка или обрезок — отдельно такой участок не используют",
+    "no_area": "площадь в ЕГРН не указана",
+    "prior": "ранее учтённый надел: право могло возникнуть до 1998 года и не попасть в реестр",
+    "no_vri": "вид использования не указан — обычно старая запись, по которой мало данных",
+}
+
+
+def weak_reasons(item: dict[str, Any]) -> list[str]:
+    """Почему строку нельзя считать сильным кандидатом — ключи `WEAK_LABEL`; пусто — сильный:
+    право публичное или не зарегистрировано у учтённого участка, есть площадь от сотки и вид
+    использования."""
+    out = []
+    area = item.get("area_m2")
+    if area is None:
+        out.append("no_area")
+    elif area < TINY_M2:
+        out.append("tiny")
+    if own_kind(item) == "prior":
+        out.append("prior")
+    if not item.get("vri"):
+        out.append("no_vri")
+    return out
+
+
+def grade_counts(items: list[dict[str, Any]]) -> dict[str, Any]:
+    """Сколько сильных и слабых кандидатов и почему слабые (одна строка может иметь несколько
+    причин)."""
+    reasons: dict[str, int] = {}
+    weak = 0
+    for i in items:
+        why = weak_reasons(i)
+        weak += bool(why)
+        for key in why:
+            reasons[key] = reasons.get(key, 0) + 1
+    return {
+        "strong": len(items) - weak,
+        "weak": weak,
+        "reasons": [(WEAK_LABEL[k], reasons[k]) for k in WEAK_LABEL if k in reasons],
+    }
+
+
 def filter_items(
     items: list[dict[str, Any]],
     *,
@@ -205,13 +258,16 @@ def filter_items(
     area_max_m2: float | None = None,
     hide_busy: bool = False,
     own: str | None = None,
+    strict: bool = False,
 ) -> list[dict[str, Any]]:
     """Фильтр списка на странице: категория, назначение, площадь; `hide_busy` убирает то, что
     уже на аукционе, в проекте межевания или сдано с торгов; `own` — `public` (собственность
     названа публичной), `no_right` (учтённые без зарегистрированного права), `prior` (ранее
-    учтённые без права)."""
+    учтённые без права); `strict` — только сильные кандидаты (см. `weak_reasons`)."""
     out = []
     for i in items:
+        if strict and weak_reasons(i):
+            continue
         if how and i.get("how") != how:
             continue
         if own and own_kind(i) != own:
@@ -308,6 +364,7 @@ XLSX_COLUMNS = (
     "В проекте межевания",
     "Торги по участку",
     "Как оформить",
+    "Оценка строки",
 )
 
 
@@ -326,6 +383,9 @@ def xlsx_rows(items: list[dict[str, Any]]) -> list[list[Any]]:
             "да" if i.get("in_pmt") else "",
             (i.get("torgi") or {}).get("text") or "",
             HOWTO[i["how"]]["source"],
+            "слабый кандидат: " + "; ".join(WEAK_LABEL[k] for k in why)
+            if (why := weak_reasons(i))
+            else "сильный кандидат",
         ]
         for i in items
     ]
@@ -344,7 +404,7 @@ def to_xlsx(items: list[dict[str, Any]], path: Any, *, title: str = "Свобо�
         cell.alignment = Alignment(wrap_text=True, vertical="top")
     for row in xlsx_rows(items):
         ws.append(row)
-    for col, width in {1: 22, 2: 30, 3: 40, 5: 28, 6: 50, 8: 50, 11: 34, 12: 34}.items():
+    for col, width in {1: 22, 2: 30, 3: 40, 5: 28, 6: 50, 8: 50, 11: 34, 12: 34, 13: 40}.items():
         ws.column_dimensions[ws.cell(row=1, column=col).column_letter].width = width
     ws.freeze_panes = "B2"
     howto = wb.create_sheet("Как оформить")

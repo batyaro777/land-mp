@@ -18,7 +18,9 @@
 Цена перепродажи берётся из самого надёжного доступного источника, и источник всегда назван:
 ручной слой рынка по кварталу или району → свои сделки → объявления → итоги торгов района
 (консервативно: рынок обычно выше цены торгов) → кадастровая стоимость (нижний ориентир).
-Без данных вердикта нет: «достоверность выше полноты» (ТЗ п. 10).
+Без данных вердикта нет: «достоверность выше полноты» (ТЗ п. 10). «Интересен» ставится только
+по цене рынка (первые три источника): итоги торгов говорят, почём землю покупают у государства,
+а не почём её перепродают; по кадастровой стоимости не ставится и «нет».
 """
 
 from __future__ import annotations
@@ -364,11 +366,11 @@ def stats_of(lots: list[dict[str, Any]]) -> dict[str, Any]:
     }
     for kind in ("sale", "rent"):
         samples = [
-            (v, lot["area_m2"], lot.get("quarter"))
+            (v, lot["area_m2"], lot.get("quarter"), lot.get("id"))
             for lot in sold
             if lot.get("kind") == kind and (v := _rub_m2(lot))
         ]
-        per_m2 = [v for v, _, _ in samples]
+        per_m2 = [x[0] for x in samples]
         # Рост цены и доля торгов с борьбой — отдельно по сделке: годовую плату на аукционах
         # аренды разгоняют в разы (Карелия, 10.11.2026: медиана ×6), на продаже — нет.
         k_sold = [lot for lot in sold if lot.get("kind") == kind]
@@ -386,7 +388,7 @@ def stats_of(lots: list[dict[str, Any]]) -> dict[str, Any]:
             "median_m2": _median(per_m2),
             "p25_m2": torgi._quantile(per_m2, 0.25),
             "p75_m2": torgi._quantile(per_m2, 0.75),
-            # (₽/м², площадь, квартал) — чтобы для лота отобрать сопоставимые по площади
+            # (₽/м², площадь, квартал, лот) — чтобы для лота отобрать сопоставимые по площади
             "samples": samples,
         }
     out["index"], out["label"] = liquidity_index(out)
@@ -524,6 +526,27 @@ SOURCE_RU = {
     "cadastre": "кадастровая стоимость",
 }
 CONFIDENCE_RU = {3: "высокая", 2: "средняя", 1: "низкая"}
+# Источники с ценой рынка. Итоги торгов и кадастровая стоимость — не рынок: по ним «интересен»
+# не ставим. Прод, 12.11.2026, Калужская область и Карелия, проверка на завершённых торгах:
+# старт ниже медианы итогов торгов района у 96 % лотов (медиана — в 2,3 раза), то есть «старт
+# ниже итогов» лоты не различает; ожидаемая цена победителя попадает в ±30 % от итога в 4
+# случаях из 10 на продаже и в 3 из 10 на аренде (там, где была борьба).
+MARKET_SOURCES = frozenset({"manual", "deals", "ads"})
+WIDE_SPREAD = 2.0  # верх сценариев вдвое выше низа — середине верить нельзя
+
+
+def _pool(lot: dict[str, Any], stats: dict[str, dict[str, Any]]) -> tuple[str | None, list[tuple]]:
+    key = f"{lot.get('district')}|{lot.get('vri_group')}"
+    samples = ((stats.get(key) or {}).get(lot.get("kind") or "sale") or {}).get("samples") or []
+    samples = [x for x in samples if len(x) < 4 or x[3] != lot.get("id")]  # сам лот — не образец
+    area = lot.get("area_m2")
+    if area:
+        samples = [x for x in samples if area / AREA_BAND <= x[1] <= area * AREA_BAND]
+    near = [x for x in samples if x[2] and x[2] == lot.get("quarter")]
+    for where, pool in (("квартал", near), ("район", samples)):
+        if len(pool) >= MIN_SAMPLE:
+            return where, pool
+    return None, []
 
 
 def auction_pool(
@@ -533,16 +556,13 @@ def auction_pool(
     назначение, площадь от 1/5 до 5 площадей лота. Цена за метр у поля и у участка под дом в
     одном квартале различается в десятки раз, поэтому чужое назначение не берём. Сначала свой
     квартал, потом район; меньше `MIN_SAMPLE` — пусто."""
-    key = f"{lot.get('district')}|{lot.get('vri_group')}"
-    samples = ((stats.get(key) or {}).get(lot.get("kind") or "sale") or {}).get("samples") or []
-    area = lot.get("area_m2")
-    if area:
-        samples = [x for x in samples if area / AREA_BAND <= x[1] <= area * AREA_BAND]
-    near = [x for x in samples if x[2] and x[2] == lot.get("quarter")]
-    for where, pool in (("квартал", near), ("район", samples)):
-        if len(pool) >= MIN_SAMPLE:
-            return where, [x[0] for x in pool]
-    return None, []
+    where, pool = _pool(lot, stats)
+    return where, [x[0] for x in pool]
+
+
+def auction_pool_ids(lot: dict[str, Any], stats: dict[str, dict[str, Any]]) -> list[str]:
+    """Лоты той же выборки — чтобы карточка показывала ровно те торги, из которых взята цена."""
+    return [x[3] for x in _pool(lot, stats)[1] if len(x) > 3 and x[3]]
 
 
 def market_for(
@@ -606,6 +626,10 @@ def market_for(
             "liquid": None,
             "note": "то же назначение, площадь от 1/5 до 5 площадей лота"
             + (f"; рынок принят в {markup:g} раза выше торгов" if markup != 1 else ""),
+            # вся выборка, а не только 25–75 %: по краям видно, насколько район неоднороден
+            "n": len(vals),
+            "lo_m2": min(vals),
+            "hi_m2": max(vals),
         }
     cad_cost, area = lot.get("cad_cost"), lot.get("area_m2")
     if kind == "sale" and cad_cost and area:
@@ -695,10 +719,13 @@ def score_lot(
     today: date | None = None,
 ) -> dict[str, Any]:
     """Оценка идущего лота. Вердикт строится на предельной цене входа:
-    «интересен» — предел при целевой доходности выше ожидаемой цены победителя (старт × типичный
-    рост цены в районе) и нет стоп-причин; «на грани» — предел выше старта, но типичная
-    конкуренция его съедает, либо ориентир ненадёжен или район неликвиден; «нет» — уже старт выше
-    предела или есть стоп-причина; без цены перепродажи вердикта нет."""
+    «интересен» — цена перепродажи взята с рынка (слой рынка, свои сделки, объявления), предел
+    при целевой доходности выше ожидаемой цены победителя (старт × типичный рост цены в районе),
+    сделка проходит на старте и по нижней цене, нет стоп-причин; «на грани» — предел выше
+    старта, но типичная конкуренция его съедает, либо цена перепродажи известна только по
+    итогам торгов, ориентир ненадёжен или район неликвиден; «нет» — уже старт выше предела или
+    есть стоп-причина; без цены перепродажи вердикта нет, и по одной кадастровой стоимости
+    (нижний ориентир) «нет» не ставится."""
     p = params or ScanParams()
     today = today or datetime.now(UTC).date()
     area, start = lot.get("area_m2"), lot.get("price_start")
@@ -742,6 +769,14 @@ def score_lot(
         hold = max(1, round(mk["exposure_days"] / 30) + 2)  # +2 мес.: договор и регистрация
     roi_start = _roi(base_sale, start, p.extra, p.tax) if start else None
     roi_expected = _roi(base_sale, expected, p.extra, p.tax) if expected else None
+    src = (mk or {}).get("source")
+    sale_sotka = {
+        key: round(mk[f"{key}_m2"] * SOTKA) if mk and mk.get(f"{key}_m2") else None
+        for key in ("min", "mid", "max")
+    }
+    spread = None
+    if sale_sotka["min"] and sale_sotka["max"]:
+        spread = round(sale_sotka["max"] / sale_sotka["min"], 1)
 
     # --- причины по пунктам ---------------------------------------------------------------
     days = _days_left(lot, today)
@@ -814,7 +849,14 @@ def score_lot(
             )
             (plus if mine <= typical else minus).append(text)
 
+    if spread and spread >= WIDE_SPREAD:
+        minus.append(
+            f"разброс цен перепродажи большой: от {torgi_calc.rub(sale_sotka['min'])} до "
+            f"{torgi_calc.rub(sale_sotka['max'])} за сотку — середине верить нельзя"
+        )
+
     # --- вердикт --------------------------------------------------------------------------
+    why: list[str] = []  # причины самого вердикта — первыми в «против»
     if stop:
         verdict = "no"
     elif notice:
@@ -828,34 +870,67 @@ def score_lot(
             )
         else:
             ask.append("нет цены перепродажи — задайте рынок района или дождитесь сбора торгов")
+    elif limit < start and src == "cadastre":
+        # Кадастровая стоимость — нижний ориентир, а старт обычно ей и равен: «нет» по ней
+        # получали 53 из 147 идущих лотов Калужской области (прод, 12.11.2026).
+        verdict = "unknown"
+        ask.append(
+            "рыночной цены нет: известна только кадастровая стоимость, это нижний ориентир — "
+            "«нет» по ней не ставим. Найдите объявления рядом или задайте рынок района"
+        )
     elif limit < start:
         verdict = "no"
-        minus.append(
+        why.append(
             f"уже старт выше предельной цены входа {torgi_calc.rub(limit)} при цели "
             f"{p.target_roi:.0%}"
+            + (" (цена перепродажи — по итогам торгов района)" if src == "auctions" else "")
         )
     else:
+        low_conf = (mk or {}).get("confidence", 0) <= 1 or base_key == "min"
         weak = (
-            (mk or {}).get("confidence", 0) <= 1
+            low_conf
             or (idx is not None and idx < p.min_liquidity)
             or (mk or {}).get("liquid") == "illiquid"
-            or base_key == "min"
         )
-        if limit >= (expected or start) and not weak:
+        market_based = src in MARKET_SOURCES
+        low_fail = base_key != "min" and limits["min"] is not None and limits["min"] < start
+        if limit >= (expected or start) and not weak and market_based and not low_fail:
             verdict = "go"
             plus.append(
                 f"предел входа {torgi_calc.rub(limit)} выше ожидаемой цены победителя "
                 f"{torgi_calc.rub(expected or start)}"
             )
+            if limits["min"] is not None:
+                plus.append(
+                    "сделка проходит на старте и по нижней цене перепродажи: безопасный "
+                    f"ориентир {torgi_calc.rub(limits['min'])}"
+                )
         else:
             verdict = "edge"
             if limit < (expected or start):
-                minus.append(
+                why.append(
                     f"предел входа {torgi_calc.rub(limit)} ниже ожидаемой цены победителя "
                     f"{torgi_calc.rub(expected or start)}: пройдёт только при слабой конкуренции"
                 )
-            elif (mk or {}).get("confidence", 0) <= 1 or base_key == "min":
-                minus.append("ориентир цены перепродажи ненадёжный — уточните рынок")
+            if src == "auctions":
+                why.append(
+                    "цена перепродажи взята из итогов торгов района, а не с рынка — по одним "
+                    "торгам «интересен» не ставим: найдите объявления рядом или задайте рынок"
+                )
+            elif src == "cadastre":
+                plus.append("сделка проходит на старте даже по кадастровой стоимости")
+                why.append(
+                    "рыночной цены нет, расчёт по кадастровой стоимости (нижний ориентир) — "
+                    "найдите объявления рядом или задайте рынок района"
+                )
+            elif low_fail:
+                why.append(
+                    "по нижней цене перепродажи сделка не проходит уже на старте: безопасный "
+                    f"ориентир {torgi_calc.rub(limits['min'])} ниже старта"
+                )
+            elif low_conf:
+                why.append("ориентир цены перепродажи ненадёжный — уточните рынок")
+    minus = why + minus
     headroom = round(limit / start, 2) if limit and start else None
     steps_left = None
     if limit and start and lot.get("price_step") and limit >= start:
@@ -888,6 +963,9 @@ def score_lot(
         "annual_start": _annual(roi_start, hold),
         "hold_months": hold,
         "market": mk,
+        "market_based": src in MARKET_SOURCES,
+        "sale_sotka": sale_sotka,
+        "spread": spread,
         "confidence": CONFIDENCE_RU.get((mk or {}).get("confidence", 0)),
         "liquidity": {
             "index": idx,
@@ -940,7 +1018,16 @@ def scan(
     counts = {key: 0 for key in VERDICTS}
     for r in rows:
         counts[r["s"]["verdict"]] += 1
-    return {"rows": rows, "counts": counts, "total": len(rows), "stats": stats, "forms": forms}
+    return {
+        "rows": rows,
+        "counts": counts,
+        "total": len(rows),
+        "stats": stats,
+        "forms": forms,
+        # у скольких лотов цена перепродажи взята с рынка: только они могут быть «интересен»
+        "market_based": sum(1 for r in rows if r["s"]["market_based"]),
+        "priced": sum(1 for r in rows if r["s"]["market"]),
+    }
 
 
 # --- выгрузки ------------------------------------------------------------------------------

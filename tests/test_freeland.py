@@ -149,6 +149,85 @@ def test_live_nspd_shape_no_registered_right_quarter_only_russian_auction_keys()
     assert freeland.own_kind({"cad_num": "x", "ownership": PUBLIC}) == "public"
 
 
+def test_weak_candidates_tiny_prior_and_without_use():
+    """Прод, 12.11.2026 (поиск вокруг участка, 86 кандидатов): 27 меньше сотки, 34 ранее
+    учтённых без права, у 34 нет вида использования. Это слабые кандидаты — строгий отбор их
+    убирает, причины названы."""
+    landplots = [
+        _plot(6, ownership="Муниципальная собственность"),  # сильный
+        _plot(281, ownership=None, shift=0.01),  # учтённый без права — сильный
+        _plot(21, ownership=None, status="Ранее учтенный", category="", vri="", shift=0.02),
+        _plot(30, ownership=PUBLIC, area=4.0, specified_area=4.0, shift=0.03),  # опора: 4 м²
+        _plot(31, ownership=PUBLIC, vri="", shift=0.04),
+    ]
+    items = freeland.analyze(landplots, [], [], quarter=Q)["items"]
+    why = {i["cad_num"].rsplit(":", 1)[1]: freeland.weak_reasons(i) for i in items}
+    assert why == {"6": [], "281": [], "21": ["prior", "no_vri"], "30": ["tiny"], "31": ["no_vri"]}
+    assert freeland.weak_reasons({"cad_num": "x", "vri": "ИЖС"}) == ["no_area"]
+    g = freeland.grade_counts(items)
+    assert (g["strong"], g["weak"]) == (2, 3)
+    assert g["reasons"] == [
+        ("меньше сотки", 1),
+        ("ранее учтённый без права", 1),
+        ("вид использования не указан", 2),
+    ]
+    strict = freeland.filter_items(items, strict=True)
+    assert {i["cad_num"] for i in strict} == {f"{Q}:6", f"{Q}:281"}
+    assert len(freeland.filter_items(items)) == 5  # без строгого отбора — все
+    rows = freeland.xlsx_rows(items)
+    marks = {r[0].rsplit(":", 1)[1]: r[-1] for r in rows}
+    assert marks["6"] == "сильный кандидат"
+    assert marks["21"] == "слабый кандидат: ранее учтённый без права; вид использования не указан"
+
+
+def test_result_page_shows_strong_candidates_by_default(client, monkeypatch):  # noqa: F811
+    raw = _area()
+    raw["landplots"] += [
+        _plot(30, ownership=PUBLIC, area=4.0, specified_area=4.0, shift=0.05),
+        _plot(21, ownership=None, status="Ранее учтенный", category="", vri="", shift=0.06),
+    ]
+    _setup(client, monkeypatch, FakeArea(raw))
+    url = client.post("/tools/free-land", data={"scope": Q}).headers["location"]
+    page = client.get(url).text
+    assert "Кандидатов: 6" in page
+    assert "Сильных кандидатов: 4</strong>, из них без отметок: 2; слабых: 2" in page
+    assert "меньше сотки — 1, ранее учтённый без права — 1, вид использования не указан — 1" in page
+    assert "сильные кандидаты (4)" in page and "все, включая слабые (6)" in page
+    assert f"{Q}:30</code>" not in page and f"{Q}:21</code>" not in page
+    # торги региона не собраны — об этом сказано, чтобы «препятствий не видно» не читали шире
+    assert "Торги региона (Калужская область) не собраны" in page
+    everything = client.get(url + "?show=all").text
+    assert f"{Q}:30</code>" in everything and f"{Q}:21</code>" in everything
+    assert ">меньше сотки</span>" in everything
+    # слабые идут после сильных
+    assert everything.index(f"{Q}:9</code>") < everything.index(f"{Q}:30</code>")
+    # выгрузка повторяет отбор на странице
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    ws = load_workbook(BytesIO(client.get(url + "/export.xlsx").content)).active
+    assert ws.max_row == 5 and ws["M1"].value == "Оценка строки"
+    ws = load_workbook(BytesIO(client.get(url + "/export.xlsx?show=all").content)).active
+    assert ws.max_row == 7
+    # все кандидаты слабые — страница говорит об этом и даёт ссылку
+    only_weak = FakeArea({**_area(), "landplots": [_plot(30, ownership=PUBLIC, area=4.0, vri="")]})
+    from landcheck.web import freeland_views as fv
+
+    monkeypatch.setattr(fv, "_provider", lambda: only_weak)
+    url = client.post("/tools/free-land", data={"scope": Q}).headers["location"]
+    page = client.get(url).text
+    assert "Сильных кандидатов на этой территории нет: все 1 — слабые" in page
+    assert "show=all" in page
+    # торги региона собраны — предупреждения нет
+    from landcheck.web.db import TorgiSync, session
+
+    with session() as db:
+        db.add(TorgiSync(region="40"))
+        db.commit()
+    assert "не собраны" not in client.get(url).text
+
+
 def test_report_block_counts_unregistered_and_reads_auction_layer():
     """Блок «Свободная земля рядом» в отчёте: учтённые участки без права — кандидаты, ранее
     учтённые — нет (там десятки старых наделов); отметка аукциона — по русскому полю слоя."""

@@ -445,10 +445,13 @@ class TorgiMarket(Base):
     source: Mapped[str] = mapped_column(String(8), default="manual")  # manual|deals|ads
     user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # из чего сложилась цена: для объявлений — сами объявления со ссылками (проверить глазами)
+    details: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
+            "details": self.details,
             "scope": self.scope,
             "kind": self.kind,
             "vri_group": self.vri_group,
@@ -531,6 +534,7 @@ def init_db(path: str | Path) -> None:
 
 # Колонки, добавленные после первого релиза: SQLite умеет только ADD COLUMN, этого хватает.
 _NEW_COLUMNS: dict[str, dict[str, str]] = {
+    "torgi_market": {"details": "JSON"},
     "users": {
         "email": "VARCHAR(200)",
         "password_hash": "VARCHAR(200)",
