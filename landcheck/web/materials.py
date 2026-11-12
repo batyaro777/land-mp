@@ -71,6 +71,53 @@ def save_photos(listing_id: int, photos: list[intake.Material]) -> list[str]:
     return paths
 
 
+def add_photos(
+    listing_id: int, photos: list[intake.Material], *, room: int
+) -> tuple[list[str], int, int]:
+    """Дописать фото к уже сохранённым (правка размещённого объявления): номера файлов
+    продолжают имеющиеся, старые файлы не трогаем, повтор уже сохранённого фото не пишем.
+    `room` — сколько ещё помещается. → (новые пути, дублей, не поместилось)."""
+    import hashlib
+
+    d = uploads_dir(listing_id)
+    have = [p for p in d.iterdir() if p.is_file()] if d.exists() else []
+    seen = {hashlib.sha256(p.read_bytes()).hexdigest() for p in have}
+    n = max((int(p.stem) for p in have if p.stem.isdigit()), default=0)
+    paths: list[str] = []
+    dupes = over = 0
+    for m in photos:
+        digest = hashlib.sha256(m.raw).hexdigest()
+        if digest in seen:
+            dupes += 1
+            continue
+        if len(paths) >= room:
+            over += 1
+            continue
+        seen.add(digest)
+        n += 1
+        d.mkdir(parents=True, exist_ok=True)
+        target = d / f"{n:02d}.{m.kind}"
+        target.write_bytes(m.raw)
+        paths.append(f"/uploads/{listing_id}/{target.name}")
+    return paths, dupes, over
+
+
+def delete_photos(listing_id: int, paths: list[str]) -> int:
+    """Убрать файлы фото этого объявления; пути вне его папки не трогаем."""
+    prefix = f"/uploads/{listing_id}/"
+    d = uploads_dir(listing_id)
+    n = 0
+    for path in paths:
+        name = path[len(prefix) :] if path.startswith(prefix) else ""
+        if not name or Path(name).name != name:
+            continue
+        target = d / name
+        if target.is_file():
+            target.unlink()
+            n += 1
+    return n
+
+
 def save_documents(listing_id: int, docs: list[intake.Material]) -> list[str]:
     """Электронные документы (pdf/xml) и их подписи — в приватное хранилище (до MAX_PROOFS)."""
     saved: list[str] = []

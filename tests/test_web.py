@@ -270,7 +270,7 @@ def test_login_rate_limit_and_photo_signature(client: TestClient):
     )
     assert r.status_code == 303
     page = client.get(r.headers["location"]).text
-    assert "Не приняты файлы" in page and "fake.jpg" in page and "Фото (1)" in page
+    assert "Не приняты файлы" in page and "fake.jpg" in page and "Фото (1 из 10)" in page
 
 
 def test_resume_pending_reenqueues(client: TestClient, monkeypatch):

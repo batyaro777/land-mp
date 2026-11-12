@@ -6,6 +6,7 @@
 {% include "_torgi_nav.html" %}
 <p class="small"><a href="/tools/torgi-scan?{{ qs or 'region=' ~ lot.region }}">← к списку лотов</a> · <a href="{{ lot_url }}" target="_blank" rel="noopener">лот на torgi.gov.ru</a>{% if lot.cad_num %} · <a href="/single?cad_num={{ lot.cad_num }}&amp;purpose=auction">разовая проверка участка</a>{% endif %}</p>
 {% if saved == 'ads' %}<p class="ok-msg small">Объявления найдены — цена за сотку записана в слой рынка района, оценка пересчитана.</p>
+{% elif saved == 'fewads' %}<p class="warn small">Сопоставимых объявлений нашлось меньше трёх — для оценки этого мало, цена в слой рынка не записана. Что нашлось, показано ниже в блоке «Рынок района и квартала»; рынок района задайте вручную.</p>
 {% elif saved == 'noads' %}<p class="warn small">Сопоставимых объявлений с ценой и площадью рядом не нашлось — задайте рынок района вручную.</p>
 {% elif saved == 'noloc' %}<p class="warn small">Из адреса лота не удалось понять населённый пункт — задайте рынок района вручную.</p>{% endif %}
 
@@ -84,12 +85,12 @@
     <tr><td><code>{{ m.scope }}</code></td><td>{{ kinds.get(m.kind, m.kind) }} · {{ groups.get(m.vri_group, 'любое') }}</td>
       <td class="num">{{ m.price_min|money if m.price_min else '—' }} – <strong>{{ m.price_mid|money if m.price_mid else '—' }}</strong> – {{ m.price_max|money if m.price_max else '—' }}</td>
       <td class="num">{{ m.exposure_days ~ ' дн.' if m.exposure_days else '—' }}</td>
-      <td class="small">{{ {'manual': 'вручную', 'deals': 'свои сделки', 'ads': 'объявления'}.get(m.source, m.source) }}{% if m.liquid %} · {{ 'ликвид' if m.liquid == 'liquid' else 'неликвид' }}{% endif %}{% if m.note %}<div class="muted">{{ m.note }}</div>{% endif %}</td></tr>
+      <td class="small">{{ {'manual': 'вручную', 'deals': 'свои сделки', 'ads': 'объявления', 'ads_few': 'объявления: мало для оценки'}.get(m.source, m.source) }}{% if m.liquid %} · {{ 'ликвид' if m.liquid == 'liquid' else 'неликвид' }}{% endif %}{% if m.note %}<div class="muted">{{ m.note }}</div>{% endif %}</td></tr>
     {% endfor %}
   </table>
   {% for m in layer %}{% set found = (m.details or {}).get('ads') or [] %}{% if found %}
-  <details{% if saved == 'ads' %} open{% endif %}>
-    <summary class="small">Объявления, из которых взята цена: {{ found|length }} — {{ (m.details or {}).get('where') or m.scope }}, {{ groups.get(m.vri_group, 'любое назначение') }}{% if m.updated_at %}, найдены {{ m.updated_at|dt }}{% endif %}</summary>
+  <details{% if saved in ('ads', 'fewads') %} open{% endif %}>
+    <summary class="small">{{ 'Найденные объявления (для оценки мало, цена не записана)' if m.source == 'ads_few' else 'Объявления, из которых взята цена' }}: {{ found|length }} — {{ (m.details or {}).get('where') or m.scope }}, {{ groups.get(m.vri_group, 'любое назначение') }}{% if m.updated_at %}, найдены {{ m.updated_at|dt }}{% endif %}</summary>
     <div class="table-wrap">
     <table class="results">
       <thead><tr><th>Объявление</th><th class="num">Площадь</th><th class="num">Цена</th><th class="num">₽ за сотку</th></tr></thead>

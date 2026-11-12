@@ -2290,6 +2290,15 @@ def listing_page(request: Request, user: UserDep, listing_id: int):
         if fresh != list(row.data.get("warnings") or []):
             row.data = {**row.data, "warnings": fresh}
             changed = True
+        # Автосверка выписки тоже пересчитывается, пока объявление на проверке и файлы на месте:
+        # разбор выписок дорабатывается (прод, 12.11: новая форма Росреестра читалась не вся),
+        # а сохранённый итог оставался прежним. Продавец — владелец объявления, не смотрящий.
+        if row.status == "pending" and _proof_files(row.id):
+            owner = db.get(User, row.user_id) or user
+            again = _proof_check(row, owner, row.proof_kind or "owner")
+            if again is not None and again != row.data.get("proof_check"):
+                row.data = {**row.data, "proof_check": again}
+                changed = True
         if changed:
             db.commit()
         from landcheck.web import demand
@@ -3904,6 +3913,75 @@ def listing_update(
         db.commit()
     suffix = "?err=unpublished" if unpublished else ""
     return RedirectResponse(f"/listing/{listing_id}{suffix}", status_code=303)
+
+
+@router.post("/listing/{listing_id}/media")
+async def listing_media(
+    request: Request,
+    user: UserDep,
+    listing_id: int,
+    cloud_url: Annotated[str, Form()] = "",
+    main: Annotated[str, Form()] = "",
+    photos: Annotated[list[UploadFile] | None, File()] = None,
+):
+    """Фото размещённого объявления: добавить файлами или ссылкой на папку в облаке, убрать
+    лишние, выбрать обложку. Эксперт, 12.11.2026: «в размещённых объявлениях не увидел опцию
+    добавить / изменить ссылку на диск, фото объекта» — раньше материалы принимались только при
+    создании. На подтверждение права и публикацию правка фото не влияет; документы из этих
+    материалов не берём — для них форма «Подтверждение права»."""
+    from datetime import UTC, datetime
+
+    from starlette.concurrency import run_in_threadpool
+
+    from landcheck import intake
+    from landcheck.web import materials
+
+    form = await request.form()
+    remove = [str(v) for v in form.getlist("remove")]
+    with session() as db:
+        _own_listing(db, user, listing_id)  # чужое объявление — 404 до разбора файлов
+    uploads = await materials.materials_from_uploads(photos)
+    link = cloud_url.strip()
+    taken = None
+    if uploads or link:
+        # разбор фото моделью и загрузка из облака — секунды; не держим цикл событий
+        taken, _sources = await run_in_threadpool(materials.gather, uploads, link)
+    with session() as db:
+        row = _own_listing(db, user, listing_id)
+        data = dict(row.data)
+        images = list(data.get("images") or [])
+        gone = [p for p in remove if p in images]
+        images = [p for p in images if p not in gone]
+        materials.delete_photos(listing_id, gone)
+        note: dict[str, Any] = {
+            "removed": len(gone),
+            "added": 0,
+            "at": datetime.now(UTC).isoformat(),
+        }
+        if taken is not None:
+            added, dupes, over = materials.add_photos(
+                listing_id, taken.photos, room=max(intake.MAX_PHOTOS - len(images), 0)
+            )
+            images += added
+            note.update(
+                added=len(added),
+                dupes=dupes,
+                over=over,
+                documents=len(taken.documents),
+                dropped=[f"{n} — {why}" for n, why in taken.dropped][:20],
+                errors=list(taken.errors)[:5],
+            )
+            if link.startswith(("https://", "http://")):
+                data["cloud_url"] = link[:500]
+        if main in images:
+            images.remove(main)
+            images.insert(0, main)
+        data["images"] = images
+        data["media_note"] = note
+        data.pop("skipped_photos", None)
+        row.data = data
+        db.commit()
+    return RedirectResponse(f"/listing/{listing_id}#photos", status_code=303)
 
 
 @router.get("/listing/{listing_id}/avito.xml")

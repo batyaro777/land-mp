@@ -46,6 +46,10 @@ PAGE_ROWS = 150
 MAX_CHECK_LOTS = 30
 MAX_POOL_ROWS = 60  # торгов в таблице «из чего взята цена»
 MAX_AD_ROWS = 15
+# Объявлений нашлось меньше, чем нужно для оценки: цены в слое нет, но найденное показываем —
+# иначе кнопка выглядит сломанной (прод, 12.11.2026: по лоту нашлось одно объявление из трёх
+# нужных, страница сказала «не нашлось»).
+ADS_FEW = "ads_few"
 # Назначение лота → «что делать на участке» в проверке (цель — купить на торгах)
 GROUP_USE = {
     "housing": Purpose.IZHS,
@@ -138,13 +142,15 @@ def _scan_params(q) -> torgi_scan.ScanParams:
     return p
 
 
-def _layer(region: str) -> list[dict[str, Any]]:
-    """Слой рынка региона: ручные записи и объявления из базы + сводка своих закрытых сделок."""
+def _layer(region: str, *, few: bool = False) -> list[dict[str, Any]]:
+    """Слой рынка региона: ручные записи и объявления из базы + сводка своих закрытых сделок.
+    `few` — вместе с записями «объявлений нашлось мало» (цены в них нет, только найденное)."""
     prefix = f"{region}:"
     with session() as db:
         rows = [
             m.to_dict()
             for m in db.scalars(select(TorgiMarket).where(TorgiMarket.scope.like(prefix + "%")))
+            if few or m.source != ADS_FEW
         ]
         deals = list(
             db.scalars(
@@ -452,7 +458,7 @@ def torgi_lot_page(request: Request, user: TorgiDep, lot_id: str, saved: str = "
     params = _scan_params(q)
     lots = torgi_sync.lots_of(region, months=settings.torgi_scan_months)
     stats = torgi_scan.index_by(lots)
-    layer = _layer(region)
+    layer = _layer(region, few=True)
     s = torgi_scan.score_lot(lot, stats, params, layer=layer, repeats=torgi_scan.repeats_of(lots))
     same_parcel = [
         x
@@ -576,14 +582,29 @@ def torgi_lot_ads(request: Request, user: TorgiDep, lot_id: str):
         area_m2=area,
         fallback=district_fallback(locality),
     )
-    if ads.get("n", 0) < MIN_N or not ads.get("median"):
-        return back("noads")
     where = ads.get("scope_label") or short_place(locality)
+    found = _ad_rows(ads.get("ads") or [])
+    details = {"ads": found, "where": where, "lot_id": lot_id, "fetched_at": ads.get("fetched_at")}
+    key = {"scope": district, "kind": "sale", "vri_group": group or "any"}
+    if ads.get("n", 0) < MIN_N or not ads.get("median"):
+        if not found:
+            return back("noads")
+        _save_market(
+            **key,
+            price_min=None,
+            price_mid=None,
+            price_max=None,
+            exposure_days=None,
+            liquid=None,
+            note=f"найдено {len(found)} объявл., {where} — для оценки мало, нужно от {MIN_N}",
+            source=ADS_FEW,
+            user_id=user.id,
+            details=details,
+        )
+        return back("fewads")
     note = f"{ads['n']} объявл. с ценой и площадью, {where}; цены предложений, не сделок"
     _save_market(
-        scope=district,
-        kind="sale",
-        vri_group=group or "any",
+        **key,
         price_min=ads.get("p25"),
         price_mid=ads["median"],
         price_max=ads.get("p75"),
@@ -592,13 +613,20 @@ def torgi_lot_ads(request: Request, user: TorgiDep, lot_id: str):
         note=note,
         source="ads",
         user_id=user.id,
-        details={
-            "ads": _ad_rows(ads.get("ads") or []),
-            "where": where,
-            "lot_id": lot_id,
-            "fetched_at": ads.get("fetched_at"),
-        },
+        details=details,
     )
+    with session() as db:  # прежняя запись «нашлось мало» по этому месту больше не нужна
+        stale = db.scalar(
+            select(TorgiMarket).where(
+                TorgiMarket.scope == key["scope"],
+                TorgiMarket.kind == key["kind"],
+                TorgiMarket.vri_group == key["vri_group"],
+                TorgiMarket.source == ADS_FEW,
+            )
+        )
+        if stale is not None:
+            db.delete(stale)
+            db.commit()
     return back("ads")
 
 

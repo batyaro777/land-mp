@@ -417,6 +417,58 @@ def test_ads_fill_market_layer(client, monkeypatch):  # noqa: F811
     assert client.post("/tools/torgi-lot/ACT_1/ads").headers["location"].endswith("saved=noads")
 
 
+def test_few_ads_are_shown_but_not_priced(client, monkeypatch):  # noqa: F811
+    """Прод, 12.11.2026: по лоту нашлось одно объявление из трёх нужных — страница говорила «не
+    нашлось». Теперь найденное показано, а цена в слой рынка не пишется."""
+    fake = _seed(client)
+    _sync(fake, max_nspd=0)
+    _admin(client)
+    from landcheck import market_ads
+    from landcheck.web.db import TorgiMarket, session
+
+    one = {
+        "title": "Участок 6,6 сот. в коттеджном посёлке",
+        "url": "https://example-board.ru/sale/987654321",
+        "host": "example-board.ru",
+        "price_rub": 3_978_000.0,
+        "area_m2": 663.0,
+        "pps": 600_000.0,
+        "scope": "district",
+    }
+    few = {"n": 1, "median": 600_000.0, "scope_label": "Малоярославецкий район", "ads": [one]}
+    monkeypatch.setattr(market_ads, "collect_ads", lambda *a, **k: few)
+    r = client.post("/tools/torgi-lot/ACT_0/ads?region=40&roi=40")
+    assert r.headers["location"] == "/tools/torgi-lot/ACT_0?saved=fewads&region=40&roi=40"
+    lot = client.get(r.headers["location"]).text
+    assert "нашлось меньше трёх" in lot and "цена в слой рынка не записана" in lot
+    assert "Найденные объявления (для оценки мало, цена не записана): 1" in lot
+    assert 'href="https://example-board.ru/sale/987654321"' in lot
+    assert "объявления: мало для оценки" in lot and "Почему «на грани»" in lot
+    with session() as db:
+        rows = list(db.scalars(select(TorgiMarket)))
+        assert [(m.source, m.price_mid) for m in rows] == [("ads_few", None)]
+    # на оценку и на вкладку рынка такая запись не влияет
+    page = client.get("/tools/torgi-scan?region=40&roi=40").text
+    assert "с ценой рынка: 0 из 12" in page and "на грани 12" in page
+    liq = client.get("/tools/torgi-liquidity?region=40").text
+    assert "ads_few" not in liq and "мало для оценки" not in liq
+    # позже объявлений нашлось достаточно — запись «мало» убирается
+    enough = {
+        "n": 3,
+        "median": 45_000.0,
+        "p25": 38_000.0,
+        "p75": 52_000.0,
+        "scope_label": "Малоярославец",
+        "ads": [
+            {**one, "url": f"https://example-board.ru/sale/{i}", "pps": 45_000.0} for i in (1, 2, 3)
+        ],
+    }
+    monkeypatch.setattr(market_ads, "collect_ads", lambda *a, **k: enough)
+    assert client.post("/tools/torgi-lot/ACT_0/ads").headers["location"].endswith("saved=ads")
+    with session() as db:
+        assert [m.source for m in db.scalars(select(TorgiMarket))] == ["ads"]
+
+
 def test_deals_journal_feeds_market(client):  # noqa: F811
     fake = _seed(client)
     _sync(fake, max_nspd=0)

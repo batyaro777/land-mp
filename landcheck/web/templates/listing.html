@@ -132,10 +132,26 @@
   <ul class="small">{% for f in d.facts %}<li>{{ f }}</li>{% endfor %}</ul>
   {% if d.zouit_notes %}<h4>ЗОУИТ</h4><ul class="small">{% for z in d.zouit_notes %}<li>{{ z }}</li>{% endfor %}</ul>{% endif %}
   <p class="small"><strong>Тип для Avito:</strong> {{ d.object_type or 'не определён (нет категории и ВРИ в ЕГРН)' }} · <strong>Площадь:</strong> {{ d.land_area_sotka ~ ' сот.' if d.land_area_sotka else 'не определена' }}</p>
-  {% if d.images %}
-  <h4>Фото ({{ d.images|length }})</h4>
-  <div class="photos">{% for img in d.images %}<img src="{{ img }}" alt="">{% endfor %}</div>
+  <h4 id="photos">Фото ({{ d.images|length if d.images else 0 }} из 10)</h4>
+  {% set mn = d.media_note %}
+  {% if mn %}
+  <p class="small {{ 'ok-msg' if mn.added or mn.removed else 'muted' }}">{% if mn.added or mn.removed %}Фото обновлены: добавлено {{ mn.added }}, убрано {{ mn.removed }}.{% else %}Новых фото не добавлено.{% endif %}{% if mn.dupes %} Уже были в объявлении: {{ mn.dupes }}.{% endif %}{% if mn.over %} Не поместились: {{ mn.over }} — в объявлении до 10 фото, уберите лишние и добавьте снова.{% endif %}{% if mn.documents %} Документы из этих материалов не взяты ({{ mn.documents }}): для них — форма «Подтверждение права».{% endif %}</p>
+  {% if mn.dropped %}<p class="small muted">Отложено: {{ mn.dropped|join('; ') }}.</p>{% endif %}
+  {% if mn.errors %}<p class="small err">{{ mn.errors|join('; ') }}</p>{% endif %}
   {% endif %}
+  <form method="post" action="/listing/{{ row.id }}/media" enctype="multipart/form-data">
+    {% if d.images %}
+    <div class="photos">{% for img in d.images %}<div><img src="{{ img }}" alt="">
+      <div class="small"><label class="inline-check"><input type="radio" name="main" value="{{ img }}"{% if loop.first %} checked{% endif %}> обложка</label> <label class="inline-check"><input type="checkbox" name="remove" value="{{ img }}"> убрать</label></div></div>{% endfor %}</div>
+    {% else %}<p class="small muted">Фото пока нет: объявление с фото открывают чаще.</p>{% endif %}
+    <label>Добавить фото <small class="muted">(файлы до 10 МБ; всего в объявлении до 10 фото)</small>
+      <input type="file" name="photos" accept="image/*" multiple data-dz-text="Перетащите сюда фото участка или нажмите, чтобы выбрать"></label>
+    <label>или ссылка на папку с фото в облаке <small class="muted">(Яндекс.Диск: «Поделиться» → «Скопировать ссылку», disk.yandex.ru/d/…; Google Диск: папка с доступом «Все, у кого есть ссылка»)</small>
+      <input name="cloud_url" type="url" placeholder="https://disk.yandex.ru/d/… или https://drive.google.com/drive/folders/…"></label>
+    {% if d.cloud_url %}<p class="small muted">Последняя папка: <a href="{{ d.cloud_url }}" target="_blank" rel="noopener nofollow">{{ d.cloud_url|truncate(60) }}</a>. Чтобы забрать из неё новые фото, вставьте ссылку ещё раз — уже добавленные повторно не возьмём.</p>{% endif %}
+    <button type="submit" class="outline sm">Сохранить фото</button>
+    <span class="small muted">Обложка — первое фото в карточке на витрине. На подтверждение права и публикацию правка фото не влияет.</span>
+  </form>
   <h4>Выгрузка</h4>
   {% if d.skipped_photos %}<p class="small err">Не приняты файлы (не изображение или больше 10 МБ): {{ d.skipped_photos|join(', ') }}</p>{% endif %}
   <p>{% if d.warnings %}<button class="sm" disabled title="Сначала уберите противоречия">Скачать Avito XML</button>{% else %}<a href="/listing/{{ row.id }}/avito.xml" role="button" class="sm">Скачать Avito XML</a>{% endif %}

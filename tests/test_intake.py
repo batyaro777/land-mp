@@ -315,7 +315,7 @@ def test_listing_from_materials_with_auto_verification(client, monkeypatch):  # 
     assert (
         "Иванов Иван Иванович" not in page.split("Автосверка")[1]
     )  # ФИО из документа не показываем
-    assert "Не приняты файлы" in page and "fake.jpg" in page and "Фото (1)" in page
+    assert "Не приняты файлы" in page and "fake.jpg" in page and "Фото (1 из 10)" in page
     assert "дубль" in page and 'value="2500000"' in page
     status, kind, data = _row(url)
     assert status == "pending" and kind == "owner"
@@ -497,7 +497,7 @@ def test_listing_from_cloud_folder(client, monkeypatch):  # noqa: F811
     assert status == "draft" and len(data["images"]) == 1
     assert data["price_rub"] == 3_000_000 and data["intake"]["sources"] == ["Яндекс.Диск (2)"]
     page = client.get(r.headers["location"]).text
-    assert "Яндекс.Диск (2)" in page and "Фото (1)" in page
+    assert "Яндекс.Диск (2)" in page and "Фото (1 из 10)" in page
     # ошибка облака не валит создание
     r = client.post(
         "/listing",
@@ -521,3 +521,120 @@ def test_cloud_api_error_is_reported(client, monkeypatch):  # noqa: F811
     assert errors[0].startswith("Яндекс.Диск: папка не найдена или доступ закрыт")
     assert "«Поделиться» → «Скопировать ссылку»" in errors[0]  # зум 09.11: подсказка, не код
     assert json.dumps(errors, ensure_ascii=False)
+
+
+def test_listing_photos_added_removed_and_cover_changed_after_creation(client, monkeypatch):  # noqa: F811
+    """Эксперт, 12.11.2026: в размещённом объявлении не было способа добавить или заменить фото
+    и ссылку на папку. Теперь: добавить файлами или ссылкой, убрать, выбрать обложку."""
+    monkeypatch.setattr(settings, "gemini_api_key", None)
+    _register_named(client, "media@example.com", "Иван Иванов")
+    r = client.post(
+        "/listing",
+        data={"cad_num": "50:09:0060202:101"},
+        files=[("files", ("a.jpg", io.BytesIO(_jpeg(4000, 3000, 30_000)), "image/jpeg"))],
+    )
+    url = r.headers["location"]
+    lid = url.rsplit("/", 1)[1]
+    up = settings.db_path.parent / "uploads" / lid
+    assert _row(url)[2]["images"] == [f"/uploads/{lid}/01.jpg"]
+    page = client.get(url).text
+    assert "Фото (1 из 10)" in page and f'action="/listing/{lid}/media"' in page
+    # новое фото, повтор уже сохранённого и скан документа
+    r = client.post(
+        url + "/media",
+        files=[
+            ("photos", ("b.jpg", io.BytesIO(_jpeg(4000, 3000, 31_000)), "image/jpeg")),
+            ("photos", ("a-again.jpg", io.BytesIO(_jpeg(4000, 3000, 30_000)), "image/jpeg")),
+            ("photos", ("scan.png", io.BytesIO(_png(1240, 1754, 30_000)), "image/png")),
+        ],
+    )
+    assert r.status_code == 303 and r.headers["location"] == f"/listing/{lid}#photos"
+    data = _row(url)[2]
+    assert data["images"] == [f"/uploads/{lid}/01.jpg", f"/uploads/{lid}/02.jpg"]
+    assert (data["media_note"]["added"], data["media_note"]["dupes"]) == (1, 1)
+    assert sorted(f.name for f in up.iterdir()) == ["01.jpg", "02.jpg"]
+    page = client.get(url).text
+    assert "Фото обновлены: добавлено 1, убрано 0." in page and "Уже были в объявлении: 1." in page
+    assert "scan.png — скан документа" in page and "Фото (2 из 10)" in page
+    # обложка: второе фото становится первым — его и берёт карточка на витрине
+    client.post(url + "/media", data={"main": f"/uploads/{lid}/02.jpg"})
+    assert _row(url)[2]["images"] == [f"/uploads/{lid}/02.jpg", f"/uploads/{lid}/01.jpg"]
+    # убрать фото: файл удаляется; чужой путь и путь с подкаталогом не трогаем
+    client.post(
+        url + "/media",
+        data={
+            "remove": [f"/uploads/{lid}/01.jpg", "/uploads/999/01.jpg", f"/uploads/{lid}/../x"],
+            "main": f"/uploads/{lid}/02.jpg",
+        },
+    )
+    data = _row(url)[2]
+    assert data["images"] == [f"/uploads/{lid}/02.jpg"] and data["media_note"]["removed"] == 1
+    assert [f.name for f in up.iterdir()] == ["02.jpg"]
+    # ссылка на папку в облаке: новые фото добавляются, ссылка запоминается
+    files = {"photo.jpg": _jpeg(4000, 3000, 20_000), "about.txt": "Цена 3 млн руб".encode()}
+    monkeypatch.setattr(
+        intake, "_client", lambda timeout: httpx.Client(transport=_yandex_transport(files))
+    )
+    client.post(url + "/media", data={"cloud_url": "https://disk.yandex.ru/d/AbCdEf"})
+    data = _row(url)[2]
+    assert data["images"] == [f"/uploads/{lid}/02.jpg", f"/uploads/{lid}/03.jpg"]
+    assert data["cloud_url"] == "https://disk.yandex.ru/d/AbCdEf"
+    assert data["price_rub"] is None  # цену и текст из папки правка фото не трогает
+    page = client.get(url).text
+    assert "Последняя папка" in page and 'href="https://disk.yandex.ru/d/AbCdEf"' in page
+    # та же папка ещё раз — повторов нет
+    client.post(url + "/media", data={"cloud_url": "https://disk.yandex.ru/d/AbCdEf"})
+    data = _row(url)[2]
+    assert len(data["images"]) == 2 and data["media_note"]["dupes"] == 1
+    assert "Новых фото не добавлено." in client.get(url).text
+    # не ссылка на облако: ошибка показана, в объявление ничего не записано
+    client.post(url + "/media", data={"cloud_url": "javascript:alert(1)"})
+    data = _row(url)[2]
+    assert data["cloud_url"] == "https://disk.yandex.ru/d/AbCdEf" and data["media_note"]["errors"]
+    # предел числа фото
+    monkeypatch.setattr(intake, "MAX_PHOTOS", 2)
+    client.post(
+        url + "/media",
+        files=[("photos", ("c.jpg", io.BytesIO(_jpeg(4000, 3000, 32_000)), "image/jpeg"))],
+    )
+    assert len(_row(url)[2]["images"]) == 2 and "Не поместились: 1" in client.get(url).text
+    # чужое объявление недоступно
+    client.post("/logout")
+    client.cookies.clear()
+    _register_named(client, "other@example.com", "Пётр Петров")
+    assert client.post(url + "/media", data={"main": "x"}).status_code == 404
+    assert _row(url)[2]["images"][0] == f"/uploads/{lid}/02.jpg"
+
+
+def test_pending_proof_check_is_recomputed_on_view(client, monkeypatch):  # noqa: F811
+    """Разбор выписок дорабатывается, а итог автосверки объявления «на проверке» раньше оставался
+    тем, что посчитали при отправке (прод, 12.11.2026: «вид права не найден» по новой форме
+    Росреестра). Теперь он пересчитывается при просмотре; продавец — владелец объявления."""
+    monkeypatch.setattr(settings, "auto_verify", False)
+    monkeypatch.setattr(settings, "gemini_api_key", None)
+    cut = "\n".join(line for line in EXTRACT.split("\n") if "регистрации права" not in line)
+    monkeypatch.setattr(intake, "pdf_text", lambda raw, max_pages=20: cut)
+    _register_named(client, "owner5@example.com", "Иванов Иван Иванович")
+    r = client.post(
+        "/listing",
+        data={"cad_num": "50:09:0060202:101"},
+        files=[("files", ("vypiska.pdf", io.BytesIO(b"%PDF-1.4 fake"), "application/pdf"))],
+    )
+    url = r.headers["location"]
+    status, _, data = _row(url)
+    by = {i["key"]: i["status"] for i in data["proof_check"]["items"]}
+    assert status == "pending" and by["right"] == "unknown" and by["holder"] == "ok"
+    # разбор «научился» читать строку о праве — файл тот же
+    monkeypatch.setattr(intake, "pdf_text", lambda raw, max_pages=20: EXTRACT)
+    assert client.get(url).status_code == 200
+    by = {i["key"]: i["status"] for i in _row(url)[2]["proof_check"]["items"]}
+    assert by["right"] == "ok" and by["holder"] == "ok"
+    # модератор открывает то же объявление: сверка идёт с именем продавца, а не модератора
+    client.post("/logout")
+    client.cookies.clear()
+    _register_named(client, "moder@example.com", "Модератор Проверяющий")
+    _make_admin("moder@example.com")
+    assert client.get(url).status_code == 200
+    status, _, data = _row(url)
+    by = {i["key"]: i["status"] for i in data["proof_check"]["items"]}
+    assert status == "pending" and by["holder"] == "ok" and by["right"] == "ok"
