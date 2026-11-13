@@ -4,7 +4,7 @@
 {% set tab = 'scan' %}{% set region = lot.region %}
 <h2>Лот <code>{{ lot.cad_num or 'без кадастрового номера' }}</code> <span class="badge v-{{ {'go': 'ok', 'edge': 'check', 'no': 'stop'}.get(s.verdict, '') }}">{{ s.verdict_label }}</span> <span class="badge mini">внутренний режим</span></h2>
 {% include "_torgi_nav.html" %}
-<p class="small"><a href="/tools/torgi-scan?{{ qs or 'region=' ~ lot.region }}">← к списку лотов</a> · <a href="{{ lot_url }}" target="_blank" rel="noopener">лот на torgi.gov.ru</a>{% if lot.cad_num %} · <a href="/single?cad_num={{ lot.cad_num }}&amp;purpose=auction">разовая проверка участка</a>{% endif %}</p>
+<p class="small"><a href="/tools/torgi-scan?{{ qs }}">← к списку лотов</a> · <a href="{{ lot_url }}" target="_blank" rel="noopener">лот на torgi.gov.ru</a>{% if lot.cad_num %} · <a href="/single?cad_num={{ lot.cad_num }}&amp;purpose=auction">разовая проверка участка</a>{% endif %}</p>
 {% if saved == 'ads' %}<p class="ok-msg small">Объявления найдены — цена за сотку записана в слой рынка района, оценка пересчитана.</p>
 {% elif saved == 'fewads' %}<p class="warn small">Сопоставимых объявлений нашлось меньше трёх — для оценки этого мало, цена в слой рынка не записана. Что нашлось, показано ниже в блоке «Рынок района и квартала»; рынок района задайте вручную.</p>
 {% elif saved == 'noads' %}<p class="warn small">Сопоставимых объявлений с ценой и площадью рядом не нашлось — задайте рынок района вручную.</p>
@@ -30,13 +30,23 @@
 </article>
 <article>
   <h4>Почему «{{ s.verdict_label }}»</h4>
+  {% set vdot = {'go': 'ok', 'edge': 'check', 'no': 'stop'}.get(s.verdict, '') %}
   <ul class="checklist">
-    {% for t in s.stop %}<li><span class="dot stop"></span><strong>{{ t }}</strong></li>{% endfor %}
-    {% for t in s.minus %}<li><span class="dot check"></span>{{ t }}</li>{% endfor %}
-    {% for t in s.plus %}<li><span class="dot ok"></span>{{ t }}</li>{% endfor %}
-    {% for t in s.ask %}<li><span class="dot"></span>{{ t }}</li>{% endfor %}
+    {% for t in s.why %}<li><span class="dot {{ vdot }}"></span><strong>{{ t }}</strong></li>{% endfor %}
   </ul>
+  {% set more_minus = s.minus|reject('in', s.why)|list %}{% set more_plus = s.plus|reject('in', s.why)|list %}{% set more_ask = s.ask|reject('in', s.why)|list %}
+  {% if more_minus or more_plus or more_ask %}
+  <h5 class="small">Что ещё известно о лоте</h5>
+  <ul class="checklist small">
+    {% for t in more_minus %}<li><span class="dot check"></span>{{ t }}</li>{% endfor %}
+    {% for t in more_plus %}<li><span class="dot ok"></span>{{ t }}</li>{% endfor %}
+    {% for t in more_ask %}<li><span class="dot"></span>{{ t }}</li>{% endfor %}
+  </ul>
+  {% endif %}
   <form method="get" class="no-print torgi-inline">
+    {# остальные фильтры списка едут дальше: без них «к списку лотов» уводил в другой регион (зум 13.11, 34:54) #}
+    {% for k, v in q.multi_items() %}{% if k not in ('roi', 'extra', 'tax', 'saved') %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endif %}{% endfor %}
+    {% if not q.get('region') and lot.region %}<input type="hidden" name="region" value="{{ lot.region }}">{% endif %}
     <label class="small">Цель, % <input name="roi" inputmode="decimal" value="{{ (params.target_roi * 100)|round|int }}"></label>
     <label class="small">Расходы, ₽ <input name="extra" inputmode="decimal" value="{{ params.extra|int if params.extra else '' }}"></label>
     <label class="small">Налог, % <input name="tax" inputmode="decimal" value="{{ (params.tax * 100)|round(1) }}"></label>
@@ -109,7 +119,7 @@
   <details{% if not layer %} open{% endif %}>
     <summary class="small">Задать рынок вручную</summary>
     <form method="post" action="/tools/torgi-market">
-      <input type="hidden" name="back" value="/tools/torgi-lot/{{ lot.id }}">
+      <input type="hidden" name="back" value="/tools/torgi-lot/{{ lot.id }}?{{ qs }}">
       <input type="hidden" name="kind" value="{{ lot.kind }}">
       <div class="grid">
         <label>Где
@@ -153,7 +163,7 @@
   {% if same_parcel %}
   <table class="facts">
     {% for x in same_parcel %}
-    <tr><td><a href="/tools/torgi-lot/{{ x.id }}">{{ x.published or x.auction_date or 'лот' }}</a></td><td>{{ kinds.get(x.kind, x.kind) }} · {{ status_ru.get(x.status, x.status) }}</td><td class="num">{{ x.price_start|money }}{% if x.price_fin %} → {{ x.price_fin|money }}{% endif %}</td></tr>
+    <tr><td><a href="/tools/torgi-lot/{{ x.id }}?{{ qs }}">{{ x.published or x.auction_date or 'лот' }}</a></td><td>{{ kinds.get(x.kind, x.kind) }} · {{ status_ru.get(x.status, x.status) }}</td><td class="num">{{ x.price_start|money }}{% if x.price_fin %} → {{ x.price_fin|money }}{% endif %}</td></tr>
     {% endfor %}
   </table>
   {% else %}<p class="muted small">За год других лотов по этому участку нет.</p>{% endif %}
@@ -172,7 +182,7 @@
   <table class="results">
     <thead><tr><th>Участок</th><th>Назначение</th><th class="num">Площадь</th><th class="num">Старт</th><th class="num">Итог</th><th class="num">₽ за сотку</th><th class="num">К старту</th><th class="num">Заявок</th><th>Дата</th></tr></thead>
     {% for x in comparables %}
-    <tr><td><a href="/tools/torgi-lot/{{ x.id }}"><code>{{ x.cad_num }}</code></a>{% if x.quarter == lot.quarter %} <span class="badge mini">тот же квартал</span>{% endif %}</td>
+    <tr><td><a href="/tools/torgi-lot/{{ x.id }}?{{ qs }}"><code>{{ x.cad_num }}</code></a>{% if x.quarter == lot.quarter %} <span class="badge mini">тот же квартал</span>{% endif %}</td>
       <td class="small">{{ (x.vri or '')|truncate(45) }}</td>
       <td class="num">{% if x.area_m2 %}{{ (x.area_m2 / 100)|round(1) }} сот.{% else %}—{% endif %}</td>
       <td class="num">{{ x.price_start|money }}</td><td class="num">{{ x.price_fin|money }}</td>

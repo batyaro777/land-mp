@@ -328,7 +328,7 @@ def test_score_illiquid_district_and_repeats_and_cadastre():
     s = r["rows"][0]["s"]
     assert s["market"]["source"] == "cadastre" and s["limit"] < 100_000
     assert s["verdict"] == "unknown" and r["counts"] == {**r["counts"], "no": 0, "unknown": 1}
-    assert any("«нет» по ней не ставим" in a for a in s["ask"])
+    assert any("«не подходит» по ней не ставим" in a for a in s["ask"])
 
 
 def test_wide_price_range_blocks_go_when_low_scenario_fails():
@@ -672,3 +672,52 @@ def test_expected_price_uses_growth_of_same_deal_kind_with_enough_lots():
         "12 раз",
         "22 раза",
     ]
+
+
+def test_place_of_takes_quarter_from_parcel_number_and_forgives_separators():
+    assert ts.place_of("10:03:0010901:1354") == ("10:03:0010901", "10:03:0010901:1354")
+    assert ts.place_of(" 10:03:0010901 ") == ("10:03:0010901", None)
+    assert ts.place_of("40:13") == ("40:13", None)
+    assert ts.place_of("4:1:031001:750") == ("04:01:031001", "04:01:031001:750")
+    assert ts.place_of("10.03.0010901.1354") == ("10:03:0010901", "10:03:0010901:1354")
+    assert ts.place_of("Сортавала") == (None, None) and ts.place_of("") == (None, None)
+    lot = {"cad_num": "10:03:0010901:1354", "quarter": "10:03:0010901"}
+    assert ts.in_place(lot, "10:03:0010901") and ts.in_place(lot, "10:03")
+    assert not ts.in_place(lot, "10:03:001090")  # часть номера квартала — не тот квартал
+    # не образованный участок (извещение) — по кварталу из описания
+    assert ts.in_place({"cad_num": None, "quarter": "10:03:0010901"}, "10:03:0010901")
+
+
+def test_scan_counts_after_place_filter_and_explains_what_other_filters_hid():
+    """Зум 13.11, 07:06–09:50: квартал в фильтре, сверху «Всего 1, нет 1», а список пуст —
+    счётчики считались по всему региону. Теперь считаем в выбранном месте и говорим, что в нём
+    отсеяли остальные условия (в квартале был лот аренды, а фильтр стоял «продажа»)."""
+    lots = _district()
+    here_sale = _lot("Q1", "40:13:120105:1", area=1000, start=100_000, fin=None, status="PUBLISHED")
+    here_rent = _lot(
+        "Q2", "40:13:120105:2", area=1000, start=9_000, fin=None, status="PUBLISHED", kind="rent"
+    )
+    elsewhere = _lot("Q3", "40:13:120106:1", area=1000, start=100_000, fin=None, status="PUBLISHED")
+    everything = lots + [here_sale, here_rent, elsewhere]
+    region = ts.scan(everything, ts.ScanParams(kinds=("sale",)), today=TODAY)
+    assert region["total"] == 2
+    q = ts.scan(everything, ts.ScanParams(kinds=("sale",), place="40:13:120105"), today=TODAY)
+    assert [r["id"] for r in q["rows"]] == ["Q1"] and q["total"] == 1
+    assert sum(q["counts"].values()) == 1 and q["hidden"]["kind"] == 1
+    empty = ts.scan(everything, ts.ScanParams(kinds=("rent",), place="40:13:120106"), today=TODAY)
+    assert empty["total"] == 0 and empty["hidden"] == {"form": 0, "kind": 1, "group": 0, "area": 0}
+
+
+def test_verdict_reasons_are_separate_from_other_facts():
+    """Зум 13.11, 32:49: в «Почему нет цены перепродажи» стояли «до конца приёма заявок 10 дн.»
+    и «район ликвидный» — это факты, не причины. Причины вердикта — отдельным списком."""
+    active = _lot(
+        "A1", "40:99:120101:203", area=1000, start=100_000, fin=None, status="PUBLISHED"
+    ) | {"bidd_end": "2026-11-30"}
+    s = ts.score_lot(active, {}, today=TODAY)
+    assert s["verdict"] == "unknown" and s["verdict_label"] == "нет цены перепродажи"
+    assert s["why"] == ["нет цены перепродажи — задайте рынок района или дождитесь сбора торгов"]
+    assert "до конца приёма заявок 20 дн." in s["plus"] and not any("дн." in t for t in s["why"])
+    late = ts.score_lot(active | {"bidd_end": "2026-11-11"}, {}, today=TODAY)
+    assert late["verdict"] == "no" and late["verdict_label"] == "не подходит"
+    assert late["why"] == late["stop"] and "не успеть" in late["why"][0]

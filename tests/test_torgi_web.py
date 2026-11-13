@@ -297,7 +297,7 @@ def test_scan_page_lot_page_and_exports(client):  # noqa: F811
     assert "по одним торгам «интересен» не ставим" in page
     assert 'formaction="/tools/torgi-lot/ACT_0/ads?roi=40&amp;region=40"' in page
     # при цели 100 % старт уже выше предела
-    assert "нет 12" in client.get("/tools/torgi-scan?region=40&roi=100").text
+    assert "не подходит 12" in client.get("/tools/torgi-scan?region=40&roi=100").text
     # фильтр по кварталу и вердикту
     assert "40:13:120101:100" not in client.get("/tools/torgi-scan?region=40&d=40:99").text
     lot = client.get("/tools/torgi-lot/ACT_0?region=40&roi=40").text
@@ -356,7 +356,7 @@ def test_market_layer_changes_verdict_and_liquidity_page(client):  # noqa: F811
         assert len(rows) == 1 and rows[0].price_mid == 70_000
         mid = rows[0].id
     assert client.post(f"/tools/torgi-market/{mid}/delete").status_code == 303
-    assert "нет 12" in client.get("/tools/torgi-scan?region=40&roi=100").text
+    assert "не подходит 12" in client.get("/tools/torgi-scan?region=40&roi=100").text
     # мусор не принимается
     assert client.post("/tools/torgi-market", data={"scope": "Калуга"}).status_code == 400
     assert client.post("/tools/torgi-market", data={"scope": "40:13"}).status_code == 400
@@ -854,3 +854,26 @@ def test_district_name_drops_region_prefix():
     }
     for raw, want in cases.items():
         assert _REGION_PREFIX.sub("", raw) == want
+
+
+def test_scan_place_filter_parcel_number_and_back_link_keep_region(client):  # noqa: F811
+    """Зум 13.11: номер участка в «Район или квартал» — его квартал и сам участок первым;
+    пустой список объясняет себя; «Пересчитать» в карточке и «к списку лотов» не теряют регион."""
+    fake = _seed(client)
+    _sync(fake, provider=FakeNspd())
+    _admin(client)
+    page = client.get("/tools/torgi-scan?region=40&d=40:13:120101:100").text
+    assert 'class="hl"' in page and "Всего 1" in page
+    assert "среди идущих лотов нет" not in page
+    other = client.get("/tools/torgi-scan?region=40&d=40:13:120101:999").text
+    assert "Участка <code>40:13:120101:999</code> среди идущих лотов нет" in other
+    empty = client.get("/tools/torgi-scan?region=40&d=40:99:000001&kind=rent").text
+    assert "Сбор идёт" not in empty
+    assert "В квартале 40:99:000001 идущих лотов по выбранным условиям нет" in empty
+    lot = client.get("/tools/torgi-lot/ACT_0?region=40&roi=40&kind=sale&d=40:13").text
+    assert '<a href="/tools/torgi-scan?roi=40&amp;kind=sale&amp;d=40%3A13&amp;region=40">' in lot
+    assert '<input type="hidden" name="kind" value="sale">' in lot
+    assert '<input type="hidden" name="roi"' not in lot
+    bare = client.get("/tools/torgi-lot/ACT_0?roi=40").text
+    assert '<a href="/tools/torgi-scan?roi=40&amp;region=40">' in bare
+    assert '<input type="hidden" name="region" value="40">' in bare

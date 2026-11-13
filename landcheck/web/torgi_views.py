@@ -136,6 +136,7 @@ def _scan_params(q) -> torgi_scan.ScanParams:
     p.groups = tuple(groups)
     if q.get("form") in ("notice", "all"):
         p.forms = q.get("form")
+    p.place, _ = torgi_scan.place_of(q.get("d"))
     if q.get("assign") not in (None, ""):
         ratio = torgi_calc._pct(q.get("assign"), 0.0)
         p.assign_ratio = min(ratio, 2.0) if ratio > 0 else None
@@ -222,9 +223,7 @@ def _scan(region: str, q) -> tuple[dict[str, Any], torgi_scan.ScanParams, list[d
     lots = torgi_sync.lots_of(region, months=settings.torgi_scan_months)
     result = torgi_scan.scan(lots, params, layer=_layer(region))
     rows = result["rows"]
-    place = (q.get("d") or "").strip()
-    if place:
-        rows = [r for r in rows if (r.get("cad_num") or "").startswith(place)]
+    _, parcel = torgi_scan.place_of(q.get("d"))
     verdict = q.get("verdict") or ""
     if verdict == "go":
         rows = [r for r in rows if r["s"]["verdict"] == "go"]
@@ -237,8 +236,12 @@ def _scan(region: str, q) -> tuple[dict[str, Any], torgi_scan.ScanParams, list[d
         rows.sort(key=lambda r: r.get("price_start") or float("inf"))
     elif sort == "roi":
         rows.sort(key=lambda r: -(r["s"].get("roi_start") or -9))
+    if parcel:  # ввели номер участка — он первым в списке и подсвечен
+        rows.sort(key=lambda r: r.get("cad_num") != parcel)
     result["rows"] = rows
     result["shown"] = len(rows)
+    result["place"] = params.place
+    result["parcel"] = parcel
     return result, params, lots
 
 
@@ -293,6 +296,12 @@ def torgi_scan_page(request: Request, user: TorgiDep, page: int = 1):
     if not region:
         return render(request, "torgi_scan.html", sync=None, result=None, params=None, **ctx)
     result, params, lots = _scan(region, q)
+    names = district_names(lots)
+    place_label = None
+    if params.place:
+        level = "квартале" if params.place.count(":") >= 2 else "районе"
+        dname = names.get(params.place[:5]) if level == "районе" else None
+        place_label = f"{level} {params.place}" + (f" ({dname})" if dname else "")
     pages = max(1, (len(result["rows"]) + PAGE_ROWS - 1) // PAGE_ROWS)
     page = min(max(page, 1), pages)
     rows = result["rows"][(page - 1) * PAGE_ROWS : page * PAGE_ROWS]
@@ -303,7 +312,8 @@ def torgi_scan_page(request: Request, user: TorgiDep, page: int = 1):
         result=result,
         rows=rows,
         params=params,
-        names=district_names(lots),
+        names=names,
+        place_label=place_label,
         points=[
             {
                 "id": r["id"],
@@ -524,7 +534,8 @@ def torgi_lot_page(request: Request, user: TorgiDep, lot_id: str, saved: str = "
         groups=torgi_scan.GROUPS,
         kinds=torgi_scan.KIND_RU,
         status_ru=torgi.STATUS_RU,
-        qs=_query(q, saved=None),
+        qs=_query(q, saved=None, region=region),
+        q=q,
         saved=saved,
         user=user,
     )

@@ -171,6 +171,29 @@ def quarter_of(cad_num: str | None) -> str | None:
     return f"{parts[0].zfill(2)}:{parts[1].zfill(2)}:{parts[2]}"
 
 
+def place_of(text: str | None) -> tuple[str | None, str | None]:
+    """Что ввели в «Район или квартал»: (место для отбора, номер участка для подсветки).
+    `10:03:0010901:1354` → квартал `10:03:0010901` и сам участок; `40:13` → район; пробелы и
+    точки вместо двоеточий прощаем (так номер копируют из выписок)."""
+    raw = re.sub(r"[\s.]+", ":", (text or "").strip()).strip(":")
+    parts = [p for p in raw.split(":") if p]
+    if len(parts) < 2 or not all(p.isdigit() for p in parts):
+        return None, None
+    parts[0], parts[1] = parts[0].zfill(2), parts[1].zfill(2)
+    if len(parts) >= 4:
+        return ":".join(parts[:3]), ":".join(parts[:4])
+    return ":".join(parts), None
+
+
+def in_place(lot: dict[str, Any], place: str) -> bool:
+    """Лот лежит в районе или квартале: по номеру участка, а у не образованных — по кварталу
+    из описания. Сравнение по целым частям номера (`10:03:001090` не ловит `10:03:0010901`)."""
+    for value in (lot.get("cad_num"), lot.get("quarter")):
+        if value and (value == place or value.startswith(place + ":")):
+            return True
+    return False
+
+
 # Извещения о предоставлении (ст. 39.18 ЗК) лежат в том же поиске, что и аукционы, но это не
 # торги: цены нет, участок часто ещё не образован. В Карелии их 319 из 392 идущих лотов (прод,
 # 10.11.2026) — в ликвидность и вердикты они не идут, показываются отдельно.
@@ -534,6 +557,7 @@ class ScanParams:
     kinds: tuple[str, ...] = ()
     groups: tuple[str, ...] = ()
     forms: str = "auction"  # что показывать: auction — торги, notice — извещения 39.18, all
+    place: str | None = None  # район `40:13` или квартал `40:13:120101` (см. `place_of`)
     # Аренда под переуступку: цена переуступки как доля цены такого же участка в собственности.
     # None — не оцениваем: цену переуступки задают в слое рынка района.
     assign_ratio: float | None = None
@@ -724,7 +748,7 @@ def _roi(sale: float | None, entry: float, extra: float, tax: float) -> float | 
 VERDICTS = {
     "go": "интересен",
     "edge": "на грани",
-    "no": "нет",
+    "no": "не подходит",  # зум 13.11, 22:15–22:40: «нет» без пояснения непонятно (Тони, Антон)
     "unknown": "нет цены перепродажи",
     "notice": "извещение 39.18",
 }
@@ -884,27 +908,39 @@ def score_lot(
 
     # --- вердикт --------------------------------------------------------------------------
     why: list[str] = []  # причины самого вердикта — первыми в «против»
+    # Всё, чем объясняется вердикт, отдельно от прочих фактов о лоте (зум 13.11, 32:49: в
+    # «Почему нет цены перепродажи» стояли «до конца приёма заявок 10 дн.» и «район ликвидный»)
+    reasons: list[str] = []
     if stop:
         verdict = "no"
+        reasons += stop
     elif notice:
         verdict = "notice"
+        reasons.append(NOTICE_TEXT)
     elif limit is None or not start:
         verdict = "unknown"
-        if lot.get("kind") == "rent":
-            ask.append(
+        if not start:
+            text = "начальная цена не указана"
+        elif lot.get("kind") == "rent":
+            text = (
                 "для аренды нужна цена переуступки — задайте её в слое рынка района или долю "
                 "от цены участка в собственности в критериях"
             )
         else:
-            ask.append("нет цены перепродажи — задайте рынок района или дождитесь сбора торгов")
+            text = "нет цены перепродажи — задайте рынок района или дождитесь сбора торгов"
+        if text not in ask:
+            ask.append(text)
+        reasons.append(text)
     elif limit < start and src == "cadastre":
         # Кадастровая стоимость — нижний ориентир, а старт обычно ей и равен: «нет» по ней
         # получали 53 из 147 идущих лотов Калужской области (прод, 12.11.2026).
         verdict = "unknown"
-        ask.append(
+        text = (
             "рыночной цены нет: известна только кадастровая стоимость, это нижний ориентир — "
-            "«нет» по ней не ставим. Найдите объявления рядом или задайте рынок района"
+            "«не подходит» по ней не ставим. Найдите объявления рядом или задайте рынок района"
         )
+        ask.append(text)
+        reasons.append(text)
     elif limit < start:
         verdict = "no"
         why.append(
@@ -923,15 +959,17 @@ def score_lot(
         low_fail = base_key != "min" and limits["min"] is not None and limits["min"] < start
         if limit >= (expected or start) and not weak and market_based and not low_fail:
             verdict = "go"
-            plus.append(
+            good = [
                 f"предел входа {torgi_calc.rub(limit)} выше ожидаемой цены победителя "
                 f"{torgi_calc.rub(expected or start)}"
-            )
+            ]
             if limits["min"] is not None:
-                plus.append(
+                good.append(
                     "сделка проходит на старте и по нижней цене перепродажи: безопасный "
                     f"ориентир {torgi_calc.rub(limits['min'])}"
                 )
+            plus += good
+            reasons += good
         else:
             verdict = "edge"
             if limit < (expected or start):
@@ -957,6 +995,7 @@ def score_lot(
                 )
             elif low_conf:
                 why.append("ориентир цены перепродажи ненадёжный — уточните рынок")
+    reasons += why
     minus = why + minus
     headroom = round(limit / start, 2) if limit and start else None
     steps_left = None
@@ -976,6 +1015,7 @@ def score_lot(
         "minus": minus,
         "stop": stop,
         "ask": ask,
+        "why": reasons,
         "days_left": days,
         "expected_price": expected,
         "sale": sale,
@@ -1022,21 +1062,30 @@ def scan(
     repeats = repeats_of(lots)
     rows = []
     forms = {"auction": 0, "notice": 0}
+    # что в выбранном месте отсеяли остальные фильтры — чтобы пустой список объяснял себя
+    # (зум 13.11, 07:06–09:50: в квартале 11–13 лотов, а у нас «лотов нет»)
+    hidden = {"form": 0, "kind": 0, "group": 0, "area": 0}
     for lot in lots:
         if lot.get("status") not in ACTIVE:
+            continue
+        if p.place and not in_place(lot, p.place):
             continue
         form = "notice" if is_notice(lot) else "auction"
         forms[form] += 1
         if p.forms in forms and form != p.forms:
+            hidden["form"] += 1
             continue
         if p.kinds and lot.get("kind") not in p.kinds:
+            hidden["kind"] += 1
             continue
         if p.groups and lot.get("vri_group") not in p.groups:
+            hidden["group"] += 1
             continue
         area = lot.get("area_m2")
-        if p.area_min_m2 and (not area or area < p.area_min_m2):
-            continue
-        if p.area_max_m2 and (not area or area > p.area_max_m2):
+        if (p.area_min_m2 and (not area or area < p.area_min_m2)) or (
+            p.area_max_m2 and (not area or area > p.area_max_m2)
+        ):
+            hidden["area"] += 1
             continue
         rows.append(
             {**lot, "s": score_lot(lot, stats, p, layer=layer, repeats=repeats, today=today)}
@@ -1051,6 +1100,7 @@ def scan(
         "total": len(rows),
         "stats": stats,
         "forms": forms,
+        "hidden": hidden,
         # у скольких лотов цена перепродажи взята с рынка: только они могут быть «интересен»
         "market_based": sum(1 for r in rows if r["s"]["market_based"]),
         "priced": sum(1 for r in rows if r["s"]["market"]),

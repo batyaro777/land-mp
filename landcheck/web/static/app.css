@@ -152,6 +152,7 @@ table.torgi td.cad code { white-space: nowrap; }
 table.torgi td.num div.small { white-space: normal; max-width: 9.5rem; margin-left: auto; }
 table.torgi td, table.torgi th { padding-left: 0.45rem; padding-right: 0.45rem; }
 table.torgi .reasons { min-width: 200px; max-width: 340px; }
+table.torgi tr.hl td { background: rgba(46, 117, 182, 0.12); }
 table.torgi .reasons li, ul.checklist li:has(.dot) { list-style: none; }
 table.results.econ { max-width: 760px; }
 table.results.econ td, table.results.econ th { padding: 0.35em 0.6em; }
