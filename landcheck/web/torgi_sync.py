@@ -61,10 +61,10 @@ def _is_auction():
 
 
 def _needs_card():
-    """Карточка не прочитана либо лот не состоялся, а карточка прочитана старым разбором —
-    без причины из протокола (torgi.CARD_REV)."""
+    """Карточка не прочитана либо прочитана старым разбором (torgi.CARD_REV): у завершённых
+    тогда нет причины из протокола, заявок по итогам, вида сделки и пояса лота."""
     return TorgiLot.card_at.is_(None) | (
-        (TorgiLot.status == "FAILED") & (TorgiLot.card_rev < torgi.CARD_REV)
+        TorgiLot.status.in_(["FAILED", "SUCCEED"]) & (TorgiLot.card_rev < torgi.CARD_REV)
     )
 
 
@@ -106,12 +106,17 @@ def upsert(
     else:
         merged = torgi_scan.merge_row(lot.to_dict(), row)
         what = "changed" if merged.get("status") != lot.status else None
+    merged = torgi_scan.local_dates(merged)
+    if not merged.get("kind"):
+        merged["kind"] = lot.kind or "sale"
     for key in TorgiLot.FIELDS:
         if key in ("id", "cad_cost", "lat", "lon"):
             continue
         value = merged.get(key)
         if key in ("annulled", "stopped", "appeals"):
             value = bool(value)
+        if key == "applied_min" and row.get("applied") is not None:
+            value = bool(row.get("applied_min"))  # новое число заявок — со своим признаком
         if isinstance(value, str):
             limit = getattr(TorgiLot, key).type.length if key != "id" else None
             if limit:
@@ -284,9 +289,9 @@ def state_of(region: str) -> dict[str, Any]:
         "failed": len(failed),
         "succeed_priced": sum(1 for row in succeed if row[2]),
         "cards_left": sum(1 for row in succeed + failed if row[1] is None),
-        # не состоявшиеся, прочитанные до появления причины из протокола: перечитываются фоном
+        # завершённые, прочитанные старым разбором карточки: перечитываются фоном
         "reread_left": sum(
-            1 for row in failed if row[1] is not None and (row[4] or 0) < torgi.CARD_REV
+            1 for row in succeed + failed if row[1] is not None and (row[4] or 0) < torgi.CARD_REV
         ),
         "gateway": ruproxy.enabled(),
     }
@@ -423,7 +428,8 @@ def sync_region(
                 select(TorgiLot.id, TorgiLot.published, TorgiLot.form).where(
                     TorgiLot.region == region,
                     TorgiLot.status.in_(sorted(torgi.ACTIVE)),
-                    TorgiLot.card_at.is_(None),
+                    # не читана или читана до разбора пояса лота: дата «Заявки до» сдвинута
+                    TorgiLot.card_at.is_(None) | (TorgiLot.card_rev < torgi.CARD_REV),
                 )
             ).all()
         # сначала аукционы; извещениям карточка даёт только адрес — их читаем, когда история
@@ -701,6 +707,21 @@ def start_sync(region: str) -> bool:
 
     executor().submit(job)
     return True
+
+
+def fix_kinds() -> int:
+    """Лоты аренды, записанные продажей: признака сделки в ответе поиска не было, и «продажа»
+    по умолчанию затирала вид из карточки (зум 13.11, 26:40). Правим по названию лота сразу,
+    не дожидаясь перечитки карточек. Возвращает, сколько исправлено."""
+    with session() as db:
+        rows = db.execute(select(TorgiLot.id, TorgiLot.name).where(TorgiLot.kind == "sale")).all()
+        wrong = [lot_id for lot_id, name in rows if torgi.kind_of({"lotName": name}) == "rent"]
+        for lot_id in wrong:
+            lot = db.get(TorgiLot, lot_id)
+            if lot is not None:
+                lot.kind = "rent"
+        db.commit()
+    return len(wrong)
 
 
 def resume_interrupted() -> list[str]:

@@ -597,7 +597,7 @@ def test_failed_lots_are_reread_for_protocol_reason(client):  # noqa: F811
     assert st["reread_left"] == 6 and st["cards_left"] == 0
     assert torgi_sync.due_regions(soon) == ["40"]  # есть что перечитать — через 10 минут
     page = client.get("/tools/torgi-scan/status?region=40").text
-    assert "у 6 несостоявшихся ещё перечитывается протокол" in page
+    assert "у 6 завершённых перечитывается карточка" in page
     # в карточках площадки причина есть: у нечётных одна заявка, у чётных заявок не подано
     for n, c in enumerate(fake.lists[torgi.STATUS_FAILED]):
         code = "ZK_EA_14_39.12_1" if n % 2 else "ZK_EA_14_39.12_2"
@@ -877,3 +877,33 @@ def test_scan_place_filter_parcel_number_and_back_link_keep_region(client):  # n
     bare = client.get("/tools/torgi-lot/ACT_0?roi=40").text
     assert '<a href="/tools/torgi-scan?roi=40&amp;region=40">' in bare
     assert '<input type="hidden" name="region" value="40">' in bare
+
+
+def test_upsert_keeps_kind_and_zone_and_fix_kinds_by_name(client):  # noqa: F811
+    """Ответ поиска без вида сделки и пояса не затирает прочитанное из карточки; уже записанные
+    продажей лоты аренды исправляются по названию при старте (зум 13.11, 26:40)."""
+    from landcheck import torgi_scan
+    from landcheck.web import torgi_sync
+    from landcheck.web.db import TorgiLot, session
+
+    card = _card("RNT_1", "04:01:030907:128", area=1500, start=110_298, fin=None, kind="rent")
+    card |= {"biddEndTime": "2026-12-06T17:00:00Z", "timezoneOffset": 420}
+    card["lotName"] = "Земельный участок для ИЖС"
+    now = datetime.now(UTC)
+    with session() as db:
+        torgi_sync.upsert(db, torgi_scan.lot_row(card), now, card=True)
+        db.commit()
+    hit = {k: v for k, v in card.items() if k not in ("typeTransaction", "timezoneOffset")}
+    with session() as db:
+        torgi_sync.upsert(db, torgi_scan.lot_row(hit), now)
+        db.commit()
+    with session() as db:
+        lot = db.get(TorgiLot, "RNT_1")
+        assert lot.kind == "rent" and lot.tz_offset == 420 and lot.bidd_end == "2026-12-07"
+        d = lot.to_dict()
+        assert d["bidd_end_hm"] == "00:00" and d["tz"] == "МСК+4"
+        lot.kind, lot.name = "sale", "Право заключения договора аренды земельного участка"
+        db.commit()
+    assert torgi_sync.fix_kinds() == 1
+    with session() as db:
+        assert db.get(TorgiLot, "RNT_1").kind == "rent"

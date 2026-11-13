@@ -21,9 +21,9 @@
     <tr><th>Площадь</th><td>{% if lot.area_m2 %}{{ (lot.area_m2 / 100)|round(2) }} сот. ({{ lot.area_m2|round|int }} м²){% else %}—{% endif %}</td></tr>
     <tr><th>{{ 'Годовая плата на старте' if lot.kind == 'rent' else 'Начальная цена' }}</th><td>{% if lot.price_start %}<strong>{{ lot.price_start|money }}</strong>{% if s.start_sotka %} · {{ s.start_sotka|money }} за сотку{% endif %}{% else %}—{% endif %}</td></tr>
     <tr><th>Шаг · задаток</th><td>{{ lot.price_step|money }} · {{ lot.deposit|money }}</td></tr>
-    <tr><th>Заявки до</th><td>{{ lot.bidd_end or '—' }}{% if s.days_left is not none and lot.status in ('PUBLISHED', 'APPLICATIONS_SUBMISSION') %} <span class="{{ 'err' if s.days_left < 3 else 'muted' }}">({% if s.days_left < 0 %}приём закончен{% else %}осталось {{ s.days_left }} дн.{% endif %})</span>{% endif %}</td></tr>
-    <tr><th>Торги</th><td>{{ lot.auction_date or '—' }}{% if lot.published %} <span class="muted small">· опубликован {{ lot.published }}</span>{% endif %}</td></tr>
-    {% if lot.price_fin %}<tr><th>Итог</th><td><strong>{{ lot.price_fin|money }}</strong>{% if lot.price_start %} · ×{{ (lot.price_fin / lot.price_start)|round(2) }} к старту{% endif %}{% if lot.applied is not none %} · заявок {{ lot.applied }}{% endif %}{% if lot.winner_type %} · победитель — {{ lot.winner_type }}{% endif %}</td></tr>{% endif %}
+    <tr><th>Заявки до</th><td>{{ lot.bidd_end|day if lot.bidd_end else '—' }}{% if lot.bidd_end_hm %} до {{ lot.bidd_end_hm }} <span class="muted small">({{ lot.tz }})</span>{% endif %}{% if s.days_left is not none and lot.status in ('PUBLISHED', 'APPLICATIONS_SUBMISSION') %} <span class="{{ 'err' if s.days_left < 3 else 'muted' }}">({% if s.days_left < 0 %}приём закончен{% else %}осталось {{ s.days_left }} дн.{% endif %})</span>{% endif %}</td></tr>
+    <tr><th>Торги</th><td>{{ lot.auction_date|day if lot.auction_date else '—' }}{% if lot.auction_hm %} в {{ lot.auction_hm }} <span class="muted small">({{ lot.tz }})</span>{% endif %}{% if lot.published %} <span class="muted small">· опубликован {{ lot.published }}</span>{% endif %}</td></tr>
+    {% if lot.price_fin %}<tr><th>Итог</th><td><strong>{{ lot.price_fin|money }}</strong>{% if lot.price_start %} · ×{{ (lot.price_fin / lot.price_start)|round(2) }} к старту{% endif %}{% if lot.applied is not none %} · заявок {{ '≥' if lot.applied_min }}{{ lot.applied }}{% endif %}{% if lot.winner_type %} · победитель — {{ lot.winner_type }}{% endif %}</td></tr>{% endif %}
     {% if lot.cad_cost %}<tr><th>Кадастровая стоимость</th><td>{{ lot.cad_cost|money }}{% if lot.price_start and lot.kind == 'sale' %} · старт — {{ (lot.price_start / lot.cad_cost * 100)|round|int }} % от неё{% elif lot.price_start %} · годовая плата — {{ (lot.price_start / lot.cad_cost * 100)|round(1) }} % от неё{% endif %}</td></tr>{% endif %}
     <tr><th>ГПЗУ в документах лота</th><td>{% if lot.has_gpzu %}приложен{% elif lot.has_gpzu is none %}<span class="muted">не проверяли (карточка не прочитана)</span>{% else %}нет{% endif %}</td></tr>
   </table>
@@ -188,7 +188,7 @@
       <td class="num">{{ x.price_start|money }}</td><td class="num">{{ x.price_fin|money }}</td>
       <td class="num">{% if x.area_m2 %}{{ (x.price_fin / x.area_m2 * 100)|money }}{% else %}—{% endif %}</td>
       <td class="num">{% if x.price_start %}×{{ (x.price_fin / x.price_start)|round(2) }}{% else %}—{% endif %}</td>
-      <td class="num">{{ x.applied if x.applied is not none else '—' }}</td>
+      <td class="num"{% if x.applied_min %} title="Число заявок выведено по протоколу итогов: есть второе место или цена выросла к старту"{% endif %}>{% if x.applied is not none %}{{ '≥' if x.applied_min }}{{ x.applied }}{% else %}—{% endif %}</td>
       <td class="small">{{ x.auction_date or x.published or '—' }}</td></tr>
     {% endfor %}
   </table>

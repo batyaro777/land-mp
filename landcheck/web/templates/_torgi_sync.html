@@ -7,7 +7,7 @@
   {% if sync %}
   <p class="small">
     <strong>В базе аукционов:</strong> идут сейчас {{ sync.active }}, завершены за год {{ sync.succeed + sync.failed }}
-    (состоялись {{ sync.succeed }}, с итоговой ценой {{ sync.succeed_priced }}; не состоялись {{ sync.failed }}){% if sync.cards_left %}, карточек ещё не прочитано {{ sync.cards_left }}{% endif %}{% if sync.reread_left %}, у {{ sync.reread_left }} несостоявшихся ещё перечитывается протокол — причина, по которой торги не состоялись{% endif %}.{% if sync.notices %} Извещений о предоставлении (ст. 39.18): {{ sync.notices }}, из них идут {{ sync.notices_active }}.{% endif %}
+    (состоялись {{ sync.succeed }}, с итоговой ценой {{ sync.succeed_priced }}; не состоялись {{ sync.failed }}){% if sync.cards_left %}, карточек ещё не прочитано {{ sync.cards_left }}{% endif %}{% if sync.reread_left %}, у {{ sync.reread_left }} завершённых перечитывается карточка (причина из протокола, число заявок, вид сделки){% endif %}.{% if sync.notices %} Извещений о предоставлении (ст. 39.18): {{ sync.notices }}, из них идут {{ sync.notices_active }}.{% endif %}
     {% if running %}
       <span aria-busy="true">Идёт сбор: {{ phase_ru.get(sync.progress.get('phase') or sync.phase or 'queued', sync.phase or 'в очереди') }}{% if sync.progress.get('pages') %}, {{ sync.progress.get('page') }} из {{ sync.progress.get('pages') }}{% endif %}.</span>
       <span class="muted">Сайт пропускает один запрос в 6 секунд; первый сбор региона занимает от получаса до нескольких часов, страницу можно закрыть.</span>

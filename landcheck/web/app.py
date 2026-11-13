@@ -201,6 +201,9 @@ def create_app() -> FastAPI:
     if resumed:
         log.warning("возобновлено незавершённых проверок после рестарта: %s", resumed)
     jobs.start_watch_loop()
+    fixed = torgi_sync.fix_kinds()
+    if fixed:
+        log.warning("торги: вид сделки исправлен по названию лота у %s лотов", fixed)
     regions = torgi_sync.resume_interrupted()
     if regions:
         log.warning("возобновлён сбор торгов после рестарта: %s", ", ".join(regions))

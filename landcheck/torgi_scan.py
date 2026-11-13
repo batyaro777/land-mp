@@ -246,6 +246,22 @@ def _bidd_type(card: dict[str, Any]) -> tuple[str | None, str | None]:
     return (bt, None) if isinstance(bt, str) else (None, None)
 
 
+def _raw_time(v: Any) -> str | None:
+    return v.strip()[:32] if isinstance(v, str) and len(v.strip()) >= 10 else None
+
+
+def local_dates(row: dict[str, Any]) -> dict[str, Any]:
+    """Дни окончания заявок и торгов заново из сырого времени и пояса лота — после слияния
+    ответа поиска с карточкой: пояс бывает только в одном из них."""
+    tz = row.get("tz_offset")
+    out = dict(row)
+    if row.get("bidd_end_at"):
+        out["bidd_end"] = torgi.local_day(row["bidd_end_at"], tz)
+    if row.get("auction_at"):
+        out["auction_date"] = torgi.local_day(row["auction_at"], tz)
+    return out
+
+
 def lot_row(card: dict[str, Any]) -> dict[str, Any] | None:
     """Плоская строка лота для хранилища. Годится и ответ поиска, и карточка: чего в ответе
     нет (итоговая цена, протоколы, шаг — они только в карточке), то остаётся None и не
@@ -260,32 +276,51 @@ def lot_row(card: dict[str, Any]) -> dict[str, Any] | None:
     category = (card.get("category") or {}).get("name")
     type_code, type_name = _bidd_type(card)
     res = torgi._result_of(card) if card.get("protocols") else {}
+    tz = torgi.tz_offset_of(card)
+    applied, applied_min = res.get("applied"), res.get("applied_min")
+    start, fin = torgi._num(card.get("priceMin")), torgi._num(card.get("priceFin"))
+    if (
+        card.get("protocols")
+        and card.get("lotStatus") == "SUCCEED"
+        and start
+        and fin
+        and fin > start * 1.001
+        and (applied is None or applied < 2)
+    ):
+        # цена на аукционе растёт только при двух участниках и больше (зум 13.11, 50:12)
+        applied, applied_min = 2, True
     row: dict[str, Any] = {
         "id": str(lot_id),
         "region": str(region).zfill(2) if region else None,
         "district": torgi.district_of(cad or quarter),
         "quarter": quarter,
         "cad_num": cad,
-        "kind": "rent" if card.get("typeTransaction") == "rent" else "sale",
+        # None — признаков сделки нет (часть ответов поиска): сохранённое не затираем
+        "kind": torgi.kind_of(card),
         "form": torgi._code(card.get("biddForm")),
         "bidd_type": type_code,
         "bidd_type_name": type_name,
         "status": card.get("lotStatus"),
         "area_m2": torgi.area_of(card),
-        "price_start": torgi._num(card.get("priceMin")),
+        "price_start": start,
         "price_step": torgi._num(card.get("priceStep")),
         "deposit": torgi._num(card.get("deposit")),
-        "price_fin": torgi._num(card.get("priceFin")),
-        "published": torgi._day(card.get("noticeFirstVersionPublicationDate")),
-        "bidd_end": torgi._day(card.get("biddEndTime")),
-        "auction_date": torgi._day(card.get("auctionStartDate")),
+        "price_fin": fin,
+        # даты — в поясе лота, как на площадке; сырое время UTC и пояс хранятся отдельно
+        "published": torgi.local_day(card.get("noticeFirstVersionPublicationDate"), tz),
+        "bidd_end": torgi.local_day(card.get("biddEndTime"), tz),
+        "auction_date": torgi.local_day(card.get("auctionStartDate"), tz),
+        "bidd_end_at": _raw_time(card.get("biddEndTime")),
+        "auction_at": _raw_time(card.get("auctionStartDate")),
+        "tz_offset": tz,
         "vri": vri,
         "vri_group": vri_group(vri, _vri_code(card), category),
         "category": category,
         "address": card.get("estateAddress"),
         "name": (card.get("lotName") or "")[:300] or None,
         "notice": card.get("noticeNumber"),
-        "applied": res.get("applied"),
+        "applied": applied,
+        "applied_min": applied_min,
         "admitted": res.get("admitted"),
         "second_price": res.get("second_price"),
         "winner_type": res.get("winner_type"),

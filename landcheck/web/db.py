@@ -38,6 +38,8 @@ from sqlalchemy.orm import (
     sessionmaker,
 )
 
+from landcheck import torgi as torgi_time
+
 
 def utcnow() -> datetime:
     return datetime.now(UTC)
@@ -370,6 +372,10 @@ class TorgiLot(Base):
     published: Mapped[str | None] = mapped_column(String(10), nullable=True)
     bidd_end: Mapped[str | None] = mapped_column(String(10), nullable=True)
     auction_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # сырое время площадки (UTC) и пояс лота в минутах: из них — дни в поясе лота и часы
+    bidd_end_at: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    auction_at: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    tz_offset: Mapped[int | None] = mapped_column(Integer, nullable=True)
     vri: Mapped[str | None] = mapped_column(String(400), nullable=True)
     vri_group: Mapped[str | None] = mapped_column(String(12), nullable=True)
     category: Mapped[str | None] = mapped_column(String(160), nullable=True)
@@ -377,6 +383,8 @@ class TorgiLot(Base):
     name: Mapped[str | None] = mapped_column(String(300), nullable=True)
     notice: Mapped[str | None] = mapped_column(String(40), nullable=True)
     applied: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # число заявок выведено косвенно (второе место, рост цены) — показываем «≥»
+    applied_min: Mapped[bool | None] = mapped_column(nullable=True)
     admitted: Mapped[int | None] = mapped_column(Integer, nullable=True)
     second_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     winner_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
@@ -399,8 +407,10 @@ class TorgiLot(Base):
 
     FIELDS = (
         "id region district quarter cad_num kind form bidd_type bidd_type_name status area_m2 "
-        "price_start price_step deposit price_fin published bidd_end auction_date vri vri_group "
-        "category address name notice applied admitted second_price winner_type fail_code "
+        "price_start price_step deposit price_fin published bidd_end auction_date bidd_end_at "
+        "auction_at tz_offset vri vri_group "
+        "category address name notice applied applied_min admitted second_price winner_type "
+        "fail_code "
         "fail_reason has_gpzu "
         "annulled stopped appeals cad_cost lat lon"
     ).split()
@@ -408,7 +418,13 @@ class TorgiLot(Base):
     def to_dict(self) -> dict[str, Any]:
         # `card` — карточка лота прочитана: для не состоявшихся торгов это отличает «участок
         # не ушёл» от «ещё не знаем» (в базу поле не пишется, см. `torgi_sync.upsert`)
-        return {**{f: getattr(self, f) for f in self.FIELDS}, "card": self.card_at is not None}
+        out = {f: getattr(self, f) for f in self.FIELDS}
+        out["card"] = self.card_at is not None
+        # время окончания приёма заявок и торгов по местному времени лота и подпись пояса
+        out["bidd_end_hm"] = torgi_time.local_hm(self.bidd_end_at, self.tz_offset)
+        out["auction_hm"] = torgi_time.local_hm(self.auction_at, self.tz_offset)
+        out["tz"] = torgi_time.tz_label(self.tz_offset)
+        return out
 
 
 class TorgiSync(Base):
@@ -545,6 +561,10 @@ _NEW_COLUMNS: dict[str, dict[str, str]] = {
         "fail_code": "VARCHAR(40)",
         "fail_reason": "VARCHAR(240)",
         "card_rev": "INTEGER NOT NULL DEFAULT 0",
+        "bidd_end_at": "VARCHAR(32)",
+        "auction_at": "VARCHAR(32)",
+        "tz_offset": "INTEGER",
+        "applied_min": "BOOLEAN",
     },
     "users": {
         "email": "VARCHAR(200)",

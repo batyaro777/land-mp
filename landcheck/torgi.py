@@ -245,7 +245,7 @@ def item_of(card: dict[str, Any], district: str) -> dict[str, Any] | None:
     area = area_of(card)
     start = card.get("priceMin")
     fin = card.get("priceFin")
-    kind = "аренда" if card.get("typeTransaction") == "rent" else "продажа"
+    kind = "аренда" if kind_of(card) == "rent" else "продажа"
     price = fin if isinstance(fin, int | float) else None
     rub_m2 = round(price / area, 1) if price and area else None
     ratio = (
@@ -455,6 +455,105 @@ def _day(v: Any) -> str | None:
     return v[:10] if isinstance(v, str) and len(v) >= 10 else None
 
 
+MSK_OFFSET_MIN = 180  # пояс по умолчанию, если в карточке его нет: площадка федеральная, МСК
+_OFFSET_RE = re.compile(r"(?:UTC|GMT|МСК|MSK)?\s*([+\-−])\s*(\d{1,2})(?::?(\d{2}))?", re.I)
+
+
+def tz_offset_of(card: dict[str, Any]) -> int | None:
+    """Смещение пояса лота от UTC в минутах. Площадка хранит время в UTC, а показывает в поясе
+    лота: по UTC «Заявки до» на Алтае съезжали на сутки назад (зум 13.11, 18:44: у нас 06.12,
+    на torgi 07.12). Понимает число (часы или минуты), «+07:00», «UTC+7» и «МСК+4»."""
+    raw = card.get("timezoneOffset")
+    if isinstance(raw, bool):
+        raw = None
+    if isinstance(raw, int | float):
+        return int(raw * 60) if abs(raw) <= 14 else int(raw)
+    if isinstance(raw, str) and raw.strip():
+        text = raw.strip()
+        if re.fullmatch(r"[+-]?\d+", text):
+            n = int(text)
+            return n * 60 if abs(n) <= 14 else n
+        if (m := _OFFSET_RE.search(text)) is not None:
+            sign = -1 if m.group(1) in "-−" else 1
+            return sign * (int(m.group(2)) * 60 + int(m.group(3) or 0))
+    name = card.get("timeZoneName") or card.get("timezoneName")
+    if isinstance(name, str) and name.strip():
+        text = name.strip()
+        if re.match(r"(?i)(мск|msk)", text):
+            m = _OFFSET_RE.search(text)
+            extra = 0
+            if m is not None:
+                extra = (-1 if m.group(1) in "-−" else 1) * (
+                    int(m.group(2)) * 60 + int(m.group(3) or 0)
+                )
+            return MSK_OFFSET_MIN + extra
+        if (m := _OFFSET_RE.search(text)) is not None:
+            sign = -1 if m.group(1) in "-−" else 1
+            return sign * (int(m.group(2)) * 60 + int(m.group(3) or 0))
+    return None
+
+
+def local_dt(v: Any, offset_min: int | None) -> datetime | None:
+    """Время карточки (UTC, ISO) → время в поясе лота (без пояса). Нет пояса — МСК."""
+    if not isinstance(v, str) or len(v) < 10:
+        return None
+    text = v.strip().replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    off = MSK_OFFSET_MIN if offset_min is None else offset_min
+    return (dt.astimezone(UTC) + timedelta(minutes=off)).replace(tzinfo=None)
+
+
+def local_day(v: Any, offset_min: int | None) -> str | None:
+    """День по местному времени лота (`YYYY-MM-DD`); строка без времени — как есть."""
+    if isinstance(v, str) and len(v.strip()) == 10:
+        return v.strip()
+    dt = local_dt(v, offset_min)
+    return dt.date().isoformat() if dt else _day(v)
+
+
+def local_hm(v: Any, offset_min: int | None) -> str | None:
+    """Часы и минуты по местному времени лота; у даты без времени — None."""
+    dt = local_dt(v, offset_min)
+    if dt is None or (isinstance(v, str) and len(v.strip()) == 10):
+        return None
+    return dt.strftime("%H:%M")
+
+
+_RENT_NAME_RE = re.compile(r"аренд", re.I)
+_SALE_NAME_RE = re.compile(r"купли|продаж|в собственност", re.I)
+
+
+def kind_of(card: dict[str, Any]) -> str | None:
+    """Вид сделки лота: `rent` | `sale`; None — признаков нет (тогда сохранённое не трогаем).
+    Сначала поле площадки `typeTransaction`; если его нет — название лота («Право заключения
+    договора аренды…», «…купли-продажи…»). Зум 13.11, 26:40: три лота аренды считались
+    продажей и попали в цену перепродажи соседнего лота продажи."""
+    t = card.get("typeTransaction")
+    if t in ("rent", "sale"):
+        return t
+    name = str(card.get("lotName") or "")
+    rent, sale = bool(_RENT_NAME_RE.search(name)), bool(_SALE_NAME_RE.search(name))
+    if rent and not sale:
+        return "rent"
+    if sale and not rent:
+        return "sale"
+    return None
+
+
+def tz_label(offset_min: int | None) -> str:
+    """«МСК», «МСК+4», «МСК−1» — как пишет площадка."""
+    if offset_min is None or offset_min == MSK_OFFSET_MIN:
+        return "МСК"
+    diff = offset_min - MSK_OFFSET_MIN
+    h, m = divmod(abs(diff), 60)
+    return f"МСК{'+' if diff > 0 else '−'}{h}{f':{m:02d}' if m else ''}"
+
+
 def _docs_of(card: dict[str, Any]) -> list[dict[str, Any]]:
     """Вложения лота и извещения: ГПЗУ, проект договора, форма заявки, извещение. Без
     неактивных и без повторов (одни и те же файлы бывают и у лота, и у извещения)."""
@@ -497,7 +596,9 @@ ORG_TYPE_RU = {
 # сняты с прода 13.11.2026: проба 18 карточек, затем перечитаны 1045 не состоявшихся лотов
 # трёх регионов (26 кодов; ZK — земля, 200FZ — леса, 229FZ — имущество должников, 178FZ —
 # приватизация).
-CARD_REV = 1  # версия разбора карточки: не состоявшиеся лоты со старой версией перечитываются
+# Версия разбора карточки; лоты, прочитанные старой версией, перечитываются фоном.
+# 1 — причина «не состоялись» из протокола (13.11); 2 — пояс лота, вид сделки, заявки по итогам.
+CARD_REV = 2
 
 FAIL_KIND_BY_CODE = {
     # подана одна заявка
@@ -629,6 +730,7 @@ def _result_of(card: dict[str, Any]) -> dict[str, Any]:
     # в протоколе результатов — 11 допущенных, в протоколе рассмотрения — один отклонённый;
     # брали последний список и получали «допущено 0»). Считаем по всем протоколам лота.
     ok_max = rej_max = None
+    priced_max = 0
     for p in card.get("protocols") or []:
         adm = p.get("participantAdmissions")
         if isinstance(adm, list) and adm:
@@ -636,16 +738,27 @@ def _result_of(card: dict[str, Any]) -> dict[str, Any]:
             ok_max = max(ok_max or 0, ok)
             rej_max = max(rej_max or 0, len(adm) - ok)
             applied, admitted = ok_max + rej_max, ok_max
+        priced = 0
         for r in p.get("results") or []:
             price = _num((r or {}).get("participantPrice"))
+            priced += price is not None
             if r.get("isFirst"):
                 first = price
                 winner = ORG_TYPE_RU.get(r.get("orgType") or "")
             elif r.get("isSecond"):
                 second = price
+        priced_max = max(priced_max, priced)
+    # участники с ценой в протоколе итогов — тоже заявки (зум 13.11, 50:12: торги с ростом
+    # цены в 2,5 раза показывались «заявок 1»)
+    if priced_max and (applied is None or applied < priced_max):
+        applied, admitted = priced_max, max(admitted or 0, priced_max)
+    applied_min = False
+    if second is not None and (applied is None or applied < 2):
+        applied, applied_min = 2, True  # есть второе место — заявок не меньше двух
     fail_code, fail_reason = _fail_reason_of(card)
     return {
         "applied": applied,
+        "applied_min": applied_min,
         "admitted": admitted,
         "winner_price": first,
         "second_price": second,
@@ -728,16 +841,16 @@ def own_lot_row(card: dict[str, Any]) -> dict[str, Any]:
         "status_ru": STATUS_RU.get(status or "", status or "—"),
         "form": form,
         "notice_3918": form == "IPS",
-        "kind": "аренда" if card.get("typeTransaction") == "rent" else "продажа",
+        "kind": "аренда" if kind_of(card) == "rent" else "продажа",
         "price_start": start,
         "price_step": _num(card.get("priceStep")),
         "deposit": _num(card.get("deposit")),
         "price_fin": fin,
         "ratio": round(fin / start, 1) if fin and start else None,
         "area_m2": area_of(card),
-        "bidd_end": _day(card.get("biddEndTime")),
-        "auction_start": _day(card.get("auctionStartDate")),
-        "published": _day(card.get("noticeFirstVersionPublicationDate")),
+        "bidd_end": local_day(card.get("biddEndTime"), tz_offset_of(card)),
+        "auction_start": local_day(card.get("auctionStartDate"), tz_offset_of(card)),
+        "published": local_day(card.get("noticeFirstVersionPublicationDate"), tz_offset_of(card)),
         "vri": vri_of(card),
         "address": card.get("estateAddress"),
         "annulled": bool(card.get("isAnnulled")),

@@ -721,3 +721,89 @@ def test_verdict_reasons_are_separate_from_other_facts():
     late = ts.score_lot(active | {"bidd_end": "2026-11-11"}, {}, today=TODAY)
     assert late["verdict"] == "no" and late["verdict_label"] == "не подходит"
     assert late["why"] == late["stop"] and "не успеть" in late["why"][0]
+
+
+def test_dates_in_lot_timezone_and_kept_when_search_hit_has_no_zone():
+    """Зум 13.11, 18:44: лот 04:01:031001:750 — у нас «Заявки до 06.12», на torgi 07.12.
+    Площадка хранит время в UTC и показывает в поясе лота (Алтай — МСК+4)."""
+    from landcheck import torgi
+
+    card = _card(
+        "ALT_1", "04:01:031001:750", area=1200, start=1_414_000, fin=None, status="PUBLISHED"
+    )
+    card |= {"biddEndTime": "2026-12-06T17:00:00Z", "auctionStartDate": "2026-12-10T03:00:00Z"}
+    card["timezoneOffset"] = 420
+    row = ts.lot_row(card)
+    assert row["bidd_end"] == "2026-12-07" and row["auction_date"] == "2026-12-10"
+    assert row["tz_offset"] == 420 and row["bidd_end_at"] == "2026-12-06T17:00:00Z"
+    assert torgi.local_hm(row["bidd_end_at"], row["tz_offset"]) == "00:00"
+    assert torgi.tz_label(420) == "МСК+4" and torgi.tz_label(None) == "МСК"
+    # ответ поиска без пояса не сдвигает день обратно: пояс берётся из сохранённого
+    hit = {k: v for k, v in card.items() if k != "timezoneOffset"}
+    merged = ts.local_dates(ts.merge_row(row, ts.lot_row(hit)))
+    assert merged["tz_offset"] == 420 and merged["bidd_end"] == "2026-12-07"
+    # пояса нет нигде — московское время, а не UTC
+    assert ts.lot_row(hit)["bidd_end"] == "2026-12-06"
+    assert ts.lot_row(hit | {"biddEndTime": "2026-12-06T22:00:00Z"})["bidd_end"] == "2026-12-07"
+
+
+@pytest.mark.parametrize(
+    ("card", "offset"),
+    [
+        ({"timezoneOffset": 420}, 420),
+        ({"timezoneOffset": 7}, 420),
+        ({"timezoneOffset": "+07:00"}, 420),
+        ({"timezoneOffset": "UTC+7"}, 420),
+        ({"timeZoneName": "МСК+4"}, 420),
+        ({"timeZoneName": "МСК"}, 180),
+        ({"timeZoneName": "МСК−1"}, 120),
+        ({}, None),
+    ],
+)
+def test_tz_offset_formats(card, offset):
+    from landcheck import torgi
+
+    assert torgi.tz_offset_of(card) == offset
+
+
+def test_rent_detected_by_lot_name_and_not_overwritten_by_search_hit():
+    """Зум 13.11, 26:40: лоты 04:01:030907:128/124/134 — аренда, а считались продажей и
+    давали цену перепродажи соседнему лоту продажи."""
+    from landcheck import torgi
+
+    card = _card("R_1", "04:01:030907:128", area=1500, start=110_298, fin=360_000, kind="rent")
+    card["lotName"] = "Право заключения договора аренды земельного участка"
+    row = ts.lot_row(card)
+    assert row["kind"] == "rent"
+    hit = {k: v for k, v in card.items() if k != "typeTransaction"}
+    assert ts.lot_row(hit)["kind"] == "rent"  # по названию
+    hit["lotName"] = "Земельный участок для ИЖС"
+    assert ts.lot_row(hit)["kind"] is None  # признаков нет — не «продажа» по умолчанию
+    assert ts.merge_row(row, ts.lot_row(hit))["kind"] == "rent"
+    assert torgi.kind_of({"lotName": "Продажа земельного участка"}) == "sale"
+    assert torgi.kind_of({"lotName": "Продажа права аренды"}) is None
+
+
+def test_bids_counted_from_results_second_place_and_price_growth():
+    """Зум 13.11, 50:12: 10:20:0030109:83 — старт 173 106, итог 441 421 (×2,55), у нас
+    «Заявок 1», на torgi — две заявки."""
+    base = _card("B_1", "10:20:0030109:83", area=1500, start=173_106, fin=441_421)
+    one_admitted = [{"participantAdmissions": [{"admissionStatus": "ADMITTED"}]}]
+    # протокол итогов с двумя ценами
+    priced = one_admitted + [
+        {"results": [{"isFirst": True, "participantPrice": 441_421}, {"participantPrice": 400_000}]}
+    ]
+    row = ts.lot_row(base | {"protocols": priced})
+    assert row["applied"] == 2 and row["applied_min"] is False
+    # есть второе место без цены у остальных — не меньше двух
+    second = one_admitted + [{"results": [{"isSecond": True}]}]
+    row = ts.lot_row(base | {"protocols": second})
+    assert row["applied"] == 2 and row["applied_min"] is True
+    # ничего, кроме роста цены, — тоже не меньше двух
+    row = ts.lot_row(base | {"protocols": one_admitted})
+    assert row["applied"] == 2 and row["applied_min"] is True
+    # без роста цены одна заявка остаётся одной
+    flat = _card("B_2", "10:20:0030109:84", area=1500, start=173_106, fin=173_106)
+    assert ts.lot_row(flat | {"protocols": one_admitted})["applied"] == 1
+    # ответ поиска (протоколов нет) число заявок не трогает
+    assert ts.lot_row(base)["applied"] is None
