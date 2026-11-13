@@ -529,17 +529,19 @@ _SALE_NAME_RE = re.compile(r"купли|продаж|в собственност
 
 
 def kind_of(card: dict[str, Any]) -> str | None:
-    """Вид сделки лота: `rent` | `sale`; None — признаков нет (тогда сохранённое не трогаем).
-    Сначала поле площадки `typeTransaction`; если его нет — название лота («Право заключения
-    договора аренды…», «…купли-продажи…»). Зум 13.11, 26:40: три лота аренды считались
-    продажей и попали в цену перепродажи соседнего лота продажи."""
-    t = card.get("typeTransaction")
-    if t in ("rent", "sale"):
-        return t
+    """Вид сделки лота: `rent` | `sale`; None — признаков нет (тогда сохранённое не трогаем,
+    а не пишем «продажу» по умолчанию). Название лота про право аренды («…на право заключения
+    договора аренды», без слов о продаже) главнее поля `typeTransaction`: на проде 13.11 так
+    были подписаны продажей 10 извещений об аренде. Иначе — `typeTransaction`, затем название.
+    Проверено на проде 13.11 (зум, 26:40): 04:01:030907:124/128/134 по карточке — продажа;
+    «Аренда» на torgi стояла у извещения 39.18 от 21.11.2025 по тем же участкам."""
     name = str(card.get("lotName") or "")
     rent, sale = bool(_RENT_NAME_RE.search(name)), bool(_SALE_NAME_RE.search(name))
     if rent and not sale:
         return "rent"
+    t = card.get("typeTransaction")
+    if t in ("rent", "sale"):
+        return t
     if sale and not rent:
         return "sale"
     return None
@@ -733,10 +735,14 @@ def _result_of(card: dict[str, Any]) -> dict[str, Any]:
     priced_max = 0
     for p in card.get("protocols") or []:
         adm = p.get("participantAdmissions")
-        if isinstance(adm, list) and adm:
-            ok = sum(1 for a in adm if (a or {}).get("admissionStatus") == "ADMITTED")
+        # В протоколе уклонения от договора (AUCTION_REFUSAL_CONTRACT_ZK) участник без статуса
+        # допуска (прод, 13.11.2026, 10:20:0030109:83): это не отклонённая заявка — не считаем.
+        statuses = [(a or {}).get("admissionStatus") for a in adm] if isinstance(adm, list) else []
+        statuses = [x for x in statuses if x]
+        if statuses:
+            ok = sum(1 for x in statuses if x == "ADMITTED")
             ok_max = max(ok_max or 0, ok)
-            rej_max = max(rej_max or 0, len(adm) - ok)
+            rej_max = max(rej_max or 0, len(statuses) - ok)
             applied, admitted = ok_max + rej_max, ok_max
         priced = 0
         for r in p.get("results") or []:

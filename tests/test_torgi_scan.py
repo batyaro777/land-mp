@@ -773,8 +773,8 @@ def test_tz_offset_formats(card, offset):
 
 
 def test_rent_detected_by_lot_name_and_not_overwritten_by_search_hit():
-    """Зум 13.11, 26:40: лоты 04:01:030907:128/124/134 — аренда, а считались продажей и
-    давали цену перепродажи соседнему лоту продажи."""
+    """Вид сделки: название про право аренды главнее `typeTransaction` (прод 13.11: извещения
+    об аренде подписаны продажей), ответ поиска без признаков сохранённое не затирает."""
     from landcheck import torgi
 
     card = _card("R_1", "04:01:030907:128", area=1500, start=110_298, fin=360_000, kind="rent")
@@ -788,6 +788,15 @@ def test_rent_detected_by_lot_name_and_not_overwritten_by_search_hit():
     assert ts.merge_row(row, ts.lot_row(hit))["kind"] == "rent"
     assert torgi.kind_of({"lotName": "Продажа земельного участка"}) == "sale"
     assert torgi.kind_of({"lotName": "Продажа права аренды"}) is None
+    notice = (
+        "Информация о праве граждан … участвовать в аукционе на право заключения договора аренды"
+    )
+    assert torgi.kind_of({"lotName": notice, "typeTransaction": "sale"}) == "rent"
+    # карточки прода 13.11: 04:01:030907:128 — продажа, в названии аренды нет
+    sold = (
+        "Земельный участок с кадастровым номером 04:01:030907:128, местоположение: Республика Алтай"
+    )
+    assert torgi.kind_of({"lotName": sold, "typeTransaction": "sale"}) == "sale"
 
 
 def test_bids_counted_from_results_second_place_and_price_growth():
@@ -813,3 +822,41 @@ def test_bids_counted_from_results_second_place_and_price_growth():
     assert ts.lot_row(flat | {"protocols": one_admitted})["applied"] == 1
     # ответ поиска (протоколов нет) число заявок не трогает
     assert ts.lot_row(base)["applied"] is None
+
+
+def test_bids_from_real_protocol_shapes_of_prod_cards():
+    """Карточки с прода 13.11 (Клавдий 9986f8d9): пояс — строка в минутах; у 10:20:0030109:83
+    протокол итогов допускает двоих, а позже протокол уклонения от договора несёт одного
+    участника без статуса допуска — заявок две, не три и не одна."""
+    from landcheck import torgi
+
+    card = _card("K_28", "10:20:0030109:83", area=1500, start=173_106.27, fin=441_420.88)
+    card |= {
+        "biddEndTime": "2026-07-03T07:00:00Z",
+        "timezoneOffset": "180",
+        "timeZoneName": "МСК",
+        "protocols": [
+            {"type": {"code": "EA_APPLICATION_CONSIDERATION_ADV_ZK"}, "participantAdmissions": []},
+            {
+                "type": {"code": "AUCTION_RESULTS_ZK"},
+                "participantAdmissions": [
+                    {"admissionStatus": "ADMITTED", "orderNumber": 1},
+                    {"admissionStatus": "ADMITTED", "orderNumber": 2},
+                ],
+                "results": [
+                    {"isFirst": True, "participantPrice": 441_420.88},
+                    {"isSecond": True, "participantPrice": 432_765.57},
+                ],
+            },
+            {
+                "type": {"code": "AUCTION_REFUSAL_CONTRACT_ZK"},
+                "participantAdmissions": [{"admissionStatus": None, "orderNumber": 1}],
+            },
+        ],
+    }
+    row = ts.lot_row(card)
+    assert (row["applied"], row["admitted"], row["applied_min"]) == (2, 2, False)
+    assert row["tz_offset"] == 180 and row["bidd_end"] == "2026-07-03"
+    alt = {"timezoneOffset": "420", "timeZoneName": "МСК+4"}
+    assert torgi.tz_offset_of(alt) == 420
+    assert torgi.local_day("2026-12-06T17:00:00Z", torgi.tz_offset_of(alt)) == "2026-12-07"
