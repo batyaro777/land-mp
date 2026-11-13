@@ -313,6 +313,7 @@ def lot_row(card: dict[str, Any]) -> dict[str, Any] | None:
         "bidd_end_at": _raw_time(card.get("biddEndTime")),
         "auction_at": _raw_time(card.get("auctionStartDate")),
         "tz_offset": tz,
+        "images": torgi.images_of(card),
         "vri": vri,
         "vri_group": vri_group(vri, _vri_code(card), category),
         "category": category,

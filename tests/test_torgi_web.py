@@ -926,3 +926,18 @@ def test_scan_region_by_code_price_range_sorts_and_copy(client):  # noqa: F811
     assert 'class="small active">дороже</a>' in desc
     lot = client.get("/tools/torgi-lot/ACT_0?region=40&roi=40").text
     assert "Как сложился индекс района" in lot and "участки нашли хозяина" in lot
+
+
+def test_lot_photos_in_list_and_lot_page(client):  # noqa: F811
+    from landcheck.web.db import TorgiLot, session
+
+    fake = _seed(client)
+    _sync(fake, provider=FakeNspd())
+    _admin(client)
+    with session() as db:
+        db.get(TorgiLot, "ACT_0").images = ["f-1", "f-2"]
+        db.commit()
+    page = client.get("/tools/torgi-scan?region=40&roi=40").text
+    assert 'src="https://torgi.gov.ru/new/file-store/v1/f-1"' in page and 'id="lot-gallery"' in page
+    lot = client.get("/tools/torgi-lot/ACT_0?region=40").text
+    assert lot.count('class="lot-thumb big"') == 2

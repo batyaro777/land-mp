@@ -5,6 +5,7 @@
 {% endblock %}
 {% block content %}
 {% include "_copy_js.html" %}
+{% include "_gallery.html" %}
 {% set tab = 'scan' %}
 <h2>Анализатор торгов <span class="badge mini">внутренний режим</span></h2>
 {% include "_torgi_nav.html" %}
@@ -182,7 +183,7 @@ document.querySelectorAll('form.torgi-filter select:not([onchange]), form.torgi-
   <tr{% if result.parcel and r.cad_num == result.parcel %} class="hl"{% endif %}>
     <td><input type="checkbox" name="lot" value="{{ r.id }}" aria-label="Выбрать лот"{% if not r.cad_num %} disabled{% endif %}></td>
     <td><span class="badge v-{{ {'go': 'ok', 'edge': 'check', 'no': 'stop'}.get(s.verdict, '') }}">{{ s.verdict_label }}</span></td>
-    <td class="cad"><a href="/tools/torgi-lot/{{ r.id }}{% if qs %}?{{ qs }}{% endif %}"><code>{{ r.cad_num or (('квартал ' ~ r.quarter) if r.quarter else 'без номера') }}</code></a>{% if r.cad_num %}<button type="button" class="copy" data-copy="{{ r.cad_num }}" title="Скопировать кадастровый номер" aria-label="Скопировать кадастровый номер">⧉</button>{% endif %}{% if r.lat is not none and r.lon is not none %}<button type="button" class="copy" data-copy="{{ '%.6f'|format(r.lat) }}, {{ '%.6f'|format(r.lon) }}" title="Скопировать координаты" aria-label="Скопировать координаты">⌖</button>{% endif %}
+    <td class="cad">{% if r.images %}<button type="button" class="lot-thumb" data-gallery="{{ r.images|tojson|forceescape }}" title="Фото лота ({{ r.images|length }})" aria-label="Фото лота"><img src="{{ img_base }}{{ r.images[0] }}" alt="" loading="lazy" onerror="this.closest('button').remove()">{% if r.images|length > 1 %}<span>{{ r.images|length }}</span>{% endif %}</button>{% endif %}<a href="/tools/torgi-lot/{{ r.id }}{% if qs %}?{{ qs }}{% endif %}"><code>{{ r.cad_num or (('квартал ' ~ r.quarter) if r.quarter else 'без номера') }}</code></a>{% if r.cad_num %}<button type="button" class="copy" data-copy="{{ r.cad_num }}" title="Скопировать кадастровый номер" aria-label="Скопировать кадастровый номер">⧉</button>{% endif %}{% if r.lat is not none and r.lon is not none %}<button type="button" class="copy" data-copy="{{ '%.6f'|format(r.lat) }}, {{ '%.6f'|format(r.lon) }}" title="Скопировать координаты" aria-label="Скопировать координаты">⌖</button>{% endif %}
       <span class="badge mini">{{ kinds.get(r.kind, r.kind) }}</span>{% if r.form == 'IPS' %} <span class="badge mini" title="Извещение о предоставлении, ст. 39.18 ЗК: не торги, цены нет">39.18</span>{% elif r.bidd_type and r.bidd_type != 'ZK' %} <span class="badge mini" title="{{ r.bidd_type_name or r.bidd_type }}: правила и сроки отличаются от обычного земельного аукциона">{{ bidd_short.get(r.bidd_type, r.bidd_type) }}</span>{% endif %}{% if r.has_gpzu %} <span class="badge mini v-ok" title="К лоту приложен ГПЗУ">ГПЗУ</span>{% endif %}
       <div class="small">{{ (r.vri or groups.get(r.vri_group, ''))|truncate(60) }}</div>
       <div class="small muted">{% set dn = names.get(r.district, '') %}{% if dn and dn not in (r.address or '') %}{{ dn }}{{ ' · ' if r.address else '' }}{% endif %}{{ (r.address or '')|short_address|truncate(70) }}</div>

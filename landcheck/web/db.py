@@ -376,6 +376,8 @@ class TorgiLot(Base):
     bidd_end_at: Mapped[str | None] = mapped_column(String(32), nullable=True)
     auction_at: Mapped[str | None] = mapped_column(String(32), nullable=True)
     tz_offset: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # фото лота: идентификаторы файлов площадки (torgi.images_of)
+    images: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     vri: Mapped[str | None] = mapped_column(String(400), nullable=True)
     vri_group: Mapped[str | None] = mapped_column(String(12), nullable=True)
     category: Mapped[str | None] = mapped_column(String(160), nullable=True)
@@ -408,7 +410,7 @@ class TorgiLot(Base):
     FIELDS = (
         "id region district quarter cad_num kind form bidd_type bidd_type_name status area_m2 "
         "price_start price_step deposit price_fin published bidd_end auction_date bidd_end_at "
-        "auction_at tz_offset vri vri_group "
+        "auction_at tz_offset images vri vri_group "
         "category address name notice applied applied_min admitted second_price winner_type "
         "fail_code "
         "fail_reason has_gpzu "
@@ -565,6 +567,7 @@ _NEW_COLUMNS: dict[str, dict[str, str]] = {
         "auction_at": "VARCHAR(32)",
         "tz_offset": "INTEGER",
         "applied_min": "BOOLEAN",
+        "images": "JSON",
     },
     "users": {
         "email": "VARCHAR(200)",

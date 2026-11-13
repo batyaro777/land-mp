@@ -311,6 +311,7 @@ def torgi_scan_page(request: Request, user: TorgiDep, page: int = 1):
         "kinds": torgi_scan.KIND_RU,
         "user": user,
         "phase_ru": PHASE_RU,
+        "img_base": torgi.FILE_URL.format(file_id=""),
     }
     if not region:
         return render(request, "torgi_scan.html", sync=None, result=None, params=None, **ctx)
@@ -555,6 +556,7 @@ def torgi_lot_page(request: Request, user: TorgiDep, lot_id: str, saved: str = "
         status_ru=torgi.STATUS_RU,
         qs=_query(q, saved=None, region=region),
         q=q,
+        img_base=torgi.FILE_URL.format(file_id=""),
         saved=saved,
         user=user,
     )

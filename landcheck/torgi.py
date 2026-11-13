@@ -556,6 +556,30 @@ def tz_label(offset_min: int | None) -> str:
     return f"МСК{'+' if diff > 0 else '−'}{h}{f':{m:02d}' if m else ''}"
 
 
+MAX_IMAGES = 8
+
+
+def images_of(card: dict[str, Any]) -> list[str] | None:
+    """Идентификаторы фото лота в file-store площадки (`lotImages`): строки или объекты с
+    `fileId`/`id`. None — поля в ответе нет (сохранённое не трогаем), [] — фото нет.
+    Фото показываются прямо в списке лотов (зум 13.11, 17:55: «как на tbankrot»)."""
+    raw = card.get("lotImages")
+    if not isinstance(raw, list):
+        return None
+    out: list[str] = []
+    for item in raw:
+        fid = item if isinstance(item, str) else None
+        if isinstance(item, dict):
+            fid = item.get("fileId") or item.get("id") or item.get("fileUid")
+        if isinstance(fid, str | int) and str(fid).strip() and str(fid) not in out:
+            out.append(str(fid).strip())
+    return out[:MAX_IMAGES]
+
+
+def image_url(file_id: str) -> str:
+    return FILE_URL.format(file_id=file_id)
+
+
 def _docs_of(card: dict[str, Any]) -> list[dict[str, Any]]:
     """Вложения лота и извещения: ГПЗУ, проект договора, форма заявки, извещение. Без
     неактивных и без повторов (одни и те же файлы бывают и у лота, и у извещения)."""

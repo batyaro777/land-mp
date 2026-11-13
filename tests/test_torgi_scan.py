@@ -860,3 +860,21 @@ def test_bids_from_real_protocol_shapes_of_prod_cards():
     alt = {"timezoneOffset": "420", "timeZoneName": "МСК+4"}
     assert torgi.tz_offset_of(alt) == 420
     assert torgi.local_day("2026-12-06T17:00:00Z", torgi.tz_offset_of(alt)) == "2026-12-07"
+
+
+def test_images_of_accepts_ids_and_objects():
+    from landcheck import torgi
+
+    assert torgi.images_of({}) is None
+    assert torgi.images_of({"lotImages": []}) == []
+    assert torgi.images_of({"lotImages": ["a1", "a1", "b2"]}) == ["a1", "b2"]
+    assert torgi.images_of({"lotImages": [{"fileId": "c3"}, {"id": "d4"}, {"x": 1}]}) == [
+        "c3",
+        "d4",
+    ]
+    card = _card(
+        "P_1", "04:01:031001:750", area=1200, start=1_414_000, fin=None, status="PUBLISHED"
+    )
+    row = ts.lot_row(card | {"lotImages": [{"fileId": "img1"}, {"fileId": "img2"}]})
+    assert row["images"] == ["img1", "img2"]
+    assert ts.merge_row(row, ts.lot_row(card))["images"] == ["img1", "img2"]
