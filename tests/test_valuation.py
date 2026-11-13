@@ -500,3 +500,34 @@ def test_plain_summary_levels_and_documents_merge():
     assert merged[0]["items"][-1] == "ГПЗУ — градостроительный план участка — администрация"
     assert len(merged[0]["items"]) == 2 and len(blocks[0]["items"]) == 1  # исходник не тронут
     assert merge_documents([], docs)[0]["title"] == "Документы, которые запросить"
+
+
+def test_collect_ads_drops_leasehold_and_flags_suspiciously_cheap():
+    """Зум 13.11, 24:48: объявления по 70 тыс. за сотку на Avito — аренда, выставленная как
+    продажа; в цену собственности их не берём, а заниженные в разы показываем отдельно."""
+
+    def ad(n: int, title: str, price: str, area: str = "10 сот") -> dict:
+        return {
+            "title": f"{title} Белокуриха, {area}",
+            "url": f"https://avito.ru/x_12345678{n}",
+            "snippet": price,
+        }
+
+    def search_fn(q, max_results, news, recent=False):
+        return {
+            "results": [
+                ad(1, "Участок ИЖС", "2 млн ₽"),
+                ad(2, "Участок ИЖС у реки", "2,2 млн ₽"),
+                ad(3, "Участок под ИЖС", "1,8 млн ₽"),
+                ad(4, "Участок, вид на горы", "2,4 млн ₽"),
+                ad(5, "Участок недорого", "700 тыс. ₽"),
+                ad(6, "Переуступка права аренды, участок", "300 тыс. ₽"),
+                ad(7, "Участок в аренде на 49 лет", "350 тыс. ₽"),
+            ],
+            "error": None,
+        }
+
+    r = collect_ads("Белокуриха", "izhs", area_m2=1000, search_fn=search_fn)
+    assert r["n"] == 4 and r["median"] == 210_000
+    assert sorted(a["pps"] for a in r["leasehold"]) == [30_000, 35_000]
+    assert [a["pps"] for a in r["cheap"]] == [70_000]

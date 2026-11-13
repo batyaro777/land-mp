@@ -91,12 +91,18 @@ def _num(value: str | None) -> float | None:
 
 def _region_code(value: str | None) -> str | None:
     value = (value or "").strip()
+    # из поля с подсказками приходит «24 — Красноярский край»: берём код
+    if (m := re.match(r"(\d{1,2})\b", value)) is not None:
+        value = m.group(1)
     if value.isdigit() and value.zfill(2) in CADASTRAL_REGIONS:
         return value.zfill(2)
     for code, name in CADASTRAL_REGIONS.items():
         if name == value:
             return code
-    return None
+    # начало названия: «краснояр» → Красноярский край, если такой регион один
+    low = value.lower().split(" · ")[0].strip()
+    hits = [c for c, n in CADASTRAL_REGIONS.items() if low and n.lower().startswith(low)]
+    return hits[0] if len(hits) == 1 else None
 
 
 def _default_region(user: User) -> str | None:
@@ -111,6 +117,13 @@ def _default_region(user: User) -> str | None:
     return known[0] if known else code
 
 
+def _rub(value: float | None) -> float | None:
+    """Сумма из формы: «1,5» — миллионы, «500000» — рубли."""
+    if not value:
+        return None
+    return value * 1_000_000 if value < 1000 else value
+
+
 def _scan_params(q) -> torgi_scan.ScanParams:
     p = torgi_scan.ScanParams()
     if q.get("roi"):
@@ -120,7 +133,9 @@ def _scan_params(q) -> torgi_scan.ScanParams:
     p.extra = _num(q.get("extra")) or 0.0
     budget = _num(q.get("budget"))
     if budget:
-        p.budget = budget * 1_000_000 if budget < 1000 else budget  # «1,5» — миллионы
+        p.budget = _rub(budget)
+    p.price_min = _rub(_num(q.get("pmin")))
+    p.price_max = _rub(_num(q.get("pmax")))
     amin, amax = _num(q.get("amin")), _num(q.get("amax"))
     p.area_min_m2 = amin * torgi_scan.SOTKA if amin else None
     p.area_max_m2 = amax * torgi_scan.SOTKA if amax else None
@@ -234,6 +249,10 @@ def _scan(region: str, q) -> tuple[dict[str, Any], torgi_scan.ScanParams, list[d
         rows.sort(key=lambda r: r.get("bidd_end") or "9999")
     elif sort == "price":
         rows.sort(key=lambda r: r.get("price_start") or float("inf"))
+    elif sort == "price_desc":
+        rows.sort(key=lambda r: -(r.get("price_start") or 0))
+    elif sort == "auction":
+        rows.sort(key=lambda r: r.get("auction_date") or "9999")
     elif sort == "roi":
         rows.sort(key=lambda r: -(r["s"].get("roi_start") or -9))
     if parcel:  # ввели номер участка — он первым в списке и подсвечен
@@ -595,7 +614,15 @@ def torgi_lot_ads(request: Request, user: TorgiDep, lot_id: str):
     )
     where = ads.get("scope_label") or short_place(locality)
     found = _ad_rows(ads.get("ads") or [])
-    details = {"ads": found, "where": where, "lot_id": lot_id, "fetched_at": ads.get("fetched_at")}
+    details = {
+        "ads": found,
+        "where": where,
+        "lot_id": lot_id,
+        "fetched_at": ads.get("fetched_at"),
+        # отсеянные: аренда под видом продажи и подозрительно дешёвые — показать, не считать
+        "leasehold": _ad_rows(ads.get("leasehold") or []),
+        "cheap": _ad_rows(ads.get("cheap") or []),
+    }
     key = {"scope": district, "kind": "sale", "vri_group": group or "any"}
     if ads.get("n", 0) < MIN_N or not ads.get("median"):
         if not found:

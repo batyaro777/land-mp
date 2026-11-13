@@ -477,7 +477,43 @@ def stats_of(lots: list[dict[str, Any]]) -> dict[str, Any]:
             "samples": samples,
         }
     out["index"], out["label"] = liquidity_index(out)
+    out["index_parts"] = index_parts(out)
     return out
+
+
+def index_parts(s: dict[str, Any]) -> list[dict[str, Any]]:
+    """Из чего сложен индекс ликвидности — для раскрывашки у числа (зум 13.11, 33:48: «что
+    значит индекс 96?»). Слагаемые те же, что в `liquidity_index`."""
+    if not s.get("closed") or s["closed"] < MIN_SAMPLE or s.get("sell_through") is None:
+        return []
+    st = s["sell_through"]
+    parts = [
+        {
+            "what": "участки нашли хозяина (продали или сдали в аренду)",
+            "value": f"{st:.0%} из {s['closed']} завершённых торгов",
+            "points": round(60 * st, 1),
+            "max": 60,
+        }
+    ]
+    applied = s.get("applied_median")
+    parts.append(
+        {
+            "what": "заявок на лот, медиана (4 и больше — максимум)",
+            "value": "нет данных" if applied is None else f"{applied:g}",
+            "points": 0.0 if applied is None else round(20 * min(max(applied - 1, 0) / 3, 1.0), 1),
+            "max": 20,
+        }
+    )
+    growth = s.get("growth_median")
+    parts.append(
+        {
+            "what": "рост цены к старту, медиана (×2 и больше — максимум)",
+            "value": "нет данных" if growth is None else f"×{growth:g}",
+            "points": 0.0 if growth is None else round(20 * min(max(growth - 1, 0), 1.0), 1),
+            "max": 20,
+        }
+    )
+    return parts
 
 
 def liquidity_index(s: dict[str, Any]) -> tuple[int | None, str]:
@@ -593,6 +629,9 @@ class ScanParams:
     groups: tuple[str, ...] = ()
     forms: str = "auction"  # что показывать: auction — торги, notice — извещения 39.18, all
     place: str | None = None  # район `40:13` или квартал `40:13:120101` (см. `place_of`)
+    # начальная цена «от – до», как в реестре torgi.gov.ru (зум 13.11, 10:20)
+    price_min: float | None = None
+    price_max: float | None = None
     # Аренда под переуступку: цена переуступки как доля цены такого же участка в собственности.
     # None — не оцениваем: цену переуступки задают в слое рынка района.
     assign_ratio: float | None = None
@@ -1072,6 +1111,7 @@ def score_lot(
         "liquidity": {
             "index": idx,
             "label": liq.get("label"),
+            "parts": liq.get("index_parts") or [],
             "sell_through": sell_through,
             "growth": growth,
             "growth_where": growth_where,
@@ -1099,7 +1139,7 @@ def scan(
     forms = {"auction": 0, "notice": 0}
     # что в выбранном месте отсеяли остальные фильтры — чтобы пустой список объяснял себя
     # (зум 13.11, 07:06–09:50: в квартале 11–13 лотов, а у нас «лотов нет»)
-    hidden = {"form": 0, "kind": 0, "group": 0, "area": 0}
+    hidden = {"form": 0, "kind": 0, "group": 0, "area": 0, "price": 0}
     for lot in lots:
         if lot.get("status") not in ACTIVE:
             continue
@@ -1121,6 +1161,12 @@ def scan(
             p.area_max_m2 and (not area or area > p.area_max_m2)
         ):
             hidden["area"] += 1
+            continue
+        price = lot.get("price_start")
+        if (p.price_min and (not price or price < p.price_min)) or (
+            p.price_max and (not price or price > p.price_max)
+        ):
+            hidden["price"] += 1
             continue
         rows.append(
             {**lot, "s": score_lot(lot, stats, p, layer=layer, repeats=repeats, today=today)}

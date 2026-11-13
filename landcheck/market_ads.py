@@ -164,6 +164,14 @@ def _quantile(values: list[float], q: float) -> float:
     return xs[lo] + (xs[hi] - xs[lo]) * (pos - lo)
 
 
+# Аренда и переуступка права аренды, выставленные как продажа земли: в цену собственности не
+# берём (зум 13.11, 24:48: объявления по 70 тыс. за сотку на Avito — аренда под видом продажи)
+_LEASE_RE = re.compile(r"аренд|переуступ", re.IGNORECASE)
+# Цена за сотку ниже медианы во столько раз и больше — подозрительно дёшево: в медиану не идёт,
+# показывается отдельно для проверки глазами (зум 13.11, 25:20: «отсекать неадекватные цены»)
+CHEAP_RATIO = 2.5
+
+
 def build_queries(locality_short: str, kind: str) -> list[str]:
     what = KIND_QUERY.get(kind, KIND_QUERY["other"])
     return [f"{locality_short} {what} купить цена", f"{locality_short} {what} продажа соток"]
@@ -208,6 +216,7 @@ def collect_ads(
     seen: set[str] = set()
     ads: list[dict[str, Any]] = []
     off_scale: list[dict[str, Any]] = []
+    leasehold: list[dict[str, Any]] = []
     errors: list[str] = []
     queries: list[str] = []
 
@@ -233,6 +242,9 @@ def collect_ads(
                     continue
                 seen.add(url)
                 row = {"title": title[:120], "url": url, "host": host, "scope": scope, **parsed}
+                if _LEASE_RE.search(f"{title} {snippet}"):
+                    leasehold.append(row)
+                    continue
                 if (
                     area_m2
                     and area_m2 >= 100
@@ -262,9 +274,12 @@ def collect_ads(
         if len(ads) > n_local:
             scope, scope_label = "district", fallback.get("label") or fallback["place"]
     # выбросы: цена за сотку дальше чем в 5 раз от медианы — скорее всего, не тот участок/единица
+    cheap: list[dict[str, Any]] = []
     if len(ads) >= 4:
         med = _quantile([a["pps"] for a in ads], 0.5)
         ads = [a for a in ads if med / 5 <= a["pps"] <= med * 5]
+        cheap = [a for a in ads if a["pps"] < med / CHEAP_RATIO]
+        ads = [a for a in ads if a["pps"] >= med / CHEAP_RATIO]
     ads.sort(key=lambda a: a["pps"])
     ads = ads[:MAX_ADS]
     pps = [a["pps"] for a in ads]
@@ -275,6 +290,8 @@ def collect_ads(
         "scope": scope,
         "scope_label": scope_label,
         "off_scale": off_scale[:MAX_ADS],
+        "leasehold": leasehold[:MAX_ADS],
+        "cheap": sorted(cheap, key=lambda a: a["pps"])[:MAX_ADS],
         "median": _quantile(pps, 0.5) if pps else None,
         "p25": _quantile(pps, 0.25) if pps else None,
         "p75": _quantile(pps, 0.75) if pps else None,

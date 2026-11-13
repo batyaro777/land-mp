@@ -4,6 +4,7 @@
 {% include "_leaflet.html" %}
 {% endblock %}
 {% block content %}
+{% include "_copy_js.html" %}
 {% set tab = 'scan' %}
 <h2>Анализатор торгов <span class="badge mini">внутренний режим</span></h2>
 {% include "_torgi_nav.html" %}
@@ -20,11 +21,14 @@
 
 <form method="get" class="torgi-filter no-print">
   <div class="grid">
-    <label>Регион
-      <select name="region" onchange="this.form.submit()">
-        {% if not region %}<option value="">— выберите —</option>{% endif %}
-        {% for r in regions %}<option value="{{ r.code }}"{% if r.code == region %} selected{% endif %}>{{ r.name }}{% if r.synced %} · собран{% endif %}</option>{% endfor %}
-      </select>
+    <label>Регион — название или код
+      <input name="region" list="torgi-regions" autocomplete="off" placeholder="например 24 или Красноярский" value="{% if region %}{{ region }} — {{ region_name }}{% endif %}" onfocus="this.select()" onchange="this.form.submit()">
+      <datalist id="torgi-regions">
+        {% for r in regions %}<option value="{{ r.code }} — {{ r.name }}">{{ 'собран' if r.synced else '' }}</option>{% endfor %}
+      </datalist>
+    </label>
+    <label title="Кадастровый район (40:13), квартал (40:13:120101) или номер участка — тогда покажем его квартал, а сам участок первым">Район, квартал или номер участка
+      <input name="d" value="{{ q.get('d') or '' }}" placeholder="10:03:0010901 или 10:03:0010901:1354">
     </label>
     <label>Сделка
       <select name="kind">
@@ -32,6 +36,8 @@
         {% for key, label in kinds.items() %}<option value="{{ key }}"{% if q.get('kind') == key %} selected{% endif %}>{{ label }}</option>{% endfor %}
       </select>
     </label>
+  </div>
+  <div class="grid">
     <label title="Извещение о предоставлении (ст. 39.18 ЗК) — не торги: участок просит конкретный заявитель, цены нет. Пока идёт срок, можно подать своё заявление — тогда участок выставят на аукцион.">Что показывать
       <select name="form">
         <option value="">аукционы</option>
@@ -39,32 +45,22 @@
         <option value="all"{% if q.get('form') == 'all' %} selected{% endif %}>всё вместе</option>
       </select>
     </label>
-    <label>Цель: доходность на сделку, %
-      <input name="roi" inputmode="decimal" list="roi-presets" value="{{ q.get('roi') or (params.target_roi * 100)|round|int if params else 100 }}">
-      <datalist id="roi-presets"><option value="40">40 — порог эксперта по торгам</option><option value="100">100 — цель фонда за 24 месяца</option></datalist>
+    <label>Начальная цена от, ₽
+      <input name="pmin" inputmode="decimal" value="{{ q.get('pmin') or '' }}" placeholder="например 100000">
     </label>
-    <label>Бюджет входа, ₽
-      <input name="budget" inputmode="decimal" value="{{ q.get('budget') or '' }}" placeholder="например 500000 или 1,5 (млн)">
+    <label>до, ₽
+      <input name="pmax" inputmode="decimal" value="{{ q.get('pmax') or '' }}" placeholder="например 1,5 (млн)">
     </label>
   </div>
-  <details{% if sel_groups or q.get('amin') or q.get('amax') or q.get('extra') or q.get('tax') or q.get('d') or q.get('hold') or q.get('markup') or q.get('assign') %} open{% endif %}>
-    <summary class="small">Ещё критерии: назначение, площадь, расходы, район</summary>
+  {% set more_open = sel_groups or q.get('amin') or q.get('amax') or q.get('verdict') %}
+  <details{% if more_open %} open{% endif %}>
+    <summary class="small">Ещё критерии: назначение, площадь, вердикт</summary>
     <div class="torgi-groups">
       {% for key, label in groups.items() %}<label class="inline-check"><input type="checkbox" name="group" value="{{ key }}"{% if key in sel_groups %} checked{% endif %}> {{ label }}</label>{% endfor %}
     </div>
     <div class="grid">
       <label>Площадь от, сот. <input name="amin" inputmode="decimal" value="{{ q.get('amin') or '' }}"></label>
       <label>Площадь до, сот. <input name="amax" inputmode="decimal" value="{{ q.get('amax') or '' }}"></label>
-      <label>Расходы на сделку, ₽ <input name="extra" inputmode="decimal" value="{{ q.get('extra') or '' }}" placeholder="регистрация, межевание, реклама"></label>
-      <label>Налог с прибыли, % <input name="tax" inputmode="decimal" value="{{ q.get('tax') or (params.tax * 100)|round(1) if params else 13 }}"></label>
-    </div>
-    <div class="grid">
-      <label>Район или квартал <input name="d" value="{{ q.get('d') or '' }}" placeholder="40:13 или 40:13:120101"></label>
-      <label>Срок до продажи, мес. <input name="hold" inputmode="numeric" value="{{ q.get('hold') or '' }}" placeholder="12, если в слое рынка срока нет"></label>
-      <label title="Когда рыночной цены нет, цена перепродажи берётся из итогов торгов района. Если знаете, что рынок выше торгов, задайте коэффициент: 1,3 — рынок на 30 % выше.">Рынок к итогам торгов, раз <input name="markup" inputmode="decimal" value="{{ q.get('markup') or '' }}" placeholder="1 — не знаем"></label>
-    </div>
-    <div class="grid">
-      <label title="Для аренды под переуступку. Если цена переуступки в слое рынка района не задана, она считается как эта доля от цены такого же участка в собственности (слой рынка, сделки, объявления, итоги торгов продажи, кадастровая стоимость). Пусто — аренда без слоя рынка остаётся без оценки.">Переуступка аренды, % от цены в собственности <input name="assign" inputmode="decimal" value="{{ q.get('assign') or '' }}" placeholder="пусто — не оценивать"></label>
       <label>Показать
         <select name="verdict">
           <option value="">все лоты</option>
@@ -73,6 +69,24 @@
         </select>
       </label>
     </div>
+  </details>
+  {% set calc_open = q.get('extra') or q.get('hold') or q.get('markup') or q.get('assign') or q.get('budget') %}
+  <details{% if calc_open %} open{% endif %}>
+    <summary class="small">Расчёт доходности: цель, расходы, налог, срок (по умолчанию — цель {{ (params.target_roi * 100)|round|int if params else 100 }} %, налог {{ (params.tax * 100)|round(1) if params else 13 }} %)</summary>
+    <div class="grid">
+      <label>Цель: доходность на сделку, %
+        <input name="roi" inputmode="decimal" list="roi-presets" value="{{ q.get('roi') or (params.target_roi * 100)|round|int if params else 100 }}">
+        <datalist id="roi-presets"><option value="40">40 — порог эксперта по торгам</option><option value="100">100 — цель фонда за 24 месяца</option></datalist>
+      </label>
+      <label>Расходы на сделку, ₽ <input name="extra" inputmode="decimal" value="{{ q.get('extra') or '' }}" placeholder="регистрация, межевание, реклама"></label>
+      <label>Налог с прибыли, % <input name="tax" inputmode="decimal" value="{{ q.get('tax') or (params.tax * 100)|round(1) if params else 13 }}"></label>
+    </div>
+    <div class="grid">
+      <label>Срок до продажи, мес. <input name="hold" inputmode="numeric" value="{{ q.get('hold') or '' }}" placeholder="12, если в слое рынка срока нет"></label>
+      <label title="Когда рыночной цены нет, цена перепродажи берётся из итогов торгов района. Если знаете, что рынок выше торгов, задайте коэффициент: 1,3 — рынок на 30 % выше.">Рынок к итогам торгов, раз <input name="markup" inputmode="decimal" value="{{ q.get('markup') or '' }}" placeholder="1 — не знаем"></label>
+      <label title="Для аренды под переуступку. Если цена переуступки в слое рынка района не задана, она считается как эта доля от цены такого же участка в собственности (слой рынка, сделки, объявления, итоги торгов продажи, кадастровая стоимость). Пусто — аренда без слоя рынка остаётся без оценки.">Переуступка аренды, % от цены в собственности <input name="assign" inputmode="decimal" value="{{ q.get('assign') or '' }}" placeholder="пусто — не оценивать"></label>
+    </div>
+    {% if q.get('budget') %}<input type="hidden" name="budget" value="{{ q.get('budget') }}">{% endif %}
   </details>
   <button class="sm">Показать</button>
   {% if region %}<a href="/tools/torgi-scan?region={{ region }}&amp;reset=1" class="small muted">сбросить фильтры</a>{% endif %}
@@ -91,17 +105,17 @@ document.querySelectorAll('form.torgi-filter select:not([onchange]), form.torgi-
     params.delete('page');
     var saved = JSON.parse(localStorage.getItem(key) || '{}');
     var bare = Array.from(params.keys()).every(function (k) { return k === 'region'; });
+    var code = {{ (region or '')|tojson }};  // код региона, понятый сервером
     if (bare && !params.has('reset')) {
-      var region = params.get('region') || saved.last;
+      var region = params.get('region') ? code : saved.last;
       var q = region && saved[region];
       if (q && q !== params.toString()) { location.replace('/tools/torgi-scan?' + q); return; }
     }
     params.delete('reset');
-    var current = params.get('region') || {{ (region or '')|tojson }};
-    if (current) {
-      if (!params.get('region')) params.set('region', current);
-      saved[current] = params.toString();
-      saved.last = current;
+    if (code) {
+      params.set('region', code);
+      saved[code] = params.toString();
+      saved.last = code;
       localStorage.setItem(key, JSON.stringify(saved));
     }
   } catch (e) { /* без памяти устройства страница работает как раньше */ }
@@ -129,7 +143,7 @@ document.querySelectorAll('form.torgi-filter select:not([onchange]), form.torgi-
   </div>
   <div>
     <span class="muted small">Сортировка:</span>
-    {% for key, label in [('', 'по вердикту'), ('roi', 'по доходности'), ('deadline', 'по сроку заявок'), ('price', 'по цене')] %}
+    {% for key, label in [('', 'по вердикту'), ('roi', 'по доходности'), ('deadline', 'по сроку заявок'), ('auction', 'по дате торгов'), ('price', 'дешевле'), ('price_desc', 'дороже')] %}
     <a href="/tools/torgi-scan?{{ qs_nosort }}{% if key %}&amp;sort={{ key }}{% endif %}" class="small {{ 'active' if (q.get('sort') or '') == key else '' }}">{{ label }}</a>{% if not loop.last %} · {% endif %}
     {% endfor %}
   </div>
@@ -168,7 +182,7 @@ document.querySelectorAll('form.torgi-filter select:not([onchange]), form.torgi-
   <tr{% if result.parcel and r.cad_num == result.parcel %} class="hl"{% endif %}>
     <td><input type="checkbox" name="lot" value="{{ r.id }}" aria-label="Выбрать лот"{% if not r.cad_num %} disabled{% endif %}></td>
     <td><span class="badge v-{{ {'go': 'ok', 'edge': 'check', 'no': 'stop'}.get(s.verdict, '') }}">{{ s.verdict_label }}</span></td>
-    <td class="cad"><a href="/tools/torgi-lot/{{ r.id }}{% if qs %}?{{ qs }}{% endif %}"><code>{{ r.cad_num or (('квартал ' ~ r.quarter) if r.quarter else 'без номера') }}</code></a>
+    <td class="cad"><a href="/tools/torgi-lot/{{ r.id }}{% if qs %}?{{ qs }}{% endif %}"><code>{{ r.cad_num or (('квартал ' ~ r.quarter) if r.quarter else 'без номера') }}</code></a>{% if r.cad_num %}<button type="button" class="copy" data-copy="{{ r.cad_num }}" title="Скопировать кадастровый номер" aria-label="Скопировать кадастровый номер">⧉</button>{% endif %}{% if r.lat is not none and r.lon is not none %}<button type="button" class="copy" data-copy="{{ '%.6f'|format(r.lat) }}, {{ '%.6f'|format(r.lon) }}" title="Скопировать координаты" aria-label="Скопировать координаты">⌖</button>{% endif %}
       <span class="badge mini">{{ kinds.get(r.kind, r.kind) }}</span>{% if r.form == 'IPS' %} <span class="badge mini" title="Извещение о предоставлении, ст. 39.18 ЗК: не торги, цены нет">39.18</span>{% elif r.bidd_type and r.bidd_type != 'ZK' %} <span class="badge mini" title="{{ r.bidd_type_name or r.bidd_type }}: правила и сроки отличаются от обычного земельного аукциона">{{ bidd_short.get(r.bidd_type, r.bidd_type) }}</span>{% endif %}{% if r.has_gpzu %} <span class="badge mini v-ok" title="К лоту приложен ГПЗУ">ГПЗУ</span>{% endif %}
       <div class="small">{{ (r.vri or groups.get(r.vri_group, ''))|truncate(60) }}</div>
       <div class="small muted">{% set dn = names.get(r.district, '') %}{% if dn and dn not in (r.address or '') %}{{ dn }}{{ ' · ' if r.address else '' }}{% endif %}{{ (r.address or '')|short_address|truncate(70) }}</div>
@@ -227,7 +241,7 @@ document.querySelector('.torgi-map-wrap').addEventListener('toggle', function (e
 {% set h = result.hidden %}
 <article><p>{% if sync and not sync.gateway and not sync.active %}Собрать торги нельзя: на сервере не настроен RU-шлюз.{% elif sync and sync.state == 'never' %}Регион ещё не собирали — нажмите «Собрать торги региона».{% elif sync and sync.state in ('running', 'queued') and not sync.active %}Сбор идёт — лоты появятся здесь, страница обновит состояние сама.{% else %}
   {% if place_label %}В {{ place_label }}{% else %}В регионе{% endif %} идущих лотов по выбранным условиям нет{% if result.total %}: все {{ result.total }} отсеяло условие «Показать» (вердикт){% endif %}.
-  {% if h.kind or h.group or h.area or h.form %}Там есть: {% if h.kind %}{{ h.kind }} — другая сделка ({{ 'аренда' if q.get('kind') == 'sale' else 'продажа' }}){% endif %}{% if h.group %}{{ '; ' if h.kind }}{{ h.group }} — другое назначение{% endif %}{% if h.area %}{{ '; ' if h.kind or h.group }}{{ h.area }} — другая площадь{% endif %}{% if h.form %}{{ '; ' if h.kind or h.group or h.area }}{{ h.form }} — {{ 'аукционы' if q.get('form') == 'notice' else 'извещения о предоставлении (39.18)' }}{% endif %}.
+  {% if h.kind or h.group or h.area or h.price or h.form %}Там есть: {% if h.kind %}{{ h.kind }} — другая сделка ({{ 'аренда' if q.get('kind') == 'sale' else 'продажа' }}){% endif %}{% if h.group %}{{ '; ' if h.kind }}{{ h.group }} — другое назначение{% endif %}{% if h.area %}{{ '; ' if h.kind or h.group }}{{ h.area }} — другая площадь{% endif %}{% if h.price %}{{ '; ' if h.kind or h.group or h.area }}{{ h.price }} — другая начальная цена{% endif %}{% if h.form %}{{ '; ' if h.kind or h.group or h.area or h.price }}{{ h.form }} — {{ 'аукционы' if q.get('form') == 'notice' else 'извещения о предоставлении (39.18)' }}{% endif %}.
   <a href="/tools/torgi-scan?region={{ region }}{% if q.get('d') %}&amp;d={{ q.get('d')|urlencode }}{% endif %}&amp;form=all">Показать все лоты{% if place_label %} {{ place_label }}{% endif %}</a>{% endif %}
   {% if sync and sync.state in ('running', 'queued') %}<span class="muted">Сбор ещё идёт — список дополнится.</span>{% endif %}
 {% endif %}</p></article>

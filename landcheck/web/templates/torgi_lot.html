@@ -2,7 +2,8 @@
 {% block title %}Лот {{ lot.cad_num or lot.id }} — торги{% endblock %}
 {% block content %}
 {% set tab = 'scan' %}{% set region = lot.region %}
-<h2>Лот <code>{{ lot.cad_num or 'без кадастрового номера' }}</code> <span class="badge v-{{ {'go': 'ok', 'edge': 'check', 'no': 'stop'}.get(s.verdict, '') }}">{{ s.verdict_label }}</span> <span class="badge mini">внутренний режим</span></h2>
+{% include "_copy_js.html" %}
+<h2>Лот <code>{{ lot.cad_num or 'без кадастрового номера' }}</code>{% if lot.cad_num %}<button type="button" class="copy" data-copy="{{ lot.cad_num }}" title="Скопировать кадастровый номер" aria-label="Скопировать кадастровый номер">⧉</button>{% endif %} <span class="badge v-{{ {'go': 'ok', 'edge': 'check', 'no': 'stop'}.get(s.verdict, '') }}">{{ s.verdict_label }}</span> <span class="badge mini">внутренний режим</span></h2>
 {% include "_torgi_nav.html" %}
 <p class="small"><a href="/tools/torgi-scan?{{ qs }}">← к списку лотов</a> · <a href="{{ lot_url }}" target="_blank" rel="noopener">лот на torgi.gov.ru</a>{% if lot.cad_num %} · <a href="/single?cad_num={{ lot.cad_num }}&amp;purpose=auction">разовая проверка участка</a>{% endif %}</p>
 {% if saved == 'ads' %}<p class="ok-msg small">Объявления найдены — цена за сотку записана в слой рынка района, оценка пересчитана.</p>
@@ -16,7 +17,7 @@
   <table class="facts">
     <tr><th>Сделка</th><td>{{ kinds.get(lot.kind, lot.kind) }}{% if lot.form == 'IPS' %} · извещение о предоставлении (ст. 39.18 ЗК){% elif lot.form %} · {{ lot.form }}{% endif %}{% if lot.bidd_type_name %}<div class="small muted">{{ lot.bidd_type_name }}</div>{% endif %}</td></tr>
     <tr><th>Статус</th><td>{{ status_ru.get(lot.status, lot.status or '—') }}{% if lot.annulled %} · извещение аннулировано{% endif %}{% if lot.stopped %} · торги приостановлены{% endif %}{% if lot.appeals %} · есть жалобы{% endif %}</td></tr>
-    <tr><th>Адрес</th><td>{{ (lot.address or '—')|short_address }}{% if district_name %}<div class="small muted">{{ district_name }}, кадастровый район {{ lot.district }}</div>{% endif %}</td></tr>
+    <tr><th>Адрес</th><td>{{ (lot.address or '—')|short_address }}{% if lot.lat is not none and lot.lon is not none %}<div class="small">{% set ll = '%.6f'|format(lot.lat) ~ ', ' ~ '%.6f'|format(lot.lon) %}<code>{{ ll }}</code><button type="button" class="copy" data-copy="{{ ll }}" title="Скопировать координаты" aria-label="Скопировать координаты">⧉</button> <a href="https://yandex.ru/maps/?pt={{ lot.lon }},{{ lot.lat }}&amp;z=16&amp;l=sat" target="_blank" rel="noopener">на карте</a></div>{% endif %}{% if district_name %}<div class="small muted">{{ district_name }}, кадастровый район {{ lot.district }}</div>{% endif %}</td></tr>
     <tr><th>Назначение</th><td>{{ lot.vri or '—' }}<div class="small muted">{{ groups.get(lot.vri_group, '') }}{% if lot.category %} · {{ lot.category|short_category }}{% endif %}</div></td></tr>
     <tr><th>Площадь</th><td>{% if lot.area_m2 %}{{ (lot.area_m2 / 100)|round(2) }} сот. ({{ lot.area_m2|round|int }} м²){% else %}—{% endif %}</td></tr>
     <tr><th>{{ 'Годовая плата на старте' if lot.kind == 'rent' else 'Начальная цена' }}</th><td>{% if lot.price_start %}<strong>{{ lot.price_start|money }}</strong>{% if s.start_sotka %} · {{ s.start_sotka|money }} за сотку{% endif %}{% else %}—{% endif %}</td></tr>
@@ -112,6 +113,8 @@
       {% endfor %}
     </table>
     </div>
+    {% set lease = (m.details or {}).get('leasehold') or [] %}{% set cheap = (m.details or {}).get('cheap') or [] %}
+    {% if lease or cheap %}<p class="small">Не учтены в цене:{% if lease %} аренда или переуступка права аренды ({{ lease|length }}): {% for a in lease %}<a href="{{ a.url }}" target="_blank" rel="noopener nofollow">{{ a.host }}</a> — {{ a.pps|money }}/сот.{% if not loop.last %}; {% endif %}{% endfor %}.{% endif %}{% if cheap %} Подозрительно дёшево — в {{ 2.5 }} раза и больше ниже середины, часто это аренда под видом собственности ({{ cheap|length }}): {% for a in cheap %}<a href="{{ a.url }}" target="_blank" rel="noopener nofollow">{{ a.host }}</a> — {{ a.pps|money }}/сот.{% if not loop.last %}; {% endif %}{% endfor %}.{% endif %}</p>{% endif %}
     <p class="small muted">Это цены предложений, не сделок. Отбирались объявления с ценой и площадью, сопоставимые по площади с лотом, для которого шёл поиск. Откройте их и проверьте, похожи ли они на участок лота; если нет — задайте диапазон «от – до» вручную, ручная запись главнее.</p>
   </details>
   {% endif %}{% endfor %}
@@ -156,6 +159,15 @@
     <tr><td>Заявок на лот, медиана</td><td class="num">{{ qs_.applied_median if qs_.applied_median is not none else '—' }}</td><td class="num">{{ ds.applied_median if ds.applied_median is not none else '—' }}</td></tr>
     <tr><td>Идёт сейчас</td><td class="num">{{ qs_.active or 0 }}</td><td class="num">{{ ds.active or 0 }}</td></tr>
   </table>
+  {% for title, st in (('квартала', qs_), ('района', ds)) %}{% if st.index_parts %}
+  <details class="small">
+    <summary>Как сложился индекс {{ title }}: {{ st.index }} из 100</summary>
+    <table class="facts">
+      {% for part in st.index_parts %}<tr><td>{{ part.what }}</td><td>{{ part.value }}</td><td class="num">{{ part.points|round(1) }} из {{ part.max }}</td></tr>{% endfor %}
+    </table>
+    <p class="muted">55 и выше — ликвид: участки находят хозяина и за них борются; 30–54 — средне; ниже 30 — неликвид: большинство участков с торгов не уходит. Индекс считается по завершённым торгам за год, нужно не меньше трёх.</p>
+  </details>
+  {% endif %}{% endfor %}
   <p class="small"><a href="/tools/torgi-liquidity?region={{ lot.region }}&amp;level=quarter&amp;d={{ lot.district }}">Все кварталы района</a></p>
 </article>
 <article>

@@ -9,8 +9,14 @@
     <strong>В базе аукционов:</strong> идут сейчас {{ sync.active }}, завершены за год {{ sync.succeed + sync.failed }}
     (состоялись {{ sync.succeed }}, с итоговой ценой {{ sync.succeed_priced }}; не состоялись {{ sync.failed }}){% if sync.cards_left %}, карточек ещё не прочитано {{ sync.cards_left }}{% endif %}{% if sync.reread_left %}, у {{ sync.reread_left }} завершённых перечитывается карточка (причина из протокола, число заявок, вид сделки){% endif %}.{% if sync.notices %} Извещений о предоставлении (ст. 39.18): {{ sync.notices }}, из них идут {{ sync.notices_active }}.{% endif %}
     {% if running %}
-      <span aria-busy="true">Идёт сбор: {{ phase_ru.get(sync.progress.get('phase') or sync.phase or 'queued', sync.phase or 'в очереди') }}{% if sync.progress.get('pages') %}, {{ sync.progress.get('page') }} из {{ sync.progress.get('pages') }}{% endif %}.</span>
-      <span class="muted">Сайт пропускает один запрос в 6 секунд; первый сбор региона занимает от получаса до нескольких часов, страницу можно закрыть.</span>
+      {% set pg = sync.progress.get('page') or 0 %}{% set pgs = sync.progress.get('pages') or 0 %}
+      </p>
+      <div class="sync-run">
+        <strong>Идёт сбор торгов региона</strong> — {{ phase_ru.get(sync.progress.get('phase') or sync.phase or 'queued', sync.phase or 'в очереди') }}{% if pgs %}: {{ pg }} из {{ pgs }} ({{ (pg * 100 / pgs)|round|int }} %){% if pgs > pg %}, на этом этапе осталось около {{ ((pgs - pg) * 6 / 60)|round(0, 'ceil')|int }} мин{% endif %}{% endif %}.
+        {% if pgs %}<progress value="{{ pg }}" max="{{ pgs }}"></progress>{% else %}<progress></progress>{% endif %}
+        <span class="small muted">Уже собранные лоты в списке ниже работают. Сайт торгов пропускает один запрос в 6 секунд; первый сбор региона — от получаса до нескольких часов, страницу можно закрыть: состояние обновляется само.</span>
+      </div>
+      <p class="small">
     {% elif sync.state == 'error' %}
       <span class="err">{{ sync.error }}.</span>
     {% elif sync.state == 'interrupted' %}

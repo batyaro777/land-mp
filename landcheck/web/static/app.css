@@ -183,3 +183,7 @@ table.results.econ td, table.results.econ th { padding: 0.35em 0.6em; }
 .leaflet-tooltip.price-tip.current { border-color: #C4663A; color: #8a3f1c; background: #fff4ec; }
 .leaflet-tooltip.price-tip::before { display: none; }
 details.market-map { margin-bottom: 1rem; }
+button.copy { all: unset; cursor: pointer; font-size: 0.8em; padding: 0 0.25rem; opacity: 0.6; }
+button.copy:hover, button.copy:focus-visible { opacity: 1; outline: 1px dotted currentColor; }
+.sync-run { border-left: 4px solid #2E75B6; padding: 0.5rem 0.75rem; margin: 0.5rem 0; background: rgba(46, 117, 182, 0.08); }
+.sync-run progress { margin: 0.4rem 0; }

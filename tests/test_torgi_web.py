@@ -907,3 +907,22 @@ def test_upsert_keeps_kind_and_zone_and_fix_kinds_by_name(client):  # noqa: F811
     assert torgi_sync.fix_kinds() == 1
     with session() as db:
         assert db.get(TorgiLot, "RNT_1").kind == "rent"
+
+
+def test_scan_region_by_code_price_range_sorts_and_copy(client):  # noqa: F811
+    """Зум 13.11: регион по коду или началу названия, начальная цена «от – до», сортировка по
+    цене в обе стороны, копирование номера, расшифровка индекса в карточке лота."""
+    fake = _seed(client)
+    _sync(fake, provider=FakeNspd())
+    _admin(client)
+    by_code = client.get("/tools/torgi-scan?region=40 — Калужская область&roi=40").text
+    assert "Всего 12" in by_code and 'value="40 — Калужская область"' in by_code
+    assert "Всего 12" in client.get("/tools/torgi-scan?region=калуж&roi=40").text
+    assert 'data-copy="40:13:120101:100"' in by_code
+    narrow = client.get("/tools/torgi-scan?region=40&roi=40&pmin=200000").text
+    assert "Всего 0" in narrow and "другая начальная цена" in narrow
+    assert "Всего 12" in client.get("/tools/torgi-scan?region=40&roi=40&pmax=0,1").text
+    desc = client.get("/tools/torgi-scan?region=40&roi=40&sort=price_desc").text
+    assert 'class="small active">дороже</a>' in desc
+    lot = client.get("/tools/torgi-lot/ACT_0?region=40&roi=40").text
+    assert "Как сложился индекс района" in lot and "участки нашли хозяина" in lot

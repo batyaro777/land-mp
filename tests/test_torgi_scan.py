@@ -705,7 +705,13 @@ def test_scan_counts_after_place_filter_and_explains_what_other_filters_hid():
     assert [r["id"] for r in q["rows"]] == ["Q1"] and q["total"] == 1
     assert sum(q["counts"].values()) == 1 and q["hidden"]["kind"] == 1
     empty = ts.scan(everything, ts.ScanParams(kinds=("rent",), place="40:13:120106"), today=TODAY)
-    assert empty["total"] == 0 and empty["hidden"] == {"form": 0, "kind": 1, "group": 0, "area": 0}
+    assert empty["total"] == 0 and empty["hidden"] == {
+        "form": 0,
+        "kind": 1,
+        "group": 0,
+        "area": 0,
+        "price": 0,
+    }
 
 
 def test_verdict_reasons_are_separate_from_other_facts():
