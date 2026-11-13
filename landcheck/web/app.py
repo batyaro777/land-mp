@@ -204,6 +204,11 @@ def create_app() -> FastAPI:
     regions = torgi_sync.resume_interrupted()
     if regions:
         log.warning("возобновлён сбор торгов после рестарта: %s", ", ".join(regions))
+    from landcheck.web.freeland_views import resume_interrupted as resume_land_scans
+
+    scans = resume_land_scans()
+    if scans:
+        log.warning("возобновлены поиски свободной земли после рестарта: %s", len(scans))
     torgi_sync.start_auto_loop()
     return app
 

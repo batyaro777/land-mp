@@ -390,6 +390,47 @@ def test_demo_mode_scan_reports_error(client, monkeypatch):  # noqa: F811
     assert "Повторить" in page
 
 
+def test_interrupted_scans_resume_after_restart(client, monkeypatch):  # noqa: F811
+    """Зум 13.11.2026: выкладка перезапустила сервис во время поиска эксперта по кварталу, и
+    страница до получаса показывала «Ищем…». После перезапуска свежие поиски запускаются
+    сами, давние помечаются прерванными, готовые не трогаем."""
+    from datetime import UTC, datetime, timedelta
+
+    from landcheck.web import freeland_views as fv
+    from landcheck.web.db import LandScan, session
+
+    started: list[int] = []
+    monkeypatch.setattr(fv, "start_scan", started.append)
+    _register(client, "adm@example.com", role="broker")
+    _make_admin("adm@example.com")
+    url = client.post("/tools/free-land", data={"scope": Q}).headers["location"]
+    fresh = int(url.rsplit("/", 1)[1])
+    assert started == [fresh]
+    now = datetime.now(UTC)
+    with session() as db:
+        scan = db.get(LandScan, fresh)
+        scan.state = "running"  # задача шла, когда сервис перезапустили
+        old = LandScan(
+            user_id=scan.user_id,
+            scope=Q,
+            kind="quarter",
+            state="running",
+            created_at=now - timedelta(hours=8),
+        )
+        done = LandScan(user_id=scan.user_id, scope=Q, kind="quarter", state="done")
+        db.add_all([old, done])
+        db.commit()
+        old_id, done_id = old.id, done.id
+    started.clear()
+    assert fv.resume_interrupted(now) == [fresh] and started == [fresh]
+    with session() as db:
+        assert db.get(LandScan, fresh).state == "queued"
+        assert db.get(LandScan, old_id).state == "interrupted"
+        assert db.get(LandScan, done_id).state == "done"
+    page = client.get(f"/tools/free-land/{old_id}").text
+    assert "Поиск прервался при перезапуске сервиса" in page and "Запустить снова" in page
+
+
 def test_quarter_scan_result_filters_export_and_check(client, monkeypatch):  # noqa: F811
     fake = FakeArea()
     _setup(client, monkeypatch, fake)

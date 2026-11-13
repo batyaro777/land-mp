@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import tempfile
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -133,6 +133,34 @@ def start_scan(scan_id: int) -> None:
             return
         _running.add(scan_id)
     jobs.executor().submit(run_scan, scan_id)
+
+
+RESUME_HOURS = 6  # оборванный перезапуском поиск возобновляем сами, если он начат не раньше
+
+
+def resume_interrupted(now: datetime | None = None) -> list[int]:
+    """После перезапуска сервиса: поиски, оставшиеся «в очереди» или «ищем», запускаем заново —
+    живой задачи у них уже нет. Раньше страница до получаса показывала «Ищем…» и лишь потом
+    «поиск прервался» (зум 13.11.2026: выкладка попала на поиск эксперта по кварталу).
+    Давние поиски только помечаем прерванными: нужен результат — человек запустит сам."""
+    now = now or datetime.now(UTC)
+    resumed: list[int] = []
+    with session() as db:
+        for scan in db.scalars(
+            select(LandScan).where(LandScan.state.in_(("queued", "running")))
+        ).all():
+            created = scan.created_at
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=UTC)
+            if now - created <= timedelta(hours=RESUME_HOURS):
+                scan.state = "queued"
+                resumed.append(scan.id)
+            else:
+                scan.state = "interrupted"
+        db.commit()
+    for scan_id in resumed:
+        start_scan(scan_id)
+    return resumed
 
 
 def _own_scan(db, user, scan_id: int) -> LandScan:
