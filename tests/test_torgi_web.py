@@ -613,6 +613,15 @@ def test_failed_lots_are_reread_for_protocol_reason(client):  # noqa: F811
     assert "единственному участнику 3 (подана одна заявка — 3; всё по протоколу)" in html
     assert "не ушли 3 (заявок не подано — 3; всё по протоколу)" in html
     assert SECRET_NAME not in html
+    # Причина прочитана, но исход не называет («менее двух лиц», 229-ФЗ): страница не пишет
+    # «ещё не прочитана» (прод, 13.11.2026: так были подписаны 96 лотов Республики Алтай)
+    with session() as db:
+        lot = db.scalars(select(TorgiLot).where(TorgiLot.fail_code == "ZK_EA_14_39.12_2")).first()
+        lot.fail_code, lot.fail_reason = "229FZ_EA_102_1", "Заявки на участие подали менее двух лиц"
+        db.commit()
+    html = client.get("/tools/torgi-liquidity?region=40").text
+    assert "заявок не подано — 2; причина в протоколе исход не называет либо не прочитана" in html
+    assert "ещё не прочитана" not in html
 
 
 def test_report_block_shows_what_happened_to_failed_auctions(client):  # noqa: F811
