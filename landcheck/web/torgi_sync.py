@@ -193,8 +193,14 @@ def auctions_from_store(cad_num: str, *, now: datetime | None = None) -> dict[st
     result["failed_total"] = len(by_status["FAILED"])
     result["active_total"] = len(by_status["ACTIVE"])
     result["ea_total"] = result["succeed_total"] + result["failed_total"] + result["active_total"]
-    closed = result["succeed_total"] + result["failed_total"]
-    result["liquidity"] = round(result["succeed_total"] / closed, 2) if closed else None
+    # «Не состоялись» делим по карточкам лотов, как на странице ликвидности: ушли единственному
+    # участнику / не ушли / карточка не прочитана. Ликвидность района — доля участков, нашедших
+    # хозяина, а не доля торгов с борьбой (раньше все несостоявшиеся шли как «нет заявок»).
+    st_all = torgi_scan.stats_of(lots)
+    result["single_total"] = st_all["single"]
+    result["none_total"] = st_all["none"]
+    result["unknown_total"] = st_all["failed_unknown"]
+    result["liquidity"] = st_all["sell_through"]
     result["sale"] = torgi._stats([i for i in items if i["kind"] == "продажа"])
     result["rent"] = torgi._stats([i for i in items if i["kind"] == "аренда"])
     result["items"] = items[:15]

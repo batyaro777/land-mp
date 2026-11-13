@@ -130,6 +130,30 @@ def test_liquidity_stats_and_index():
     assert ts.stats_of(_district(sold=1, single=0, none=0))["label"] == "мало данных"
 
 
+def test_failed_outcomes_say_what_they_stand_on():
+    """Эксперт по торгам (чат, 13.11.2026): «не состоялись — была одна заявка или заявок нет:
+    он умеет определять?» Умеет, но число заявок есть только там, где протокол выложен в
+    читаемом виде; сводка показывает, сколько исходов стоит на протоколе, а сколько — на цене
+    договора в карточке (прод, Республика Алтай: 62 и 116 из 178)."""
+    lots = _district(sold=2, single=0, none=0)
+    # одна допущенная заявка по протоколу
+    lots.append(_lot("P1", "40:13:120102:1", fin=None, status="FAILED") | {"admitted": 1})
+    # протокола нет, цена договора есть
+    lots.append(_lot("C1", "40:13:120102:2", fin=110_000, status="FAILED") | {"card": True})
+    # заявки были, никого не допустили
+    lots.append(
+        _lot("R1", "40:13:120103:1", fin=None, status="FAILED") | {"applied": 2, "admitted": 0}
+    )
+    # карточка прочитана, в ней ни цены договора, ни протокола
+    lots.append(_lot("E1", "40:13:120103:2", fin=None, status="FAILED") | {"card": True})
+    # допущено три, торги не состоялись, договор есть — считаем ушедшим, но видим отдельно
+    lots.append(_lot("M1", "40:13:120102:3", fin=120_000, status="FAILED") | {"admitted": 3})
+    s = ts.stats_of(lots)
+    assert (s["sold"], s["single"], s["none"], s["failed_unknown"]) == (2, 3, 2, 0)
+    assert (s["single_by_protocol"], s["none_rejected"], s["failed_multi"]) == (1, 1, 1)
+    assert s["sell_through"] == 0.71  # 5 из 7 нашли хозяина
+
+
 def test_unread_failed_cards_are_split_proportionally():
     lots = _district(sold=2, single=2, none=2)
     # ещё четыре «не состоялись» без прочитанной карточки: число заявок неизвестно

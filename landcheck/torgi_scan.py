@@ -316,7 +316,7 @@ def _outcome(lot: dict[str, Any]) -> str:
     if status == "SUCCEED":
         return "sold"
     if status == "FAILED":
-        applied = lot.get("admitted") if lot.get("admitted") is not None else lot.get("applied")
+        applied = _admitted(lot)
         if applied == 1 or lot.get("price_fin"):
             return "single"
         if applied == 0 or lot.get("card"):
@@ -325,6 +325,11 @@ def _outcome(lot: dict[str, Any]) -> str:
     if status in ACTIVE:
         return "active"
     return "canceled"
+
+
+def _admitted(lot: dict[str, Any]) -> int | None:
+    """Сколько заявок допущено по протоколу в карточке лота (нет протокола — None)."""
+    return lot.get("admitted") if lot.get("admitted") is not None else lot.get("applied")
 
 
 def stats_of(lots: list[dict[str, Any]]) -> dict[str, Any]:
@@ -356,6 +361,13 @@ def stats_of(lots: list[dict[str, Any]]) -> dict[str, Any]:
         "single": len(single),
         "none": len(none),
         "failed_unknown": len(failed),
+        # На чём стоит итог не состоявшихся (вопрос эксперта по торгам, 13.11.2026: «одна
+        # заявка» и «заявок нет» — разные исходы, умеет ли система их отличать). Число заявок
+        # есть только там, где организатор выложил протокол в читаемом виде (Республика
+        # Алтай: у 183 из 496), поэтому основной признак — цена договора в карточке.
+        "single_by_protocol": sum(1 for lot in single if _admitted(lot) == 1),
+        "none_rejected": sum(1 for lot in none if _admitted(lot) == 0),
+        "failed_multi": sum(1 for lot in single + none if (_admitted(lot) or 0) >= 2),
         "active": len(by.get("active", [])),
         # извещения о предоставлении за период: спрос на землю без торгов (ст. 39.18 ЗК)
         "notices": len(by.get("notice", [])),

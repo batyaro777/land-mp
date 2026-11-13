@@ -2,7 +2,7 @@
   {% set au = auctions %}
   <details class="auctions"{% if au.pending %} hx-get="{{ auctions_url }}" hx-trigger="every 30s" hx-swap="outerHTML"{% endif %}>
     <summary><strong>Торги рядом за год</strong> <span class="badge mini">внутренний режим</span> — кадастровый район {{ au.district }}:
-      {% if au.pending %}<span class="muted">собираем…</span>{% elif au.error %}<span class="muted">нет данных</span>{% else %}аукционов {{ au.ea_total }}{% if au.ea_total %}, состоялись {{ au.succeed_total }}, не состоялись {{ au.failed_total }}, идут сейчас {{ au.active_total }}{% endif %}{% endif %}</summary>
+      {% if au.pending %}<span class="muted">собираем…</span>{% elif au.error %}<span class="muted">нет данных</span>{% else %}аукционов {{ au.ea_total }}{% if au.ea_total %}{% if au.get('single_total') is not none %}: с борьбой {{ au.succeed_total }}, единственному участнику {{ au.single_total }}, не ушли {{ au.none_total }}{% if au.unknown_total %}, итог неизвестен {{ au.unknown_total }}{% endif %}{% else %}, состоялись {{ au.succeed_total }}, не состоялись {{ au.failed_total }}{% endif %}, идут сейчас {{ au.active_total }}{% endif %}{% endif %}</summary>
     {% if au.pending %}
     <p class="muted small">Собираем данные с torgi.gov.ru через RU-шлюз: сайт пропускает один запрос в 6 секунд, на район уходит 2–5 минут. Блок обновится сам.</p>
     {% elif au.error %}

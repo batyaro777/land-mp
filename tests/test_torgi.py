@@ -305,8 +305,22 @@ def test_liquidity_text_thresholds():
     strong = {**base, "ea_total": 10, "succeed_total": 7, "failed_total": 3, "active_total": 0}
     strong["liquidity"] = 0.7
     assert "спрос есть" in torgi.liquidity_text(strong)
+    # Эксперт по торгам (чат, 13.11.2026): «не состоялись» — это и «одна заявка, договор с
+    # единственным участником», и «заявок нет». По одним статусам слабый спрос не объявляем.
     weak = {**strong, "succeed_total": 1, "failed_total": 9, "liquidity": 0.1}
-    assert "спрос слабый" in torgi.liquidity_text(weak)
+    text = torgi.liquidity_text(weak)
+    assert "состоялись 1 из 10 завершённых (10 %), не состоялись 9" in text
+    assert "по статусу не видно" in text and "единственному участнику" in text
+    assert "спрос слабый" not in text and "нет заявок" not in text
+    # сводка из собранной базы знает исход каждого лота: считаем долю нашедших хозяина
+    split = {**weak, "single_total": 6, "none_total": 3, "unknown_total": 0, "liquidity": 0.7}
+    text = torgi.liquidity_text(split)
+    assert "хозяина нашли 70 % из 10 завершённых" in text
+    assert "с борьбой 1, единственному участнику по начальной цене 6, не ушли 3" in text
+    assert "спрос есть" in text and "итог неизвестен" not in text
+    dead = {**weak, "single_total": 0, "none_total": 7, "unknown_total": 2, "liquidity": 0.1}
+    text = torgi.liquidity_text(dead)
+    assert "спрос слабый" in text and "итог неизвестен 2" in text
     only_active = {**base, "ea_total": 2, "active_total": 2, "liquidity": None}
     assert "завершённых за год ещё нет" in torgi.liquidity_text(only_active)
 

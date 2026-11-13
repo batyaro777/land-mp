@@ -571,6 +571,28 @@ def test_sync_buttons_and_status_block(client, monkeypatch):  # noqa: F811
     assert torgi_sync.due_regions() == []
 
 
+def test_report_block_shows_what_happened_to_failed_auctions(client):  # noqa: F811
+    """Эксперт по торгам (чат, 13.11.2026): «не состоялись» — это и договор с единственным
+    участником, и торги без заявок. Блок отчёта писал обе группы одним числом и называл их
+    «нет заявок»; теперь показывает разбивку из собранной базы."""
+    from landcheck.web import torgi_sync
+    from landcheck.web.app import templates
+
+    fake = _seed(client)
+    _sync(fake, max_nspd=0)
+    a = torgi_sync.auctions_from_store("40:13:120101:1", now=NOW)
+    tpl = templates.get_template("_auctions.html")
+    html = tpl.render(auctions=a, auctions_url="/x")
+    assert "с борьбой 15, единственному участнику 3, не ушли 3, идут сейчас 12" in html
+    assert "не состоялись 6" not in html and "нет заявок" not in html
+    assert "хозяина нашли 86 % из 21 завершённых" in html
+    # сводка, сохранённая в проверке до правки (без разбивки), рисуется по-прежнему
+    old = {k: v for k, v in a.items() if not k.endswith("_total") or k[:6] in ("succee", "failed")}
+    old |= {"active_total": a["active_total"], "ea_total": a["ea_total"]}
+    html = tpl.render(auctions=old, auctions_url="/x")
+    assert "состоялись 15, не состоялись 6, идут сейчас 12" in html
+
+
 def test_report_block_reads_district_summary_from_store(client):  # noqa: F811
     """Блок «Торги рядом за год» в отчёте берёт сводку района из собранной базы региона."""
     from landcheck.web import jobs, torgi_sync
@@ -580,10 +602,18 @@ def test_report_block_reads_district_summary_from_store(client):  # noqa: F811
     _sync(fake, max_nspd=0)
     a = torgi_sync.auctions_from_store("40:13:120101:1", now=NOW)
     assert (a["succeed_total"], a["failed_total"], a["active_total"]) == (15, 6, 12)
-    assert a["ea_total"] == 33 and a["liquidity"] == 0.71 and a["from_store"] is True
+    assert a["ea_total"] == 33 and a["from_store"] is True
+    # шесть несостоявшихся: у трёх одна заявка (ушли единственному участнику), у трёх карточка
+    # без заявок и цены договора (не ушли) — ликвидность считает и тех, кто ушёл без борьбы
+    assert (a["single_total"], a["none_total"], a["unknown_total"]) == (3, 3, 0)
+    assert a["liquidity"] == 0.86
     assert a["sale"]["with_price"] == 15 and a["sale"]["median_rub_m2"] == 150.0
     assert a["sale"]["median_ratio"] == 1.5 and len(a["items"]) == 15
-    assert "состоялись 15 из 21" in a["liquidity_text"] and a["error"] is None
+    assert "хозяина нашли 86 % из 21 завершённых" in a["liquidity_text"] and a["error"] is None
+    assert (
+        "с борьбой 15, единственному участнику по начальной цене 3, не ушли 3"
+        in a["liquidity_text"]
+    )
     assert torgi_sync.auctions_from_store("40:99:000001:1", now=NOW)["ea_total"] == 0
     # сводка сериализуется в данные строки проверки
     json.dumps(a, ensure_ascii=False)
