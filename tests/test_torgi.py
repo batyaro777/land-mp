@@ -599,6 +599,42 @@ def test_fail_kind_by_code_and_text():
     # текст, который исход не называет, и пустая причина
     assert torgi.fail_kind("200FZ_EA_3", "В аукционе участвовали менее чем два участника") is None
     assert torgi.fail_kind(None, None) is None and torgi.fail_kind("X", "Иная причина") is None
+    # коды, найденные при перечитке 1045 лотов на проде (13.11.2026)
+    prod = {
+        "ZK_EA2_39_14_1": "one_bid",
+        "ZK_EA2_39_14_2": "no_bids",
+        "ZK_EA2_39_12_2": "one_admitted",
+        "ZK_EA2_39_12_1": "all_rejected",
+        "ZK_EA2_39_2": "one_admitted",
+        "ZK_EA_19_39.12_2": "no_show",
+        "ZK_EA2_39_0": "no_bids_or_rejected",
+        "178FZ_EA_3": "no_bids_or_rejected",
+        "200FZ_EA_1": "no_bids",
+        "200FZ_EA_2": "one_bid",
+        "200FZ_EA_4": "no_offers",
+    }
+    for code, kind in prod.items():
+        assert torgi.fail_kind(code) == kind and kind in torgi.FAIL_KIND_RU
+        assert (kind in torgi.FAIL_TAKEN) != (kind in torgi.FAIL_LEFT)
+    # записи справочника, которые называют сразу два исхода, — не решаем по ним
+    both = "На торги не явились участники торгов либо явился один участник торгов"
+    assert torgi.fail_kind("229FZ_PA_102_2", both) is None
+    assert torgi.fail_kind("NEW_9", both) is None
+    assert (
+        torgi.fail_kind("229FZ_EA_102_1", "Заявки на участие в торгах подали менее двух лиц")
+        is None
+    )
+    assert torgi.fail_kind("ZKPT_PA_3", "Иное") is None
+    # те же формулировки под незнакомым кодом разбираются по тексту
+    texts = {
+        "При проведении аукциона не присутствовал ни один из участников аукциона.": "no_show",
+        "принято решение об отказе в допуске к участию в аукционе всех заявителей": "all_rejected",
+        "принято решение о допуске к участию в аукционе и признании участником аукциона "
+        "только одного заявителя": "one_admitted",
+        "ни один из участников аукциона не заявил о своем намерении заключить договор": "no_offers",
+    }
+    for text, kind in texts.items():
+        assert torgi.fail_kind("NEW_X", text) == kind
 
 
 def test_result_reads_reason_and_counts_admissions_across_protocols():

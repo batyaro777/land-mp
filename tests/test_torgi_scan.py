@@ -170,6 +170,10 @@ def test_failed_outcome_comes_from_protocol_reason():
     # причина сильнее цены: «никто не предложил цену» при записанной цене — участок не ушёл
     odd = failed("X", "40:13:120103:9", fin=90_000, code="ZK_EA2_39_4", admitted=2)
     assert ts._outcome(odd) == "none"
+    # допущенные не пришли на торги (прод: 94 лота) — участок не ушёл, хотя заявки были
+    absent = failed("W", "40:13:120103:6", code="ZK_EA_19_39.12_2", admitted=4)
+    assert ts._outcome(absent) == "none"
+    assert ts.stats_of([absent])["reasons"] == {"no_show": 1}
     # «менее чем два участника» (200-ФЗ) исход не называет — решает цена договора
     few = "В аукционе участвовали менее чем два участника"
     assert (
