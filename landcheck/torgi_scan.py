@@ -266,6 +266,8 @@ def lot_row(card: dict[str, Any]) -> dict[str, Any] | None:
         "admitted": res.get("admitted"),
         "second_price": res.get("second_price"),
         "winner_type": res.get("winner_type"),
+        "fail_code": res.get("fail_code"),
+        "fail_reason": res.get("fail_reason"),
         "has_gpzu": None,
         "annulled": bool(card.get("isAnnulled")),
         "stopped": bool(card.get("isStopped")),
@@ -300,22 +302,33 @@ def _rub_m2(lot: dict[str, Any], price_key: str = "price_fin") -> float | None:
     return price / area if price and area else None
 
 
+def _fail_kind(lot: dict[str, Any]) -> str | None:
+    return torgi.fail_kind(lot.get("fail_code"), lot.get("fail_reason"))
+
+
 def _outcome(lot: dict[str, Any]) -> str:
     """Чем кончились торги для ликвидности: `sold` — была борьба; `single` — договор с
-    единственным участником по старту (ст. 39.12 ЗК): участок нашёл хозяина; `none` — участок
+    единственным участником (ст. 39.12 ЗК): участок нашёл хозяина; `none` — участок
     не ушёл; `failed` — не состоялись, итог неизвестен (карточка не прочитана); `active`,
     `canceled`; `notice` — извещение о предоставлении, не торги.
 
-    Как узнаём итог не состоявшихся (прод, Карелия, 10.11.2026: из 222 таких лотов протокол с
-    заявками есть у 20, а цена договора — у 88): есть цена договора — участок ушёл единственному
-    участнику; карточка прочитана, а в ней ни цены договора, ни единственной заявки — не ушёл
-    (заявок не было либо договор не заключили)."""
+    Итог не состоявшихся берём из протокола (эксперт по торгам, 13.11.2026: «протокол
+    публикуется, и в нём данные»): причина из справочника площадки называет исход прямо —
+    подана одна заявка, допущен один заявитель, на торги вышел один участник (ушёл) либо
+    заявок не подано, всем отказано, никто не предложил цену (не ушёл). Пока причина не
+    прочитана — прежний признак (прод, Карелия, 10.11.2026): есть цена договора или одна
+    допущенная заявка — ушёл; карточка прочитана, а в ней ни того ни другого — не ушёл."""
     if is_notice(lot):
         return "notice"
     status = lot.get("status")
     if status == "SUCCEED":
         return "sold"
     if status == "FAILED":
+        kind = _fail_kind(lot)
+        if kind in torgi.FAIL_TAKEN:
+            return "single"
+        if kind in torgi.FAIL_LEFT:
+            return "none"
         applied = _admitted(lot)
         if applied == 1 or lot.get("price_fin"):
             return "single"
@@ -361,13 +374,15 @@ def stats_of(lots: list[dict[str, Any]]) -> dict[str, Any]:
         "single": len(single),
         "none": len(none),
         "failed_unknown": len(failed),
-        # На чём стоит итог не состоявшихся (вопрос эксперта по торгам, 13.11.2026: «одна
-        # заявка» и «заявок нет» — разные исходы, умеет ли система их отличать). Число заявок
-        # есть только там, где организатор выложил протокол в читаемом виде (Республика
-        # Алтай: у 183 из 496), поэтому основной признак — цена договора в карточке.
-        "single_by_protocol": sum(1 for lot in single if _admitted(lot) == 1),
-        "none_rejected": sum(1 for lot in none if _admitted(lot) == 0),
-        "failed_multi": sum(1 for lot in single + none if (_admitted(lot) or 0) >= 2),
+        # На чём стоит итог не состоявшихся: причина из протокола (по видам) либо, пока она
+        # не прочитана, цена договора и число заявок. Страница показывает и то и другое.
+        "reasons": {
+            kind: n
+            for kind in torgi.FAIL_KIND_RU
+            if (n := sum(1 for lot in single + none if _fail_kind(lot) == kind))
+        },
+        "single_no_reason": sum(1 for lot in single if _fail_kind(lot) is None),
+        "none_no_reason": sum(1 for lot in none if _fail_kind(lot) is None),
         "active": len(by.get("active", [])),
         # извещения о предоставлении за период: спрос на землю без торгов (ст. 39.18 ЗК)
         "notices": len(by.get("notice", [])),

@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from landcheck import torgi_scan
+from landcheck import torgi, torgi_scan
 from landcheck.location import (
     HOWTO_AGRI,
     HOWTO_OTHER,
@@ -332,10 +332,19 @@ def torgi_note(lot: dict[str, Any]) -> dict[str, Any]:
         text = "сдан в аренду с торгов" if kind == "rent" else "продан с торгов"
         busy = True
     elif outcome == "single":
-        text = "торги с одной заявкой: договор с единственным участником — скорее всего, занят"
+        # причина из протокола, если она прочитана: «подана одна заявка», «допущен один
+        # заявитель», «на торги вышел один участник» — исход один, договор без борьбы
+        why = torgi.FAIL_KIND_RU.get(torgi_scan._fail_kind(lot) or "", "одна заявка")
+        text = (
+            f"торги не состоялись ({why}): договор с единственным участником — скорее всего, занят"
+        )
         busy = True
     elif outcome == "none":
-        text, busy = "выставлялся на торги и не ушёл", False
+        why = torgi.FAIL_KIND_RU.get(torgi_scan._fail_kind(lot) or "")
+        text = (
+            f"выставлялся на торги и не ушёл ({why})" if why else "выставлялся на торги и не ушёл"
+        )
+        busy = False
     elif status == "FAILED":
         text, busy = "торги не состоялись, итог не прочитан", False
     else:

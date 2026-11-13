@@ -490,6 +490,80 @@ ORG_TYPE_RU = {
 }
 
 
+# --- причина «торги не состоялись» ------------------------------------------------------
+# Эксперт по торгам (чат, 13.11.2026): «не состоялись» — разные исходы, а надёжный признак —
+# протокол: «публикуется, и в нём данные». В карточке лота у протокола, где решилась судьба
+# торгов, есть поле abandonedReason {code, name} — причина из справочника площадки. Коды
+# сняты пробой на проде 13.11.2026 (18 карточек, Республика Алтай и Калужская область).
+CARD_REV = 1  # версия разбора карточки: не состоявшиеся лоты со старой версией перечитываются
+
+FAIL_KIND_BY_CODE = {
+    "ZK_EA2_39_1": "one_bid",  # на день окончания приёма подана единственная заявка
+    "ZK_EA_14_39.12_1": "one_bid",  # подана только одна заявка
+    "ZK_EA_12_39.12_2": "one_admitted",  # допущен и признан участником только один заявитель
+    "ZK_EA_19_39.12_1": "one_came",  # в аукционе участвовал только один участник
+    "ZK_EA2_39_3": "one_came",  # в торгах участвовал один участник торгов
+    "ZK_EA_14_39.12_2": "no_bids",  # не подано ни одной заявки
+    "ZK_EA_12_39.12_1": "all_rejected",  # отказано в допуске всем заявителям
+    "ZK_EA_19_39.12_3": "no_offers",  # не поступило ни одного предложения о более высокой цене
+    "ZK_EA2_39_4": "no_offers",  # ни один из участников не подал предложение о цене
+}
+# Участок ушёл без борьбы — договор с единственным участником (ст. 39.12 ЗК) — и не ушёл.
+FAIL_TAKEN = ("one_bid", "one_admitted", "one_came")
+FAIL_LEFT = ("no_bids", "all_rejected", "no_offers")
+FAIL_KIND_RU = {
+    "one_bid": "подана одна заявка",
+    "one_admitted": "допущен один заявитель",
+    "one_came": "на торги вышел один участник",
+    "no_bids": "заявок не подано",
+    "all_rejected": "всем заявителям отказано в допуске",
+    "no_offers": "никто не предложил цену",
+}
+# Причины из других законов и новые коды справочника разбираем по тексту; порядок важен:
+# «ни одной заявки» раньше «одна заявка». «Менее чем два участника» (200-ФЗ) — это и один,
+# и ни одного: такой текст исход не называет, остаётся прежний признак — цена договора.
+_FAIL_TEXT = (
+    ("no_bids", ("ни одной заявки", "не подано заяв", "заявки не поданы", "отсутствие заявок")),
+    ("all_rejected", ("отказано в допуске всем", "ни один заявитель не допущен")),
+    ("no_offers", ("ни одного предложения", "не подал предложение о цене")),
+    ("one_bid", ("единственная заявка", "только одна заявка", "одна заявка")),
+    ("one_admitted", ("только один заявитель", "единственный заявитель")),
+    ("one_came", ("только один участник", "один участник", "единственный участник")),
+)
+
+
+def fail_kind(code: str | None, name: str | None = None) -> str | None:
+    """Чем кончились не состоявшиеся торги по причине из протокола; None — причины нет или
+    она исход не называет."""
+    if code in FAIL_KIND_BY_CODE:
+        return FAIL_KIND_BY_CODE[code]
+    text = (name or "").lower().replace("ё", "е")
+    if not text or "менее чем два" in text or "менее двух" in text:
+        return None
+    for kind, needles in _FAIL_TEXT:
+        if any(n in text for n in needles):
+            return kind
+    return None
+
+
+def _fail_reason_of(card: dict[str, Any]) -> tuple[str | None, str | None]:
+    """(код, текст) причины из протоколов лота. Берём только запись справочника {code, name}:
+    свободный текст организатора не храним — в нём бывают имена участников. Если причина
+    есть в нескольких протоколах, верим более позднему (итог аукциона после рассмотрения)."""
+    best: tuple[str, str | None, str | None] | None = None
+    for p in card.get("protocols") or []:
+        reason = (p or {}).get("abandonedReason")
+        if not isinstance(reason, dict):
+            continue
+        code, name = reason.get("code"), reason.get("name")
+        if not isinstance(code, str) or not code:
+            continue
+        when = str(p.get("publishDate") or "")
+        if best is None or when >= best[0]:
+            best = (when, code, name if isinstance(name, str) else None)
+    return (best[1], best[2]) if best else (None, None)
+
+
 def _protocols_of(card: dict[str, Any]) -> list[dict[str, Any]]:
     """Протоколы лота: тип, дата, номер. Имена участников и победителя (у физлиц — ФИО) не
     берём вовсе: только число заявок, допущенных и цены первого и второго места."""
@@ -510,11 +584,17 @@ def _result_of(card: dict[str, Any]) -> dict[str, Any]:
     applied = admitted = None
     first = second = None
     winner = None
+    # Допущенных и отклонённых организаторы публикуют в разных протоколах (прод, 13.11.2026:
+    # в протоколе результатов — 11 допущенных, в протоколе рассмотрения — один отклонённый;
+    # брали последний список и получали «допущено 0»). Считаем по всем протоколам лота.
+    ok_max = rej_max = None
     for p in card.get("protocols") or []:
         adm = p.get("participantAdmissions")
         if isinstance(adm, list) and adm:
-            applied = len(adm)
-            admitted = sum(1 for a in adm if (a or {}).get("admissionStatus") == "ADMITTED")
+            ok = sum(1 for a in adm if (a or {}).get("admissionStatus") == "ADMITTED")
+            ok_max = max(ok_max or 0, ok)
+            rej_max = max(rej_max or 0, len(adm) - ok)
+            applied, admitted = ok_max + rej_max, ok_max
         for r in p.get("results") or []:
             price = _num((r or {}).get("participantPrice"))
             if r.get("isFirst"):
@@ -522,12 +602,15 @@ def _result_of(card: dict[str, Any]) -> dict[str, Any]:
                 winner = ORG_TYPE_RU.get(r.get("orgType") or "")
             elif r.get("isSecond"):
                 second = price
+    fail_code, fail_reason = _fail_reason_of(card)
     return {
         "applied": applied,
         "admitted": admitted,
         "winner_price": first,
         "second_price": second,
         "winner_type": winner,
+        "fail_code": fail_code,
+        "fail_reason": fail_reason,
     }
 
 
@@ -559,6 +642,18 @@ def outcome_of(lot: dict[str, Any]) -> tuple[str, str]:
             note += "; сверьте по выписке ЕГРН, что продавец — победитель торгов или его преемник"
         return "торги состоялись", note
     if status == "FAILED":
+        kind = fail_kind(lot.get("fail_code"), lot.get("fail_reason"))
+        if kind in FAIL_TAKEN:
+            return (
+                f"торги не состоялись ({FAIL_KIND_RU[kind]})",
+                "по протоколу договор заключают с единственным участником (ст. 39.12 ЗК) — "
+                "у участка, скорее всего, уже есть арендатор или покупатель",
+            )
+        if kind in FAIL_LEFT:
+            return (
+                f"торги не состоялись ({FAIL_KIND_RU[kind]})",
+                "по протоколу участок не ушёл — может выйти на торги снова",
+            )
         if lot.get("applied") == 0 or lot.get("admitted") == 0:
             return "торги не состоялись", "допущенных заявок не было — участок может выйти снова"
         if lot.get("applied") == 1 or lot.get("admitted") == 1:

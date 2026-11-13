@@ -571,6 +571,50 @@ def test_sync_buttons_and_status_block(client, monkeypatch):  # noqa: F811
     assert torgi_sync.due_regions() == []
 
 
+def test_failed_lots_are_reread_for_protocol_reason(client):  # noqa: F811
+    """Причина «торги не состоялись» из протокола появилась в разборе карточки 13.11.2026
+    (эксперт по торгам: «протокол публикуется, и в нём данные»). Лоты, прочитанные раньше,
+    перечитываются фоном; страница ликвидности называет исходы по причинам."""
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from landcheck.web import torgi_sync
+    from landcheck.web.db import TorgiLot, session
+
+    fake = _seed(client)
+    _sync(fake, max_nspd=0)
+    _admin(client)
+    soon = datetime.now(UTC) + timedelta(minutes=torgi_sync.CARDS_RETRY_MIN + 1)
+    assert torgi_sync.due_regions(soon) == []  # всё прочитано — ждём обычные сутки
+    with session() as db:
+        failed = db.scalars(select(TorgiLot).where(TorgiLot.status == "FAILED")).all()
+        assert len(failed) == 6 and all(x.card_rev == torgi.CARD_REV for x in failed)
+        for x in failed:  # как после выкладки: карточки прочитаны старым разбором
+            x.card_rev = 0
+        db.commit()
+    st = torgi_sync.state_of("40")
+    assert st["reread_left"] == 6 and st["cards_left"] == 0
+    assert torgi_sync.due_regions(soon) == ["40"]  # есть что перечитать — через 10 минут
+    page = client.get("/tools/torgi-scan/status?region=40").text
+    assert "у 6 несостоявшихся ещё перечитывается протокол" in page
+    # в карточках площадки причина есть: у нечётных одна заявка, у чётных заявок не подано
+    for n, c in enumerate(fake.lists[torgi.STATUS_FAILED]):
+        code = "ZK_EA_14_39.12_1" if n % 2 else "ZK_EA_14_39.12_2"
+        name = "Подана только одна заявка" if n % 2 else "Не подано ни одной заявки"
+        fake.cards[c["id"]]["protocols"][0]["abandonedReason"] = {"code": code, "name": name}
+    state = _sync(fake, max_nspd=0)
+    assert state["reread_left"] == 0 and state["stats"]["cards"] == 6
+    with session() as db:
+        failed = db.scalars(select(TorgiLot).where(TorgiLot.status == "FAILED")).all()
+        assert all(x.card_rev == torgi.CARD_REV and x.fail_code for x in failed)
+        assert sorted(x.fail_reason for x in failed)[0] == "Не подано ни одной заявки"
+    html = client.get("/tools/torgi-liquidity?region=40").text
+    assert "единственному участнику 3 (подана одна заявка — 3; всё по протоколу)" in html
+    assert "не ушли 3 (заявок не подано — 3; всё по протоколу)" in html
+    assert SECRET_NAME not in html
+
+
 def test_report_block_shows_what_happened_to_failed_auctions(client):  # noqa: F811
     """Эксперт по торгам (чат, 13.11.2026): «не состоялись» — это и договор с единственным
     участником, и торги без заявок. Блок отчёта писал обе группы одним числом и называл их

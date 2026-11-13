@@ -380,6 +380,11 @@ class TorgiLot(Base):
     admitted: Mapped[int | None] = mapped_column(Integer, nullable=True)
     second_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     winner_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # причина «торги не состоялись» из протокола: код и текст справочника площадки
+    fail_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    fail_reason: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    # версия разбора, которой прочитана карточка (torgi.CARD_REV): старые перечитываются
+    card_rev: Mapped[int] = mapped_column(Integer, default=0)
     has_gpzu: Mapped[bool | None] = mapped_column(nullable=True)
     annulled: Mapped[bool] = mapped_column(default=False)
     stopped: Mapped[bool] = mapped_column(default=False)
@@ -395,7 +400,8 @@ class TorgiLot(Base):
     FIELDS = (
         "id region district quarter cad_num kind form bidd_type bidd_type_name status area_m2 "
         "price_start price_step deposit price_fin published bidd_end auction_date vri vri_group "
-        "category address name notice applied admitted second_price winner_type has_gpzu "
+        "category address name notice applied admitted second_price winner_type fail_code "
+        "fail_reason has_gpzu "
         "annulled stopped appeals cad_cost lat lon"
     ).split()
 
@@ -535,6 +541,11 @@ def init_db(path: str | Path) -> None:
 # Колонки, добавленные после первого релиза: SQLite умеет только ADD COLUMN, этого хватает.
 _NEW_COLUMNS: dict[str, dict[str, str]] = {
     "torgi_market": {"details": "JSON"},
+    "torgi_lots": {
+        "fail_code": "VARCHAR(40)",
+        "fail_reason": "VARCHAR(240)",
+        "card_rev": "INTEGER NOT NULL DEFAULT 0",
+    },
     "users": {
         "email": "VARCHAR(200)",
         "password_hash": "VARCHAR(200)",

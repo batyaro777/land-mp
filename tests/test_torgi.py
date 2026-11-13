@@ -567,3 +567,96 @@ def test_gpzu_doc_and_file_download():
     assert calls[-1] == "https://torgi.gov.ru/new/file-store/v1/f-gpzu"
     with pytest.raises(ValueError, match="больше"):
         api.file("f-gpzu", max_mb=0.000001)
+
+
+def test_fail_kind_by_code_and_text():
+    """Причина «торги не состоялись» из справочника площадки (проба на проде 13.11.2026)."""
+    taken = {
+        "ZK_EA2_39_1": "one_bid",
+        "ZK_EA_14_39.12_1": "one_bid",
+        "ZK_EA_12_39.12_2": "one_admitted",
+        "ZK_EA_19_39.12_1": "one_came",
+        "ZK_EA2_39_3": "one_came",
+    }
+    left = {
+        "ZK_EA_14_39.12_2": "no_bids",
+        "ZK_EA_12_39.12_1": "all_rejected",
+        "ZK_EA_19_39.12_3": "no_offers",
+        "ZK_EA2_39_4": "no_offers",
+    }
+    for code, kind in {**taken, **left}.items():
+        assert torgi.fail_kind(code) == kind
+        assert (kind in torgi.FAIL_TAKEN) == (code in taken)
+        assert (kind in torgi.FAIL_LEFT) == (code in left) and kind in torgi.FAIL_KIND_RU
+    # незнакомый код — по тексту; «ни одной заявки» не путается с «одна заявка»
+    assert torgi.fail_kind("NEW_1", "Не подано ни одной заявки на участие") == "no_bids"
+    assert torgi.fail_kind("NEW_2", "Подана только одна заявка") == "one_bid"
+    assert torgi.fail_kind("NEW_3", "В аукционе участвовал только один участник") == "one_came"
+    assert torgi.fail_kind("NEW_4", "Отказано в допуске всем заявителям") == "all_rejected"
+    assert torgi.fail_kind(None, "Допущен и признан участником только один заявитель") == (
+        "one_admitted"
+    )
+    # текст, который исход не называет, и пустая причина
+    assert torgi.fail_kind("200FZ_EA_3", "В аукционе участвовали менее чем два участника") is None
+    assert torgi.fail_kind(None, None) is None and torgi.fail_kind("X", "Иная причина") is None
+
+
+def test_result_reads_reason_and_counts_admissions_across_protocols():
+    """Прод, 13.11.2026: в протоколе результатов 11 допущенных, в протоколе рассмотрения один
+    отклонённый — брали последний список и писали «допущено 0». Причина — запись справочника
+    из более позднего протокола; свободный текст организатора не берём (в нём бывают имена)."""
+    card = {
+        "protocols": [
+            {
+                "type": {"code": "AUCTION_RESULTS_ZK"},
+                "publishDate": "2026-10-26T10:00:00Z",
+                "abandonedReason": {
+                    "code": "ZK_EA_19_39.12_1",
+                    "name": "В аукционе участвовал только один участник",
+                },
+                "participantAdmissions": [{"admissionStatus": "ADMITTED"} for _ in range(11)],
+                "results": [
+                    {"isFirst": True, "participantPrice": 92_700, "orgType": "INDIVIDUAL_PERSON"}
+                ],
+            },
+            {
+                "type": {"code": "EA_APPLICATION_CONSIDERATION_ADV_ZK"},
+                "publishDate": "2026-10-22T10:00:00Z",
+                "participantAdmissions": [{"admissionStatus": "REJECTED", "lastName": "Иванов"}],
+            },
+        ]
+    }
+    r = torgi._result_of(card)
+    assert (r["applied"], r["admitted"]) == (12, 11)
+    assert r["fail_code"] == "ZK_EA_19_39.12_1" and "только один участник" in r["fail_reason"]
+    assert "Иванов" not in json.dumps(r, ensure_ascii=False)
+    # причина в двух протоколах — верим более позднему
+    card["protocols"][1]["abandonedReason"] = {"code": "ZK_EA_12_39.12_2", "name": "x"}
+    assert torgi._result_of(card)["fail_code"] == "ZK_EA_19_39.12_1"
+    card["protocols"][1]["publishDate"] = "2026-10-27T10:00:00Z"
+    assert torgi._result_of(card)["fail_code"] == "ZK_EA_12_39.12_2"
+    # свободный текст вместо записи справочника не сохраняем
+    free = {"protocols": [{"abandonedReason": "единственный участник Иванов И. И."}]}
+    r = torgi._result_of(free)
+    assert r["fail_code"] is None and r["fail_reason"] is None
+    # один список со всеми статусами считается как раньше
+    one = {
+        "protocols": [
+            {
+                "participantAdmissions": [{"admissionStatus": "ADMITTED"}] * 2
+                + [{"admissionStatus": "NOT_ADMITTED"}]
+            }
+        ]
+    }
+    r = torgi._result_of(one)
+    assert (r["applied"], r["admitted"]) == (3, 2)
+
+
+def test_outcome_text_uses_protocol_reason():
+    lot = {"status": "FAILED", "fail_code": "ZK_EA_14_39.12_2", "price_start": 1.0}
+    outcome, meaning = torgi.outcome_of(lot)
+    assert outcome == "торги не состоялись (заявок не подано)" and "может выйти" in meaning
+    lot = {"status": "FAILED", "fail_code": "ZK_EA_19_39.12_1", "admitted": 4, "price_fin": 1.0}
+    outcome, meaning = torgi.outcome_of(lot)
+    assert outcome == "торги не состоялись (на торги вышел один участник)"
+    assert "единственным участником" in meaning

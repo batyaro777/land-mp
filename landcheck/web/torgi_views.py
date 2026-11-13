@@ -647,6 +647,7 @@ def torgi_liquidity_page(request: Request, user: TorgiDep):
         "place": place,
         "groups": torgi_scan.GROUPS,
         "kinds": torgi_scan.KIND_RU,
+        "fail_ru": torgi.FAIL_KIND_RU,
         "user": user,
         "phase_ru": PHASE_RU,
         "q": q,

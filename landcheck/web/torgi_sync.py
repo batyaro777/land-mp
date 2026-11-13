@@ -60,6 +60,14 @@ def _is_auction():
     return TorgiLot.form.is_(None) | TorgiLot.form.not_in(NOTICE_FORMS)
 
 
+def _needs_card():
+    """Карточка не прочитана либо лот не состоялся, а карточка прочитана старым разбором —
+    без причины из протокола (torgi.CARD_REV)."""
+    return TorgiLot.card_at.is_(None) | (
+        (TorgiLot.status == "FAILED") & (TorgiLot.card_rev < torgi.CARD_REV)
+    )
+
+
 _executor: ThreadPoolExecutor | None = None
 _lock = threading.Lock()
 _queued: set[str] = set()
@@ -112,6 +120,7 @@ def upsert(
     lot.seen_at = now
     if card:
         lot.card_at = now
+        lot.card_rev = torgi.CARD_REV
     elif what == "changed" and lot.status not in torgi.ACTIVE:
         # лот завершился, а карточку читали, пока он шёл: итог и заявки нужно дочитать
         lot.card_at = None
@@ -242,9 +251,13 @@ def state_of(region: str) -> dict[str, Any]:
     with session() as db:
         st = db.get(TorgiSync, region)
         rows = db.execute(
-            select(TorgiLot.status, TorgiLot.card_at, TorgiLot.price_fin, TorgiLot.form).where(
-                TorgiLot.region == region
-            )
+            select(
+                TorgiLot.status,
+                TorgiLot.card_at,
+                TorgiLot.price_fin,
+                TorgiLot.form,
+                TorgiLot.card_rev,
+            ).where(TorgiLot.region == region)
         ).all()
     # Счётчики — по торгам; извещения о предоставлении отдельной строкой.
     lots = [row for row in rows if row[3] not in torgi_scan.NOTICE_FORMS]
@@ -271,6 +284,10 @@ def state_of(region: str) -> dict[str, Any]:
         "failed": len(failed),
         "succeed_priced": sum(1 for row in succeed if row[2]),
         "cards_left": sum(1 for row in succeed + failed if row[1] is None),
+        # не состоявшиеся, прочитанные до появления причины из протокола: перечитываются фоном
+        "reread_left": sum(
+            1 for row in failed if row[1] is not None and (row[4] or 0) < torgi.CARD_REV
+        ),
         "gateway": ruproxy.enabled(),
     }
     if st is not None:
@@ -464,10 +481,10 @@ def sync_region(
         _update(region, phase="cards")
         with session() as db:
             need = db.execute(
-                select(TorgiLot.id, TorgiLot.status, TorgiLot.published).where(
+                select(TorgiLot.id, TorgiLot.status, TorgiLot.published, TorgiLot.card_at).where(
                     TorgiLot.region == region,
                     TorgiLot.status.in_(HISTORY_STATUSES),
-                    TorgiLot.card_at.is_(None),
+                    _needs_card(),
                     _is_auction(),
                 )
             ).all()
@@ -477,6 +494,7 @@ def sync_region(
         # карточек), карточка добавляет число заявок. Внутри — новые первыми.
         need.sort(key=lambda r: r[2] or "", reverse=True)
         need.sort(key=lambda r: r[1] != "FAILED")
+        need.sort(key=lambda r: r[3] is not None)  # ни разу не читанные — раньше перечитываемых
         _read_cards(api, region, [r[0] for r in need[:max_cards]], now, stats, "cards")
 
         # 5. НСПД по идущим ----------------------------------------------------------------------
@@ -578,6 +596,7 @@ def _read_card(
             lot = db.get(TorgiLot, lot_id)
             if lot is not None:
                 lot.card_at = now
+                lot.card_rev = torgi.CARD_REV
                 if lot.status in torgi.ACTIVE:
                     lot.status = "CANCELED"
                 db.commit()
@@ -716,7 +735,7 @@ def due_regions(now: datetime | None = None) -> list[str]:
                 select(TorgiLot.region, func.count())
                 .where(
                     TorgiLot.status.in_(HISTORY_STATUSES),
-                    TorgiLot.card_at.is_(None),
+                    _needs_card(),
                     _is_auction(),
                 )
                 .group_by(TorgiLot.region)

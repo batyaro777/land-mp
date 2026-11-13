@@ -130,28 +130,52 @@ def test_liquidity_stats_and_index():
     assert ts.stats_of(_district(sold=1, single=0, none=0))["label"] == "мало данных"
 
 
-def test_failed_outcomes_say_what_they_stand_on():
+def test_failed_outcome_comes_from_protocol_reason():
     """Эксперт по торгам (чат, 13.11.2026): «не состоялись — была одна заявка или заявок нет:
-    он умеет определять?» Умеет, но число заявок есть только там, где протокол выложен в
-    читаемом виде; сводка показывает, сколько исходов стоит на протоколе, а сколько — на цене
-    договора в карточке (прод, Республика Алтай: 62 и 116 из 178)."""
+    он умеет определять?» и «протокол публикуется, и в нём данные». Причина из протокола
+    (abandonedReason) называет исход прямо; цена договора и число заявок — запасной признак,
+    пока причина не прочитана. Коды — с прода (18 карточек, Алтай и Калуга)."""
+
+    def failed(lot_id, cad, *, fin=None, code=None, name=None, **extra):
+        row = _lot(lot_id, cad, fin=fin, status="FAILED") | {"card": True} | extra
+        return row | {"fail_code": code, "fail_reason": name}
+
     lots = _district(sold=2, single=0, none=0)
-    # одна допущенная заявка по протоколу
-    lots.append(_lot("P1", "40:13:120102:1", fin=None, status="FAILED") | {"admitted": 1})
-    # протокола нет, цена договора есть
-    lots.append(_lot("C1", "40:13:120102:2", fin=110_000, status="FAILED") | {"card": True})
-    # заявки были, никого не допустили
-    lots.append(
-        _lot("R1", "40:13:120103:1", fin=None, status="FAILED") | {"applied": 2, "admitted": 0}
-    )
-    # карточка прочитана, в ней ни цены договора, ни протокола
-    lots.append(_lot("E1", "40:13:120103:2", fin=None, status="FAILED") | {"card": True})
-    # допущено три, торги не состоялись, договор есть — считаем ушедшим, но видим отдельно
-    lots.append(_lot("M1", "40:13:120102:3", fin=120_000, status="FAILED") | {"admitted": 3})
+    lots += [
+        failed("A", "40:13:120102:1", fin=100_000, code="ZK_EA_14_39.12_1"),  # одна заявка
+        failed("B", "40:13:120102:2", fin=100_000, code="ZK_EA_12_39.12_2"),  # допущен один
+        # допущено пятеро, на торги вышел один и сделал шаг: цена выше старта, торги не
+        # состоялись — участок ушёл (прод: 103 таких лота в Калужской области)
+        failed("C", "40:13:120102:3", fin=103_000, code="ZK_EA_19_39.12_1", admitted=5),
+        failed("D", "40:13:120103:1", code="ZK_EA_14_39.12_2"),  # заявок не подано
+        failed("E", "40:13:120103:2", code="ZK_EA_12_39.12_1", applied=2, admitted=0),
+        # допущено трое, никто не предложил цену — участок не ушёл
+        failed("F", "40:13:120103:3", code="ZK_EA_19_39.12_3", admitted=3),
+        # причина ещё не прочитана: прежний признак — цена договора / пустая карточка
+        failed("G", "40:13:120102:4", fin=110_000),
+        failed("H", "40:13:120103:4"),
+    ]
     s = ts.stats_of(lots)
-    assert (s["sold"], s["single"], s["none"], s["failed_unknown"]) == (2, 3, 2, 0)
-    assert (s["single_by_protocol"], s["none_rejected"], s["failed_multi"]) == (1, 1, 1)
-    assert s["sell_through"] == 0.71  # 5 из 7 нашли хозяина
+    assert (s["sold"], s["single"], s["none"], s["failed_unknown"]) == (2, 4, 4, 0)
+    assert s["reasons"] == {
+        "one_bid": 1,
+        "one_admitted": 1,
+        "one_came": 1,
+        "no_bids": 1,
+        "all_rejected": 1,
+        "no_offers": 1,
+    }
+    assert (s["single_no_reason"], s["none_no_reason"]) == (1, 1)
+    assert s["sell_through"] == 0.6  # 6 из 10 нашли хозяина
+    # причина сильнее цены: «никто не предложил цену» при записанной цене — участок не ушёл
+    odd = failed("X", "40:13:120103:9", fin=90_000, code="ZK_EA2_39_4", admitted=2)
+    assert ts._outcome(odd) == "none"
+    # «менее чем два участника» (200-ФЗ) исход не называет — решает цена договора
+    few = "В аукционе участвовали менее чем два участника"
+    assert (
+        ts._outcome(failed("Y", "40:13:120103:8", fin=1, code="200FZ_EA_3", name=few)) == "single"
+    )
+    assert ts._outcome(failed("Z", "40:13:120103:7", code="200FZ_EA_3", name=few)) == "none"
 
 
 def test_unread_failed_cards_are_split_proportionally():

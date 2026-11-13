@@ -289,6 +289,13 @@ def test_filter_items_and_torgi_note():
     # протокола нет, но у лота есть цена договора — участок ушёл единственному участнику
     deal = freeland.torgi_note({"status": "FAILED", "price_fin": 38_000.0, "card": True})
     assert deal["busy"] is True and "единственным участником" in deal["text"]
+    # причина из протокола называет исход прямо (эксперт по торгам, 13.11.2026): несколько
+    # допущенных, на торги вышел один — участок ушёл; никто не предложил цену — не ушёл
+    came = freeland.torgi_note({"status": "FAILED", "admitted": 4, "fail_code": "ZK_EA_19_39.12_1"})
+    assert came["busy"] is True and "(на торги вышел один участник)" in came["text"]
+    quiet = freeland.torgi_note({"status": "FAILED", "admitted": 3, "fail_code": "ZK_EA2_39_4"})
+    assert quiet["busy"] is False
+    assert quiet["text"] == "выставлялся на торги и не ушёл (никто не предложил цену)"
     unread = freeland.torgi_note({"status": "FAILED"})
     assert unread["busy"] is False and unread["text"] == "торги не состоялись, итог не прочитан"
     assert freeland.torgi_note({"status": "FAILED", "card": True})["text"].endswith("не ушёл")
