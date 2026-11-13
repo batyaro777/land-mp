@@ -941,3 +941,35 @@ def test_lot_photos_in_list_and_lot_page(client):  # noqa: F811
     assert 'src="https://torgi.gov.ru/new/file-store/v1/f-1"' in page and 'id="lot-gallery"' in page
     lot = client.get("/tools/torgi-lot/ACT_0?region=40").text
     assert lot.count('class="lot-thumb big"') == 2
+
+
+def test_image_proxy_caches_and_rejects_non_images(client, monkeypatch):  # noqa: F811
+    """Фото через сервер — когда браузер не достаёт torgi.gov.ru (из-за рубежа закрыт)."""
+    from landcheck import ruproxy, torgi
+    from landcheck.web import torgi_views
+    from landcheck.web.config import settings
+
+    _admin(client)
+    calls: list[str] = []
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def file(self, file_id, max_mb=5):
+            calls.append(file_id)
+            return b"\xff\xd8\xff\xe0jpeg" if file_id.startswith("6aed") else b"<html>"
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(ruproxy, "enabled", lambda: True)
+    monkeypatch.setattr(settings, "fixtures", None)
+    monkeypatch.setattr(torgi, "TorgiClient", FakeClient)
+    assert torgi_views.settings is settings
+    r = client.get("/tools/torgi-img/6aed5f6b2c4c500c90717aef")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
+    assert client.get("/tools/torgi-img/6aed5f6b2c4c500c90717aef").status_code == 200
+    assert calls == ["6aed5f6b2c4c500c90717aef"]  # второй раз — с диска
+    assert client.get("/tools/torgi-img/badbadbad0001").status_code == 404
+    assert client.get("/tools/torgi-img/..%2Fsecret").status_code == 404

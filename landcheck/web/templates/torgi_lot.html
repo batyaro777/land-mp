@@ -13,7 +13,7 @@
 {% elif saved == 'noloc' %}<p class="warn small">Из адреса лота не удалось понять населённый пункт — задайте рынок района вручную.</p>{% endif %}
 
 {% if lot.images %}
-<div class="lot-photos">{% for f in lot.images %}<button type="button" class="lot-thumb big" data-gallery="{{ lot.images|tojson|forceescape }}" data-start="{{ loop.index0 }}" aria-label="Фото {{ loop.index }}"><img src="{{ img_base }}{{ f }}" alt="" loading="lazy" onerror="this.closest('button').remove()"></button>{% endfor %}</div>
+<div class="lot-photos">{% for f in lot.images %}<button type="button" class="lot-thumb big" data-gallery="{{ lot.images|tojson|forceescape }}" data-start="{{ loop.index0 }}" aria-label="Фото {{ loop.index }}"><img src="{{ img_base }}{{ f }}" alt="" loading="lazy" data-id="{{ f }}" onerror="lotImgFallback(this)"></button>{% endfor %}</div>
 {% endif %}
 <div class="grid two">
 <article>

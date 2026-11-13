@@ -20,10 +20,10 @@ from typing import Annotated, Any
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from sqlalchemy import select
 
-from landcheck import torgi, torgi_calc, torgi_scan
+from landcheck import ruproxy, torgi, torgi_calc, torgi_scan
 from landcheck.models import Purpose
 from landcheck.models import Request as CheckRequest
 from landcheck.regions import CADASTRAL_REGIONS
@@ -476,6 +476,45 @@ async def torgi_scan_check(request: Request, user: TorgiDep):
 
 
 # --- карточка лота -------------------------------------------------------------------------
+_IMG_ID_RE = re.compile(r"[0-9A-Za-z-]{8,64}")
+_IMG_TYPES = ((b"\xff\xd8\xff", "image/jpeg"), (b"\x89PNG", "image/png"), (b"RIFF", "image/webp"))
+
+
+def _img_type(data: bytes) -> str | None:
+    return next((t for magic, t in _IMG_TYPES if data.startswith(magic)), None)
+
+
+@router.get("/tools/torgi-img/{file_id}")
+def torgi_img(user: TorgiDep, file_id: str):
+    """Фото лота через сервер — запасной путь, когда браузер не достаёт file-store площадки
+    (torgi.gov.ru из-за рубежа закрыт). Скачанное лежит на диске рядом с базой и больше не
+    запрашивается; сайт пропускает запрос раз в 6 секунд, поэтому первый показ небыстрый."""
+    if not _IMG_ID_RE.fullmatch(file_id):
+        raise HTTPException(404)
+    folder = settings.db_path.parent / "torgi-img"
+    path = folder / file_id
+    if not path.exists():
+        if not ruproxy.enabled() or settings.fixtures is not None:
+            raise HTTPException(404)
+        api = torgi.TorgiClient(retry_delays=())
+        try:
+            data = api.file(file_id, max_mb=5)
+        except Exception:  # noqa: BLE001 — нет фото, сайт не ответил: просто без картинки
+            raise HTTPException(404) from None
+        finally:
+            api.close()
+        if _img_type(data) is None:
+            raise HTTPException(404)
+        folder.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".part")
+        tmp.write_bytes(data)
+        tmp.replace(path)
+    media = _img_type(path.read_bytes()[:8]) or "application/octet-stream"
+    return FileResponse(
+        path, media_type=media, headers={"Cache-Control": "private, max-age=604800"}
+    )
+
+
 @router.get("/tools/torgi-lot/{lot_id}", response_class=HTMLResponse)
 def torgi_lot_page(request: Request, user: TorgiDep, lot_id: str, saved: str = ""):
     with session() as db:
