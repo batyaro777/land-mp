@@ -870,6 +870,8 @@ def test_scan_place_filter_parcel_number_and_back_link_keep_region(client):  # n
     empty = client.get("/tools/torgi-scan?region=40&d=40:99:000001&kind=rent").text
     assert "Сбор идёт" not in empty
     assert "В квартале 40:99:000001 идущих лотов по выбранным условиям нет" in empty
+    hidden = client.get("/tools/torgi-scan?region=40&d=40:13:120101&kind=rent").text
+    assert "Показать все лоты в квартале 40:13:120101</a>" in hidden
     lot = client.get("/tools/torgi-lot/ACT_0?region=40&roi=40&kind=sale&d=40:13").text
     assert '<a href="/tools/torgi-scan?roi=40&amp;kind=sale&amp;d=40%3A13&amp;region=40">' in lot
     assert '<input type="hidden" name="kind" value="sale">' in lot
