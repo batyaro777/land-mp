@@ -1,0 +1,62 @@
+{# Блок «Документы и упоминания»: суды, торги, акты, новости, объявления по кадастровому номеру #}
+<article class="docs" id="docs">
+  <hgroup>
+    <h4>Документы и упоминания участка</h4>
+    <p class="muted small">Открытые источники по кадастровому номеру{% if docs and docs.fetched_at %} · собрано {{ docs.fetched_at|dt }}{% endif %}
+      {% if not public %}· <a href="{{ docs_url }}?refresh=1" hx-get="{{ docs_url }}?refresh=1" hx-target="#docs" hx-swap="outerHTML" class="small">обновить</a>{% endif %}</p>
+  </hgroup>
+  {% set tl = docs.torgi if docs and docs.torgi is defined else none %}
+  {% if tl %}
+  <div class="torgi-own">
+    <p><strong>Торги по этому участку</strong> <span class="badge mini">первоисточник: torgi.gov.ru</span>
+      <br><span class="muted small">Извещения ГИС «Торги» по кадастровому номеру за {{ tl.months }} мес.{% if tl.as_of %} · на {{ tl.as_of|day }}{% endif %}</span></p>
+    {% if tl.error %}
+    <p class="muted small">{{ tl.error }}. Проверить вручную: <a href="{{ tl.search_url }}" target="_blank" rel="noopener">реестр torgi.gov.ru</a>, поиск по номеру {{ tl.cad_num }}.</p>
+    {% elif not tl.lots %}
+    <p class="muted small">На torgi.gov.ru извещений по этому участку за {{ tl.months }} мес. нет.</p>
+    {% else %}
+    {% if tl.history_note %}<p class="small"><span class="badge mini v-check">проверить</span> {{ tl.history_note|ucfirst }}.</p>{% endif %}
+    <ul class="loc-list">
+      {% for lot in tl.lots %}
+      <li><strong>{{ lot.outcome|ucfirst }}</strong> — <a href="{{ lot.url }}" target="_blank" rel="noopener">лот {{ lot.id }}</a>, {% if lot.notice_3918 %}извещение о предоставлении{% else %}аукцион, {{ lot.kind }}{% endif %}{% if lot.published %}, опубликован {{ lot.published|day }}{% endif %}{% if lot.auction_start and not lot.notice_3918 %}, торги {{ lot.auction_start|day }}{% endif %}.
+        {% set per = ' в год' if lot.kind == 'аренда' else '' %}
+        <div class="small">{% if lot.price_start %}Старт {{ lot.price_start|money }}{{ per }}{% endif %}{% if lot.price_fin %} → итог <strong>{{ lot.price_fin|money }}</strong>{{ per }}{% if lot.ratio and lot.ratio > 1 %} (×{{ lot.ratio }}){% endif %}{% endif %}{% if lot.applied %}; заявок {{ lot.applied }}{% if lot.admitted is not none and lot.admitted != lot.applied %}, допущено {{ lot.admitted }}{% endif %}{% endif %}{% if lot.winner_type %}; победитель — {{ lot.winner_type }}{% endif %}{% if lot.second_price %}, второе место {{ lot.second_price|money }}{% endif %}{% if lot.status in ('PUBLISHED', 'APPLICATIONS_SUBMISSION') and lot.bidd_end %}; заявки до {{ lot.bidd_end|day }}{% if lot.deposit %}, задаток {{ lot.deposit|money }}{% endif %}{% endif %}.</div>
+        {% if lot.meaning %}<div class="muted small">Что это значит: {{ lot.meaning }}.</div>{% endif %}
+        {% if lot.appeals or lot.stopped %}<div class="small"><span class="badge mini v-check">проверить</span> {% if lot.appeals %}по торгам подавались жалобы{% endif %}{% if lot.appeals and lot.stopped %}; {% endif %}{% if lot.stopped %}торги приостановлены{% endif %}.</div>{% endif %}
+        {% if lot.protocols %}<div class="small">Протоколы: {% for p in lot.protocols %}{{ p.name|ucfirst|truncate(90) }}{% if p.date %} от {{ p.date|day }}{% endif %}{% if not loop.last %}; {% endif %}{% endfor %} — на <a href="{{ lot.url }}" target="_blank" rel="noopener">странице лота</a>{% if lot.etp_url %} и на <a href="{{ lot.etp_url }}" target="_blank" rel="noopener">площадке</a>{% endif %}.</div>{% endif %}
+        {% if lot.docs %}<div class="small">Документы: {% for d in lot.docs %}<a href="{{ d.url }}" target="_blank" rel="noopener"{% if d.file %} title="{{ d.file }}"{% endif %}>{% if d.name == 'Иное' and d.file %}{{ d.file|truncate(40) }}{% else %}{{ d.name }}{% endif %}</a>{% if d.size_mb and d.size_mb >= 1 %} <span class="muted">{{ d.size_mb }} МБ</span>{% endif %}{% if not loop.last %} · {% endif %}{% endfor %}</div>
+        {% if lot.docs|selectattr('gpzu')|list %}<div class="muted small">К торгам приложен ГПЗУ{% if not public %} — отчёт берёт его сам и сверяет зону, ВРИ и отступы с НСПД: см. блок <a href="#gpzu">«ГПЗУ»</a>{% else %} — в блоке «ГПЗУ» отчёта он сверяется с НСПД{% endif %}.</div>{% endif %}{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% if tl.more %}<p class="muted small">Ещё {{ tl.more }} — в <a href="{{ tl.search_url }}" target="_blank" rel="noopener">реестре torgi.gov.ru</a>.</p>{% endif %}
+    <p class="muted small">Файлы открываются с torgi.gov.ru (сайт доступен из России). Имена участников в отчёт не выводим — они в протоколе итогов на странице лота.</p>
+    {% endif %}
+  </div>
+  {% endif %}
+  {% if not docs or docs.error %}
+    <p class="muted">Поиск по открытым источникам временно не ответил — нажмите «обновить» позже.</p>
+  {% elif not docs.groups %}
+    <p class="muted">Упоминаний кадастрового номера на сайтах{% if tl and tl.lots %} (кроме torgi.gov.ru){% endif %} — в судах, торгах, актах, новостях и объявлениях — не найдено. Это не гарантия отсутствия споров: выписка ЕГРН и картотека судов по продавцу остаются в чек-листе.</p>
+  {% else %}
+    {% set why = {
+      'court': 'номер участка упомянут в судебном акте — возможен спор или прошлое дело; откройте и проверьте стороны, предмет и дату',
+      'torgi': 'участок выставлялся или продавался на торгах — в протоколе видна цена, число участников и условия',
+      'gov': 'акт администрации, где перечислен участок: присвоение адреса, межевание, изъятие, изменение зоны — откройте и найдите строку с этим номером',
+      'news': 'упоминание в новостях или на сайтах — контекст, а не вывод; проверьте дату и источник',
+      'ads': 'объявления о продаже этого участка: история цены и сколько он на рынке'
+    } %}
+    {% for g in docs.groups %}
+    <p><strong>{{ g.title }}</strong>{% if g.kind == 'court' or g.kind == 'torgi' %} <span class="badge mini v-check">проверить</span>{% endif %}
+      <br><span class="muted small">Зачем это здесь: {{ why.get(g.kind, '') }}.</span></p>
+    <ul class="loc-list">
+      {% for d in g['items'] %}
+      <li><a href="{{ d.url }}" target="_blank" rel="noopener">{{ d.title|truncate(110) }}</a> <span class="muted small">{{ d.host }}{% if d.date %}, {{ d.date|day }}{% endif %}</span>
+        {% if d.snippet %}<div class="muted small">{{ d.snippet|truncate(200) }}</div>{% endif %}</li>
+      {% endfor %}
+    </ul>
+    {% endfor %}
+    <p class="muted small">Совпадение номера в тексте страницы — повод открыть документ, а не вывод. Суды и торги проверяйте по первоисточнику.</p>
+  {% endif %}
+</article>
+{% if gpzu_oob is defined and gpzu_oob %}{% with oob=true %}{% include "_gpzu.html" %}{% endwith %}{% endif %}

@@ -1,0 +1,10 @@
+{# Автосверка выписки ЕГРН (R12): итог и строки; ФИО — только маской #}
+{% set pc = d.proof_check %}
+<p class="small"><strong>Автосверка выписки:</strong>
+  <span class="badge {{ {'ok':'v-ok','mismatch':'v-stop','unknown':'v-check'}.get(pc.verdict, '') }}">{{ {'ok':'совпадает','mismatch':'расхождение','unknown':'не сверено'}.get(pc.verdict, pc.verdict) }}</span>
+  {{ pc.label }}</p>
+{% if pc.get('items') %}
+<ul class="small proof-check">
+  {% for i in pc.get('items') %}<li class="{{ {'ok':'','mismatch':'err','warn':'warn','unknown':'muted'}.get(i.status, '') }}">{{ {'ok':'✓','mismatch':'✗','warn':'!','unknown':'?'}.get(i.status, '·') }} {{ i.label }}: {{ i.note }}</li>{% endfor %}
+</ul>
+{% endif %}

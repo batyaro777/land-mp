@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Переписка — {{ brand }}{% endblock %}
+{% block content %}
+<article class="narrow">
+  <hgroup>
+    <h2>Переписка по объявлению <a href="/l/{{ conn.listing_id }}"><code>{{ listing.cad_num if listing else conn.listing_id }}</code></a></h2>
+    <p>{% if is_owner %}Пишет <strong>{{ (other.brand or other.name) if other else '—' }}</strong> <span class="muted small">({{ other.role_label|lower if other else '' }})</span>{% else %}Владелец объявления: <strong>{{ (other.brand or other.name) if other else '—' }}</strong>{% endif %}
+      · <span class="badge {{ {'new':'v-check','accepted':'v-ok','declined':'v-stop'}.get(conn.status, '') }}">{{ {'new':'контакты не открыты','accepted':'контакты открыты','declined':'отклонён'}.get(conn.status, conn.status) }}</span>
+      · <a href="/connections" class="small">все запросы контакта</a></p>
+  </hgroup>
+  {% if is_owner and conn.status == 'new' %}
+  <form method="post" action="/connections/{{ conn.id }}/decide" class="inline"><button name="decision" value="accepted" class="sm">Принять и открыть контакты</button> <button name="decision" value="declined" class="outline secondary sm">Отклонить</button></form>
+  <p class="small muted">Переписка работает и без открытия контактов: телефон и email вторая сторона увидит только после «Принять».</p>
+  {% endif %}
+  <div class="thread">
+    {% if not msgs %}<p class="muted small">Сообщений пока нет.</p>{% endif %}
+    {% for m in msgs %}
+    <div class="msg {{ 'mine' if m.from_user_id == user.id else 'theirs' }}">
+      <div class="small muted">{{ 'Вы' if m.from_user_id == user.id else ((other.brand or other.name) if other else '—') }} · {{ m.created_at|dt }}</div>
+      <div style="white-space: pre-line">{{ m.text }}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% if conn.status == 'declined' %}
+  <p class="err small">Запрос контакта отклонён — переписка закрыта.</p>
+  {% else %}
+  {% if sent %}<p class="ok-msg small">Отправлено. Второй стороне ушло уведомление{% if other and (other.telegram_chat_id or other.email) %} (кабинет{% if other.email %}, email{% endif %}{% if other.telegram_chat_id %}, Telegram{% endif %}){% endif %}.</p>{% endif %}
+  <form method="post" action="/connections/{{ conn.id }}/messages">
+    <textarea name="text" rows="3" maxlength="2000" required placeholder="Сообщение{% if not is_owner %} продавцу{% endif %}: вопрос по участку, условия, удобное время звонка"></textarea>
+    <button class="sm">Отправить</button>
+  </form>
+  {% endif %}
+</article>
+{% endblock %}

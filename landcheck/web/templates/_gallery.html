@@ -1,0 +1,48 @@
+{# Фото лота без перехода в карточку: миниатюра в списке → просмотр всех фото поверх страницы (зум 13.11, 17:55). Картинки грузятся с torgi.gov.ru браузером пользователя. #}
+<dialog id="lot-gallery" class="lot-gallery">
+  <button type="button" class="close" aria-label="Закрыть">×</button>
+  <img alt="Фото лота">
+  <div class="nav"><button type="button" class="prev" aria-label="Предыдущее">‹</button><span class="pos small"></span><button type="button" class="next" aria-label="Следующее">›</button></div>
+</dialog>
+<script>
+// Картинка с площадки не загрузилась (из-за рубежа torgi.gov.ru закрыт) — берём через сервер;
+// не вышло и так — убираем миниатюру
+window.lotImgFallback = window.lotImgFallback || function (img) {
+  if (!img.dataset.viaServer && img.dataset.id) {
+    img.dataset.viaServer = '1';
+    img.src = '/tools/torgi-img/' + encodeURIComponent(img.dataset.id);
+    return;
+  }
+  var btn = img.closest('button');
+  if (btn) btn.remove();
+};
+(function () {
+  var dlg = document.getElementById('lot-gallery');
+  if (!dlg || dlg.dataset.ready) return;
+  dlg.dataset.ready = '1';
+  var img = dlg.querySelector('img'), pos = dlg.querySelector('.pos'), list = [], i = 0;
+  var base = {{ img_base|tojson }};
+  img.addEventListener('error', function () {
+    if (!img.dataset.viaServer) { img.dataset.viaServer = '1'; img.src = '/tools/torgi-img/' + encodeURIComponent(list[i]); }
+  });
+  function show() { delete img.dataset.viaServer; img.src = base + list[i]; pos.textContent = (i + 1) + ' из ' + list.length; }
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('[data-gallery]');
+    if (!btn) return;
+    e.preventDefault();
+    try { list = JSON.parse(btn.getAttribute('data-gallery')); } catch (err) { return; }
+    i = parseInt(btn.getAttribute('data-start') || '0', 10) || 0;
+    show();
+    if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open', '');
+  });
+  dlg.querySelector('.close').addEventListener('click', function () { dlg.close(); });
+  dlg.querySelector('.prev').addEventListener('click', function () { i = (i + list.length - 1) % list.length; show(); });
+  dlg.querySelector('.next').addEventListener('click', function () { i = (i + 1) % list.length; show(); });
+  dlg.addEventListener('click', function (e) { if (e.target === dlg) dlg.close(); });
+  document.addEventListener('keydown', function (e) {
+    if (!dlg.open) return;
+    if (e.key === 'ArrowRight') dlg.querySelector('.next').click();
+    if (e.key === 'ArrowLeft') dlg.querySelector('.prev').click();
+  });
+})();
+</script>

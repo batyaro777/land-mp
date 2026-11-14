@@ -1,0 +1,42 @@
+{# Торги рядом за год (ТЗ v3, п. 9), только админу; при pending блок опрашивает /auctions #}
+  {% set au = auctions %}
+  <details class="auctions"{% if au.pending %} hx-get="{{ auctions_url }}" hx-trigger="every 30s" hx-swap="outerHTML"{% endif %}>
+    <summary><strong>Торги рядом за год</strong> <span class="badge mini">внутренний режим</span> — кадастровый район {{ au.district }}:
+      {% if au.pending %}<span class="muted">собираем…</span>{% elif au.error %}<span class="muted">нет данных</span>{% else %}аукционов {{ au.ea_total }}{% if au.ea_total %}{% if au.get('single_total') is not none %}: с борьбой {{ au.succeed_total }}, единственному участнику {{ au.single_total }}, не ушли {{ au.none_total }}{% if au.unknown_total %}, итог неизвестен {{ au.unknown_total }}{% endif %}{% else %}, состоялись {{ au.succeed_total }}, не состоялись {{ au.failed_total }}{% endif %}, идут сейчас {{ au.active_total }}{% endif %}{% endif %}</summary>
+    {% if au.pending %}
+    <p class="muted small">Собираем данные с torgi.gov.ru через RU-шлюз: сайт пропускает один запрос в 6 секунд, на район уходит 2–5 минут. Блок обновится сам.</p>
+    {% elif au.error %}
+    <p class="muted small">{{ au.error }}. <a href="{{ auctions_url }}?refresh=1" hx-get="{{ auctions_url }}?refresh=1" hx-target="closest details" hx-swap="outerHTML">Собрать заново</a>. <a href="{{ au.search_url }}" target="_blank" rel="noopener">Открыть реестр torgi.gov.ru</a> и искать по номеру района «{{ au.district }}».</p>
+    {% else %}
+    {% set ol = au.own_lot %}
+    {% if ol and ol.found %}{% set lot = ol.lot %}
+    <p class="small"><strong>Этот участок на torgi.gov.ru:</strong> <a href="{{ lot.url }}" target="_blank" rel="noopener">лот {{ lot.id }}</a> — {% if lot.notice_3918 %}извещение о предоставлении (ст. 39.18 ЗК: 30 дней на заявки других желающих){% else %}аукцион, {{ lot.kind }}{% endif %}, статус «{{ lot.status_ru }}»{% if lot.price_start %}, старт {{ lot.price_start|money }}{% endif %}{% if lot.price_step %}, шаг {{ lot.price_step|money }}{% endif %}{% if lot.deposit %}, задаток {{ lot.deposit|money }}{% endif %}{% if lot.price_fin %}, итог {{ lot.price_fin|money }}{% endif %}{% if lot.bidd_end %}, заявки до {{ lot.bidd_end }}{% endif %}{% if lot.auction_start %}, торги {{ lot.auction_start }}{% endif %}.{% if calc_url is defined and lot.price_start and not lot.notice_3918 %} <a href="{{ calc_url }}?start={{ lot.price_start|int }}{% if lot.price_step %}&amp;step={{ lot.price_step|int }}{% endif %}{% if lot.area_m2 %}&amp;area={{ lot.area_m2|int }}{% endif %}&amp;kind={{ lot.kind }}&amp;lot_url={{ lot.url|urlencode }}">Расчёт входа по этому лоту</a>{% endif %}</p>
+    {% elif ol and not ol.error %}
+    <p class="muted small">На torgi.gov.ru извещений по этому участку за {{ ol.months }} мес. нет.</p>
+    {% endif %}
+    <p class="small"><strong>Ликвидность:</strong> {{ au.liquidity_text }}.</p>
+    {% if au.sale.with_price or au.rent.with_price %}
+    <table class="facts">
+      <tr><th>Сделка</th><th class="num">Состоялось</th><th class="num">Медиана итога, ₽/м²</th><th class="num">25–75 %, ₽/м²</th><th class="num">Итог к старту</th></tr>
+      {% if au.sale.with_price %}<tr><td>Продажа</td><td class="num">{{ au.sale.count }}</td><td class="num">{{ au.sale.median_rub_m2 }}</td><td class="num">{{ au.sale.p25_rub_m2 }} – {{ au.sale.p75_rub_m2 }}</td><td class="num">{% if au.sale.median_ratio %}×{{ au.sale.median_ratio }}{% else %}—{% endif %}</td></tr>{% endif %}
+      {% if au.rent.with_price %}<tr><td>Аренда (цена за год)</td><td class="num">{{ au.rent.count }}</td><td class="num">{{ au.rent.median_rub_m2 }}</td><td class="num">{{ au.rent.p25_rub_m2 }} – {{ au.rent.p75_rub_m2 }}</td><td class="num">{% if au.rent.median_ratio %}×{{ au.rent.median_ratio }}{% else %}—{% endif %}</td></tr>{% endif %}
+    </table>
+    {% endif %}
+    {% if au['items'] %}
+    <table class="facts">
+      <tr><th>Лот</th><th>Сделка · ВРИ</th><th class="num">Площадь</th><th class="num">Старт</th><th class="num">Итог</th><th class="num">₽/м²</th><th>Дата</th>{% if calc_url is defined %}<th></th>{% endif %}</tr>
+      {% for i in au['items'] %}
+      <tr><td><a href="{{ i.url }}" target="_blank" rel="noopener"><code>{{ i.cad_num }}</code></a></td>
+        <td class="small">{{ i.kind }}{% if i.vri %} · {{ i.vri|truncate(40) }}{% endif %}</td>
+        <td class="num">{% if i.area_m2 %}{{ (i.area_m2 / 100)|round(1) }} сот.{% else %}—{% endif %}</td>
+        <td class="num">{% if i.price_start %}{{ i.price_start|money }}{% else %}—{% endif %}</td>
+        <td class="num">{% if i.price_fin %}{{ i.price_fin|money }}{% else %}—{% endif %}</td>
+        <td class="num">{{ i.rub_m2 or '—' }}</td>
+        <td class="small">{{ i.date or '—' }}</td>
+        {% if calc_url is defined %}<td class="small no-print"><a href="{{ calc_url }}?start={{ i.price_start|int if i.price_start else '' }}{% if i.area_m2 %}&amp;area={{ i.area_m2|int }}{% endif %}&amp;kind={{ i.kind }}&amp;lot_url={{ i.url|urlencode }}" title="Калькулятор входа в торги по этому лоту">расчёт</a></td>{% endif %}</tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+    <p class="muted small">{{ au.source }}{% if au.sample_note %}; {{ au.sample_note }}{% endif %}. Аренда — годовая плата, не выкуп; «итог к старту» — во сколько раз цена победителя выше начальной (у аренды старт — минимальная годовая плата, поэтому рост бывает кратным). Данные на {{ au.as_of[:10] }}; <a href="{{ au.search_url }}" target="_blank" rel="noopener">реестр torgi.gov.ru</a> · <a href="{{ auctions_url }}?refresh=1" hx-get="{{ auctions_url }}?refresh=1" hx-target="closest details" hx-swap="outerHTML">обновить</a>{% if calc_url is defined %} · <a href="{{ calc_url }}">калькулятор входа в торги</a>{% endif %}. Это ориентир ликвидности и цен государственной земли, а не оценка участка (ТЗ v3, п. 9).</p>
+    {% endif %}
+  </details>

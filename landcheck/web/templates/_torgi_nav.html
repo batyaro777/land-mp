@@ -1,0 +1,8 @@
+{# Навигация раздела «Торги» и выбор региона #}
+<nav class="torgi-nav no-print">
+  <a href="/tools/torgi-scan{% if region %}?region={{ region }}{% endif %}" class="{{ 'active' if tab == 'scan' else '' }}">Лоты</a>
+  <a href="/tools/torgi-liquidity{% if region %}?region={{ region }}{% endif %}" class="{{ 'active' if tab == 'liquidity' else '' }}">Ликвидность и рынок</a>
+  <a href="/tools/free-land" class="{{ 'active' if tab == 'free' else '' }}">Свободная земля</a>
+  <a href="/tools/torgi-deals" class="{{ 'active' if tab == 'deals' else '' }}">Мои сделки</a>
+  <a href="/tools/torgi-calc" class="{{ 'active' if tab == 'calc' else '' }}">Калькулятор входа</a>
+</nav>

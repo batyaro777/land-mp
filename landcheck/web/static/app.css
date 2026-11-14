@@ -1,0 +1,199 @@
+:root { --pico-font-size: 95%; }
+.muted { color: var(--pico-muted-color); }
+.small { font-size: 0.85em; }
+.err { color: #b42318; }
+.warn { color: #8a5a00; }
+.narrow { max-width: 560px; margin: 2rem auto; }
+.grid.two { grid-template-columns: 1fr 1fr; }
+@media (max-width: 900px) { .grid.two { grid-template-columns: 1fr; } }
+.badge { display: inline-block; padding: 0.1em 0.6em; border-radius: 999px; font-size: 0.8em; font-weight: 600; background: #e5e7eb; color: #111; white-space: nowrap; }
+.badge.big { font-size: 0.55em; vertical-align: middle; }
+.v-stop { background: #fde2e1; color: #b42318; border-color: #b42318; }
+.v-check { background: #fff1cc; color: #8a5a00; border-color: #8a5a00; }
+.v-ok { background: #d9ead3; color: #1f6b2a; border-color: #1f6b2a; }
+a[role=button].v-stop, a[role=button].v-check, a[role=button].v-ok { color: inherit; }
+.sm { padding: 0.3em 0.8em; font-size: 0.85em; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 0.75rem 1.5rem; align-items: center; margin: 0.5rem 0 1rem; }
+.toolbar form.inline { display: inline; margin: 0; }
+.toolbar a.active { font-weight: 700; }
+.table-wrap { overflow-x: auto; }
+table.results { font-size: 0.85em; }
+table.results td, table.results th { vertical-align: top; }
+table.results .num { text-align: right; white-space: nowrap; }
+table.results .reasons { min-width: 320px; max-width: 520px; }
+table.results .reasons ul { margin: 0; padding-left: 0; list-style: none; }
+table.results .reasons li { margin: 0 0 0.25em; padding-left: 1em; text-indent: -1em; }
+.dot { display: inline-block; width: 0.6em; height: 0.6em; border-radius: 50%; margin-right: 0.4em; background: #999; }
+.dot.stop { background: #b42318; } .dot.check { background: #d59b00; }
+.check-card { padding: 0.6rem 0; border-bottom: 1px solid var(--pico-muted-border-color); }
+table.facts th { width: 40%; text-align: left; font-weight: 500; color: var(--pico-muted-color); }
+table.facts td, table.facts th { padding: 0.3em 0.5em; font-size: 0.9em; }
+#map { height: 380px; border-radius: 8px; }
+.flag { padding: 0.5rem 0.75rem; margin: 0.4rem 0; border-left: 4px solid #999; background: #fafafa; }
+.flag.stop { border-color: #b42318; } .flag.check { border-color: #d59b00; } .flag.ok { border-color: #1f6b2a; }
+.restrictions { white-space: pre-line; max-height: 14em; overflow: auto; }
+.checklist { padding-left: 1.2em; } .checklist li { margin: 0.2em 0; }
+.report-brand { display: flex; justify-content: space-between; align-items: center; gap: 1rem; border-bottom: 2px solid #2E75B6; margin-bottom: 1rem; padding-bottom: 0.3rem; }
+.brand-line { display: flex; align-items: center; gap: 0.6rem; }
+.brand-logo { height: 40px; max-width: 160px; object-fit: contain; }
+.print-only { display: none !important; }
+.ok-msg { color: #1f6b2a; }
+.inline-check { display: inline-flex; align-items: center; gap: 0.3rem; margin-left: 1rem; }
+@media print {
+  .no-print, header, footer form, .mic, .mic-status, [aria-busy="true"] { display: none !important; }
+  .print-only { display: flex !important; }
+  main { max-width: 100%; }
+  article { box-shadow: none; border: 1px solid #ddd; break-inside: avoid; }
+  #map { height: 300px; }
+  details { display: block; } details > summary { list-style: none; }
+  a { text-decoration: none; color: inherit; }
+}
+.photos { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.4rem; }
+.photos img { width: 100%; aspect-ratio: 4/3; object-fit: cover; border-radius: 6px; }
+.photos .inline-check { margin: 0 0.5rem 0 0; }
+
+/* цель на трёх уровнях: категория · ВРИ · терзона */
+.badge.mini { font-size: 0.7em; padding: 0.05em 0.45em; margin-right: 0.15em; }
+td.goal-cell { white-space: nowrap; }
+article.goal { border-left: 4px solid #2E75B6; }
+table.goal-table th { width: 32%; }
+
+/* локация */
+article.location { border-left: 4px solid #C4663A; }
+ul.loc-list { list-style: none; padding-left: 0; margin: 0.3rem 0 0.8rem; }
+ul.loc-list li { margin: 0.25rem 0; font-size: 0.92em; }
+article.region { border-left: 4px solid #2E75B6; }
+
+/* голосовой ввод */
+.mic-wrap { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: flex-start; margin-bottom: var(--pico-spacing); }
+.mic-wrap input, .mic-wrap textarea { flex: 1 1 240px; margin-bottom: 0; }
+.mic-wrap .mic { flex: 0 0 auto; white-space: nowrap; }
+.mic-wrap .mic-status { flex-basis: 100%; min-height: 1em; }
+.mic.recording { background: #fde2e1; border-color: #b42318; color: #b42318; }
+
+/* вкладки входа */
+nav.tabs { display: flex; gap: 1.2rem; margin-bottom: 1rem; border-bottom: 1px solid var(--pico-muted-border-color); }
+nav.tabs a { padding: 0.3rem 0; text-decoration: none; border-bottom: 2px solid transparent; }
+nav.tabs a.active { border-color: #2E75B6; font-weight: 600; }
+
+/* подтверждение права и модерация */
+article.verify { border-left: 4px solid #1f6b2a; }
+form.decide { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+form.decide input { flex: 1 1 240px; margin-bottom: 0; }
+
+/* витрина */
+form.filters { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+form.filters input, form.filters select { flex: 1 1 160px; margin-bottom: 0; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem; }
+.card { margin: 0; }
+.card-img { width: 100%; aspect-ratio: 4/3; object-fit: cover; border-radius: 6px; margin-bottom: 0.5rem; }
+.card h4 { margin-bottom: 0.3rem; }
+
+/* вопросы покупателя */
+fieldset { margin-bottom: 1rem; }
+fieldset legend { margin-bottom: 0.3rem; }
+fieldset label { display: inline-block; margin-right: 1.2rem; }
+.onboarding { background: #f3f6fb; border-left: 4px solid #2E75B6; padding: 0.75rem 1rem; border-radius: 6px; margin: 0.5rem 0 1rem; }
+.onboarding ol { margin-bottom: 0.5rem; }
+.check-card.unread { border-left: 4px solid #2E75B6; padding-left: 0.75rem; }
+table.facts.actions th { width: auto; font-weight: 600; color: inherit; }
+table.facts.actions td { vertical-align: top; width: 33%; }
+
+/* карта: кнопки +/− Leaflet под Pico съезжали (экран Андрея, зум 28.10, п. 1.8) */
+.leaflet-container a[role=button], .leaflet-bar a, .leaflet-bar a:hover, .leaflet-bar a:focus {
+  display: block; width: 30px; height: 30px; line-height: 30px; padding: 0; margin: 0;
+  border: 0; border-radius: 0; background: #fff; color: #000; font-size: 22px; font-weight: 700;
+  text-align: center; text-decoration: none; box-shadow: none;
+}
+.leaflet-bar a + a { border-top: 1px solid #ccc; }
+.leaflet-bar a.leaflet-disabled { color: #bbb; }
+.leaflet-container .leaflet-control-attribution a { display: inline; width: auto; height: auto; line-height: inherit; font-size: inherit; font-weight: 400; }
+
+/* таблица соседей: колонки сжимались в три строки (зум 28.10, п. 1.12) */
+table.facts.neighbors th:first-child, table.facts.neighbors td:first-child { width: 38%; }
+table.facts.neighbors .num { white-space: nowrap; text-align: right; }
+table.results td.cad { white-space: nowrap; }
+article.rights { border-left: 4px solid #8a5a00; }
+article.rights textarea { font-size: 0.85em; }
+article.gpzu { border-left: 4px solid #2E75B6; }
+article.gpzu textarea { font-size: 0.85em; }
+article.pzz ul { margin: 0.2em 0 0.6em 1.1em; }
+/* Переписка по запросу контакта */
+.thread { display: flex; flex-direction: column; gap: 0.5rem; margin: 0.5rem 0 1rem; }
+.thread .msg { max-width: 85%; padding: 0.5rem 0.75rem; border-radius: 10px; background: #f1f3f5; }
+.thread .msg.mine { align-self: flex-end; background: #e3eefb; }
+/* Загрузка файлов перетягиванием (dropzone.js): прозрачный input лежит поверх зоны,
+   поэтому клик, фокус и проверка required остаются родными. */
+.dropzone { position: relative; border: 2px dashed var(--pico-muted-border-color); border-radius: 8px; padding: 0.9rem 1rem; margin: 0.25rem 0 0.75rem; background: var(--pico-card-background-color); transition: border-color .15s, background .15s; }
+.dropzone.over { border-color: #2E75B6; background: #eef4fb; }
+.dropzone.has-files { border-style: solid; border-color: #1f6b2a; }
+.dropzone .dz-input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; opacity: 0; cursor: pointer; z-index: 1; }
+.dropzone .dz-hint { font-size: 0.9em; color: var(--pico-muted-color); pointer-events: none; }
+.dropzone .dz-hint::before { content: '⇩ '; }
+.dropzone .dz-files { list-style: none; margin: 0.4rem 0 0; padding: 0; position: relative; z-index: 2; font-size: 0.9em; }
+.dropzone .dz-files li { display: flex; align-items: center; gap: 0.5rem; padding: 0.15rem 0; }
+.dropzone .dz-rm { width: auto; margin: 0; padding: 0 0.5rem; line-height: 1.3; font-size: 1em; background: transparent; color: #b42318; border: 1px solid transparent; }
+.dropzone .dz-rm:hover { border-color: #b42318; }
+.dropzone .dz-note { position: relative; z-index: 2; margin-top: 0.3rem; }
+
+/* анализатор торгов */
+.torgi-nav { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 0.4rem 1.6rem; margin: 0 0 0.8rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--pico-muted-border-color); }
+.torgi-nav a { text-decoration: none; }
+.torgi-nav a.active { font-weight: 700; border-bottom: 2px solid #2E75B6; }
+.torgi-filter .grid { align-items: end; }
+.torgi-filter details { margin: 0.2rem 0 0.6rem; }
+.torgi-groups { display: flex; flex-wrap: wrap; gap: 0.2rem 0.4rem; margin: 0.4rem 0; }
+.torgi-groups .inline-check { margin-left: 0; margin-right: 0.8rem; }
+.torgi-sync { margin: 0.4rem 0 0.8rem; padding: 0.5rem 0.75rem; background: #fafafa; border-left: 4px solid #2E75B6; }
+.torgi-sync p { margin: 0 0 0.4rem; }
+.torgi-sync form.inline { display: inline; margin: 0 0.4rem 0 0; }
+table.torgi td.cad { white-space: normal; min-width: 190px; max-width: 270px; }
+table.torgi td.cad code { white-space: nowrap; }
+table.torgi td.num div.small { white-space: normal; max-width: 9.5rem; margin-left: auto; }
+table.torgi td, table.torgi th { padding-left: 0.45rem; padding-right: 0.45rem; }
+table.torgi .reasons { min-width: 200px; max-width: 340px; }
+table.torgi tr.hl td { background: rgba(46, 117, 182, 0.12); }
+table.torgi .reasons li, ul.checklist li:has(.dot) { list-style: none; }
+table.results.econ { max-width: 760px; }
+table.results.econ td, table.results.econ th { padding: 0.35em 0.6em; }
+.dot.ok { background: #1f6b2a; }
+#torgi-map { height: 420px; border-radius: 8px; margin: 0.4rem 0 1rem; }
+.torgi-inline { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: end; margin-top: 0.6rem; }
+.torgi-inline label { margin: 0; max-width: 9rem; }
+.torgi-inline input { margin: 0; }
+
+/* посадочная страница проверки участка */
+.lp-hero { background: #f7f5f0; border-radius: 12px; padding: 2rem 2rem 1.2rem; margin: 0.5rem 0 2rem; border-left: 6px solid #2E75B6; }
+.lp-hero h1 { color: #2b2f33; margin-bottom: 0.6rem; font-size: 2rem; }
+.lp-kicker { color: #C4663A; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; font-size: 0.8em; margin-bottom: 0.3rem; }
+.lp-lead { font-size: 1.08em; max-width: 60rem; }
+.lp-form { display: grid; grid-template-columns: 2fr 2fr auto; gap: 1rem; align-items: end; margin: 1rem 0 0.4rem; }
+.lp-form label, .lp-form input, .lp-form select, .lp-form button { margin-bottom: 0; }
+.lp-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1rem; }
+.lp-grid.three { grid-template-columns: repeat(3, 1fr); }
+.lp-grid article { margin: 0; padding: 1rem; border-top: 3px solid #2E75B6; }
+.lp-grid article h5 { margin-bottom: 0.4rem; color: #2b2f33; }
+.lp-grid article p { font-size: 0.9em; margin: 0; }
+@media (max-width: 1000px) { .lp-grid, .lp-grid.three { grid-template-columns: 1fr 1fr; } .lp-form { grid-template-columns: 1fr; } }
+@media (max-width: 600px) { .lp-grid, .lp-grid.three { grid-template-columns: 1fr; } .lp-hero { padding: 1.2rem; } }
+
+/* карта объявлений с ценами */
+.listing-map { height: 360px; border-radius: 8px; margin: 0.4rem 0 0.6rem; }
+.leaflet-tooltip.price-tip { font-weight: 600; padding: 1px 6px; border-radius: 10px; border: 1px solid #2E75B6; color: #1d4f7c; }
+.leaflet-tooltip.price-tip.current { border-color: #C4663A; color: #8a3f1c; background: #fff4ec; }
+.leaflet-tooltip.price-tip::before { display: none; }
+details.market-map { margin-bottom: 1rem; }
+button.copy { all: unset; cursor: pointer; font-size: 0.8em; padding: 0 0.25rem; opacity: 0.6; }
+button.copy:hover, button.copy:focus-visible { opacity: 1; outline: 1px dotted currentColor; }
+.sync-run { border-left: 4px solid #2E75B6; padding: 0.5rem 0.75rem; margin: 0.5rem 0; background: rgba(46, 117, 182, 0.08); }
+.sync-run progress { margin: 0.4rem 0; }
+button.lot-thumb { all: unset; cursor: zoom-in; position: relative; display: inline-block; vertical-align: top; margin: 0 0.4rem 0.2rem 0; }
+button.lot-thumb img { width: 64px; height: 48px; object-fit: cover; border-radius: 4px; display: block; }
+button.lot-thumb span { position: absolute; right: 2px; bottom: 2px; font-size: 0.7rem; background: rgba(0, 0, 0, 0.6); color: #fff; padding: 0 3px; border-radius: 3px; }
+button.lot-thumb.big img { width: 160px; height: 110px; }
+.lot-photos { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: 0.5rem 0; }
+dialog.lot-gallery { max-width: min(96vw, 1100px); padding: 0.5rem; }
+dialog.lot-gallery img { max-width: 100%; max-height: 78vh; display: block; margin: 0 auto; }
+dialog.lot-gallery .nav { display: flex; justify-content: center; align-items: center; gap: 1rem; margin-top: 0.4rem; }
+dialog.lot-gallery button { width: auto; margin: 0; padding: 0.2rem 0.8rem; }
+dialog.lot-gallery .close { float: right; }

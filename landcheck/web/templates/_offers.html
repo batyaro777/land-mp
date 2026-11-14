@@ -1,0 +1,21 @@
+{# Предложения продавцов под запрос покупателя (R11) #}
+{% if offers %}
+<article id="offers">
+  <h4>Предложения под ваш запрос ({{ offers|length }})</h4>
+  <p class="muted small">Продавцы и брокеры предложили эти участки под ваш запрос. Вердикт — наша быстрая проверка «цель × категория × ВРИ». Контакты открываются только после вашего согласия.</p>
+  {% for o in offers %}
+  {% set lvl = o.verdict.level if o.fit and o.verdict else 'проверить' %}
+  <div class="flag {{ {'стоп':'stop','проверить':'check','ок':'ok'}[lvl] }}">
+    <strong>{% if o.listing %}<a href="/l/{{ o.listing.id }}">{{ o.title }}</a>{% else %}{{ o.title }}{% endif %}</strong>
+    {% if o.price_rub %} · {{ o.price_rub|money }}{% endif %}{% if o.area_sotka %} · {{ o.area_sotka }} сот.{% endif %}{% if o.address %} · <span class="small">{{ o.address }}</span>{% endif %}
+    <div class="small">{% if o.fit and o.verdict %}<span class="badge v-{{ {'стоп':'stop','проверить':'check','ок':'ok'}[o.verdict.level] }}">{{ o.verdict.level }}</span> {{ o.verdict.text }}{% else %}<span class="badge v-check">вне параметров запроса</span> цена, площадь или район не совпадают с вашим запросом{% endif %}</div>
+    <div class="small muted">от {{ o.seller }}{% if o.offer.note %}: «{{ o.offer.note }}»{% endif %} · {{ o.offer.created_at|day }}</div>
+    {% if o.offer.status == 'new' %}
+    <form method="post" action="/offers/{{ o.offer.id }}/decide" class="inline"><button name="decision" value="accepted" class="sm">Интересно, открыть контакты</button> <button name="decision" value="declined" class="outline secondary sm">Не подходит</button></form>
+    {% elif o.offer.status == 'accepted' %}
+    <p class="small"><span class="badge v-ok">контакты открыты</span> {{ o.contact or 'продавец не указал контакт' }}</p>
+    {% else %}<p class="small muted">отклонено</p>{% endif %}
+  </div>
+  {% endfor %}
+</article>
+{% endif %}
