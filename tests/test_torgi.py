@@ -150,6 +150,11 @@ def test_region_code_goes_to_torgi_without_leading_zero():
 
     assert torgi.subject_code("04") == "4" and torgi.subject_code("40") == "40"
     assert torgi.subject_code("4") == "4" and torgi.subject_code("") == ""
+    # прод 17.11.2026: Крым (кадастровый 90) на сайте — 91, Севастополь (91) — 92
+    assert torgi.subject_code("90") == "91" and torgi.subject_code("91") == "92"
+    assert torgi.region_from_subject("91") == "90" and torgi.region_from_subject("92") == "91"
+    assert torgi.region_from_subject("4") == "04" and torgi.region_from_subject(None) is None
+    assert torgi.region_from_subject(40) == "40"
     seen: list[dict] = []
 
     def handler(req: httpx.Request) -> httpx.Response:

@@ -284,7 +284,7 @@ def lot_row(card: dict[str, Any]) -> dict[str, Any] | None:
         return None
     cad = torgi.cad_num_of(card)
     quarter = quarter_of(cad) or quarter_from_text(card)
-    region = card.get("subjectRFCode") or torgi.region_of(cad or quarter)
+    region = torgi.region_from_subject(card.get("subjectRFCode")) or torgi.region_of(cad or quarter)
     vri = torgi.vri_of(card)
     category = (card.get("category") or {}).get("name")
     type_code, type_name = _bidd_type(card)

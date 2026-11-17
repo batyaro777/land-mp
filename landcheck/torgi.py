@@ -74,12 +74,28 @@ def region_of(cad_num: str | None) -> str | None:
     return d.split(":")[0] if d else None
 
 
+# Где номер субъекта на torgi.gov.ru не совпадает с кадастровым кодом региона (прод, 17.11.2026,
+# Клавдий 7453ae3b): кадастровый 90 (Республика Крым) сайт хранит как 91, кадастровый 91
+# (Севастополь) — как 92. По «90» сайт отдавал 0 лотов, а «91» вернул бы Крым вместо Севастополя.
+_TORGI_SUBJECT = {"90": "91", "91": "92"}
+_FROM_TORGI = {v: k for k, v in _TORGI_SUBJECT.items()}
+
+
+def region_from_subject(code: Any) -> str | None:
+    """Код субъекта из ответа torgi.gov.ru («4», «91») → наш кадастровый код («04», «90»)."""
+    if code in (None, ""):
+        return None
+    c = str(code).strip().zfill(2)
+    return _FROM_TORGI.get(c, c)
+
+
 def subject_code(region: str | None) -> str:
     """Код субъекта для запроса к torgi.gov.ru — без ведущего нуля. У нас код региона — две
     цифры, как в кадастровом номере («04»), а сайт хранит регионы 01–09 как «1»–«9»: прод,
     12.11.2026, Республика Алтай — поиск с «04» вернул 0 лотов, с «4» — 2096. В ответе код
     приходит так же, без нуля; в базу он пишется двумя цифрами (`torgi_scan.lot_row`)."""
     r = (region or "").strip()
+    r = _TORGI_SUBJECT.get(r.zfill(2), r) if r.isdigit() else r
     return str(int(r)) if r.isdigit() else r
 
 
