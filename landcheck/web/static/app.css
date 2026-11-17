@@ -158,6 +158,10 @@ table.results.econ { max-width: 760px; }
 table.results.econ td, table.results.econ th { padding: 0.35em 0.6em; }
 .dot.ok { background: #1f6b2a; }
 #torgi-map { height: 420px; border-radius: 8px; margin: 0.4rem 0 1rem; }
+#liq-map { height: 520px; border-radius: 8px; margin: 0.4rem 0 1rem; }
+.map-key { display: inline-block; width: 0.8em; height: 0.8em; border-radius: 2px; vertical-align: -0.05em; opacity: 0.8; }
+.map-key.hot { background: #b42318; } .map-key.mid { background: #d59b00; }
+.map-key.cold { background: #1f6b2a; } .map-key.none { background: #8a8a8a; }
 .torgi-inline { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: end; margin-top: 0.6rem; }
 .torgi-inline label { margin: 0; max-width: 9rem; }
 .torgi-inline input { margin: 0; }

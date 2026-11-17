@@ -788,7 +788,8 @@ def test_sync_skips_notice_cards_and_counts_auctions_only(client):  # noqa: F811
     _admin(client)
     page = client.get("/tools/torgi-scan?region=40&roi=40").text
     assert "Всего 12" in page and "IA_0" not in page
-    assert "Извещений о предоставлении (ст. 39.18): 35, из них идут 5" in page
+    assert "Извещений о предоставлении (ст. 39.18): 35, из них идут " in page
+    assert '<a href="/tools/torgi-scan?region=40&amp;form=notice">5</a>' in page  # чат 17.11 №79
     assert "сейчас 5 извещений о предоставлении" in page and "form=notice" in page
     notices = client.get("/tools/torgi-scan?region=40&form=notice").text
     assert "Всего 5" in notices and "извещений 5" in notices and "извещение 39.18" in notices
@@ -1020,3 +1021,85 @@ def test_scan_all_regions_one_list(client):  # noqa: F811
     assert client.get("/tools/torgi-scan/export.kml?region=all&roi=40").status_code == 200
     lot = client.get("/tools/torgi-lot/KAR_1?region=all&roi=40").text
     assert '<a href="/tools/torgi-scan?roi=40&amp;region=all">' in lot
+
+
+def test_liquidity_links_bids_slider_and_map(client):  # noqa: F811
+    """Чат 17.11 (№72–75, 78–79): числа таблицы ведут к лотам, ползунок «заявок не меньше N»,
+    заголовок говорит, что это медиана, идущие извещения открываются, карта районов."""
+    fake = _seed(client)
+    _sync(fake, provider=FakeNspd())
+    _admin(client)
+    page = client.get("/tools/torgi-liquidity?region=40").text
+    assert "Заявок на лот, медиана" in page
+    assert "/tools/torgi-history?region=40&amp;d=40:13&amp;outcome=none" in page
+    assert "/tools/torgi-history?region=40&amp;d=40:13&amp;outcome=sold" in page
+    assert "/tools/torgi-scan?region=40&amp;d=40:13&amp;form=all" in page
+    assert 'id="liq-map"' in page and '"key": "40:13"' in page  # кружок по идущим лотам
+    assert 'type="range" name="bids"' in page
+    hidden = client.get("/tools/torgi-liquidity?region=40&bids=5").text
+    assert "Скрыто районов: 1" in hidden and 'id="liq-map"' not in hidden
+    assert ">Завершённые</a>" in page
+
+
+def test_history_outcomes_winner_and_signals(client):  # noqa: F811
+    """Чат 17.11 (№74, 76, 77): завершённые торги по исходу, кто взял (без имён), почему лот,
+    вероятно, не ушёл: старт выше медианы проданных рядом, жалобы."""
+    from landcheck import torgi_scan
+    from landcheck.web import torgi_sync
+    from landcheck.web.db import session
+
+    fake = _seed(client)
+    _sync(fake, provider=FakeNspd())
+    _admin(client)
+    card = _done(99, "FAILED")
+    card["priceMin"] = 500_000
+    card["hasAppeals"] = True
+    with session() as db:
+        torgi_sync.upsert(db, torgi_scan.lot_row(_full(card, fin=None, applied=0)), NOW, card=True)
+        db.commit()
+    page = client.get("/tools/torgi-history?region=40").text
+    assert "все завершённые 22" in page and "продано с борьбой 15" in page
+    assert "единственному участнику 3" in page and "не ушли 4" in page
+    assert "физлицо" in page and "×1.50" in page and SECRET_NAME not in page
+    none = client.get("/tools/torgi-history?region=40&outcome=none").text
+    assert "40:13:120102:100" in none and "40:13:120102:51" in none
+    assert "40:13:120102:52" not in none  # одна заявка — ушёл единственному участнику
+    assert "старт ×3.3 к медиане проданных в квартале — цена, похоже, завышена" in none
+    assert "по торгам были жалобы (ФАС)" in none
+    empty = client.get("/tools/torgi-history?region=40&d=40:13:120101").text
+    assert "В квартале 40:13:120101 завершённых торгов" in empty
+
+
+def test_places_fill_store_retry_and_map_contour(client):  # noqa: F811
+    """Контуры районов и кварталов: один раз из НСПД в базу, неудача — повтор через сутки;
+    на карте ликвидности рисуется контур, а не кружок."""
+    from landcheck.web import torgi_places
+
+    class Nspd:
+        def __init__(self):
+            self.calls: list[str] = []
+
+        def fetch_division_raw(self, key):
+            self.calls.append(key)
+            if key == "40:99":
+                return None
+            if key == "40:98":
+                raise RuntimeError("timeout")
+            ring = [[36.0, 54.0], [36.1, 54.0], [36.1, 54.1], [36.0, 54.1], [36.0, 54.0]]
+            return {"type": "Polygon", "coordinates": [ring]}
+
+    nspd = Nspd()
+    done = torgi_places.fill(
+        ["40:13", "40:99", "40:98", "40:13", None], provider=nspd, sleep=lambda s: None, now=NOW
+    )
+    assert done == 3 and nspd.calls == ["40:13", "40:99", "40:98"]
+    have = torgi_places.shapes(["40:13", "40:99", "40:98"])
+    assert have["40:13"]["geometry"]["type"] == "Polygon" and 54.0 < have["40:13"]["lat"] < 54.1
+    assert have["40:99"]["error"] == "в НСПД не найден" and "timeout" in have["40:98"]["error"]
+    assert torgi_places.missing(["40:13", "40:99"], now=NOW + timedelta(hours=1)) == []
+    assert torgi_places.missing(["40:13", "40:99"], now=NOW + timedelta(days=2)) == ["40:99"]
+    fake = _seed(client)
+    _sync(fake, provider=FakeNspd())
+    _admin(client)
+    page = client.get("/tools/torgi-liquidity?region=40").text
+    assert '"type": "Polygon"' in page

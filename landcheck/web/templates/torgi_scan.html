@@ -24,7 +24,7 @@
 <form method="get" class="torgi-filter no-print">
   <div class="grid">
     <label>Регион — название или код
-      <input name="region" list="torgi-regions" autocomplete="off" placeholder="например 24 или Красноярский" value="{% if all_mode %}все — {{ region_name }}{% elif region %}{{ region }} — {{ region_name }}{% endif %}" onfocus="this.select()" onchange="this.form.submit()">
+      <input name="region" list="torgi-regions" autocomplete="off" placeholder="например 24 или Красноярский" value="{% if all_mode %}все — {{ region_name }}{% elif region %}{{ region }} — {{ region_name }}{% endif %}" onfocus="this.dataset.was = this.value; this.value = ''" onblur="if (!this.value) this.value = this.dataset.was || ''" onchange="this.form.submit()">
       <datalist id="torgi-regions">
         <option value="все — все собранные регионы">одним списком</option>
         {% for r in regions %}<option value="{{ r.code }} — {{ r.name }}">{{ 'собран' if r.synced else '' }}</option>{% endfor %}
@@ -140,7 +140,7 @@ document.querySelectorAll('form.torgi-filter select:not([onchange]), form.torgi-
 {% set c = result.counts %}
 <div class="toolbar no-print">
   <div>
-    <a href="/tools/torgi-scan?{{ qs_nosort }}" role="button" class="outline sm secondary">Всего {{ result.total }}</a>
+    <a href="/tools/torgi-scan?{{ qs_nosort }}" role="button" class="outline sm secondary">Всего {{ result.total }}</a>{% if result.shown is defined and result.shown != result.total %} <span class="small">показано {{ result.shown }}</span>{% endif %}
     <span class="badge v-ok">интересен {{ c.go }}</span>
     <span class="badge v-check">на грани {{ c.edge }}</span>
     <span class="badge v-stop">не подходит {{ c.no }}</span>

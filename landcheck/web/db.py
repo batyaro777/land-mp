@@ -446,6 +446,21 @@ class TorgiSync(Base):
     stats: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
+class TorgiPlace(Base):
+    """Границы кадастрового района или квартала из НСПД — для карты ликвидности (зум 13.11,
+    36:24; чат 17.11 №75: «карту кварталов сделать интерактивную»). Контур упрощён до ~20 м,
+    точка — центр контура. Не нашли или НСПД не ответил — `error`, повтор не раньше суток."""
+
+    __tablename__ = "torgi_place"
+
+    key: Mapped[str] = mapped_column(String(24), primary_key=True)  # 40:13 или 40:13:120101
+    geometry: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lon: Mapped[float | None] = mapped_column(Float, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class TorgiMarket(Base):
     """Слой рынка: цена перепродажи за сотку по кварталу или району (как полигоны эксперта в
     Google My Maps: «240 — край по торгам, рынок 320–350») и срок экспозиции. Источник —

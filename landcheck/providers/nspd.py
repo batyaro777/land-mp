@@ -141,6 +141,18 @@ class LiveNspdProvider:
                 payload["errors"].append(f"{label} не проверен: {type(e).__name__}: {e}")
         return payload
 
+    def fetch_division_raw(self, key: str) -> dict[str, Any] | None:
+        """Контур кадастрового района или квартала по номеру (`40:13`, `40:13:120101`) —
+        GeoJSON-геометрия в долготе и широте; не нашли — None."""
+        from pynspd.map_types.enums import ThemeId
+
+        feat = self._client().find(key, ThemeId.CADASTRAL_DIVISION)
+        if feat is None or feat.geometry is None:
+            return None
+        if feat.geometry.type not in ("Polygon", "MultiPolygon"):
+            return None
+        return feat.geometry.model_dump(by_alias=True, mode="json")
+
     # --- окружение участка (модуль «Локация», по запросу из отчёта) ------------------------
     def fetch_area_raw(
         self,

@@ -27,7 +27,7 @@ from landcheck import ruproxy, torgi, torgi_calc, torgi_scan
 from landcheck.models import Purpose
 from landcheck.models import Request as CheckRequest
 from landcheck.regions import CADASTRAL_REGIONS
-from landcheck.web import jobs, torgi_sync
+from landcheck.web import jobs, torgi_places, torgi_sync
 from landcheck.web.app import render, require_user
 from landcheck.web.config import settings
 from landcheck.web.db import (
@@ -797,26 +797,240 @@ def torgi_liquidity_page(request: Request, user: TorgiDep):
         "phase_ru": PHASE_RU,
         "q": q,
     }
+    bids = int(min(max(_num(q.get("bids")) or 0, 0), MAX_BIDS))
+    ctx["bids"] = bids
     if not region:
         return render(request, "torgi_liquidity.html", rows=[], sync=None, layer=[], **ctx)
     lots = torgi_sync.lots_of(region, months=settings.torgi_scan_months)
     if place:
         lots = [x for x in lots if (x.get("cad_num") or "").startswith(place)]
     rows = torgi_scan.liquidity(lots, level=level, group=group)
+    hidden_bids = 0
+    if bids:  # чат 17.11 №72: «ползунок — выбрать минимальное количество заявок»
+        kept = [r for r in rows if (r.get("applied_median") or 0) >= bids]
+        hidden_bids = len(rows) - len(kept)
+        rows = kept
+    rows = rows[:400]
     layer = _layer(region)
     by_scope: dict[str, list[dict[str, Any]]] = {}
     for m in layer:
         by_scope.setdefault(m["scope"], []).append(m)
+    places, points, pending = _map_data(rows, lots, level=level, group=group)
     return render(
         request,
         "torgi_liquidity.html",
-        rows=rows[:400],
+        rows=rows,
+        hidden_bids=hidden_bids,
+        places=places,
+        points=points,
+        places_pending=pending,
         total=torgi_scan.stats_of(lots),
         names=district_names(lots),
         sync=torgi_sync.state_of(region),
         layer=sorted(layer, key=lambda m: (m["scope"], m["kind"], m.get("vri_group") or "")),
         by_scope=by_scope,
         sotka=torgi_scan.SOTKA,
+        **ctx,
+    )
+
+
+MAX_BIDS = 10
+MAX_MAP_POINTS = 1500
+
+
+def _map_data(
+    rows: list[dict[str, Any]],
+    lots: list[dict[str, Any]],
+    *,
+    level: str,
+    group: str | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
+    """Карта ликвидности (зум 13.11, 36:24; чат 17.11 №75): районы или кварталы цветом по
+    индексу, точки идущих лотов. Контуры — из НСПД через базу; пока контура нет, место
+    рисуется кружком в середине его идущих лотов. Возвращает места, точки и сколько контуров
+    ещё догружается."""
+    keys = [r["key"] for r in rows]
+    have = torgi_places.shapes(keys)
+    pending = torgi_places.start_fill(keys)
+    spots: dict[str, list[tuple[float, float]]] = {}
+    points = []
+    for lot in lots:
+        if lot.get("lat") is None or lot.get("lon") is None:
+            continue
+        if group and lot.get("vri_group") != group:
+            continue
+        if lot.get("status") not in torgi.ACTIVE or torgi_scan.is_notice(lot):
+            continue
+        key = lot.get(level)
+        if key:
+            spots.setdefault(key, []).append((lot["lat"], lot["lon"]))
+        if len(points) < MAX_MAP_POINTS:
+            points.append(
+                {
+                    "id": lot["id"],
+                    "lat": lot["lat"],
+                    "lon": lot["lon"],
+                    "cad": lot.get("cad_num"),
+                    "kind": torgi_scan.KIND_RU.get(lot.get("kind") or "", ""),
+                    "price": lot.get("price_start"),
+                }
+            )
+    places = []
+    for r in rows:
+        shape = have.get(r["key"]) or {}
+        lat, lon = shape.get("lat"), shape.get("lon")
+        if lat is None and spots.get(r["key"]):
+            pts = spots[r["key"]]
+            lat = sum(p[0] for p in pts) / len(pts)
+            lon = sum(p[1] for p in pts) / len(pts)
+        if lat is None and not shape.get("geometry"):
+            continue
+        places.append(
+            {
+                "key": r["key"],
+                "index": r.get("index"),
+                "label": r.get("label"),
+                "closed": r.get("closed"),
+                "sold": r.get("sold"),
+                "single": r.get("single"),
+                "none": r.get("none"),
+                "active": r.get("active"),
+                "applied": r.get("applied_median"),
+                "sell": r.get("sell_through"),
+                "geometry": shape.get("geometry"),
+                "lat": lat,
+                "lon": lon,
+            }
+        )
+    return places, points, pending
+
+
+# --- завершённые торги (чат 17.11 №73–77: «открыть, которые не ушли», «что продано, кому») ---
+HISTORY_OUTCOMES = {
+    "closed": ("sold", "single", "none", "failed"),
+    "taken": ("sold", "single"),
+    "sold": ("sold",),
+    "single": ("single",),
+    "none": ("none",),
+    "failed": ("failed",),
+}
+HISTORY_LABELS = {
+    "closed": "все завершённые",
+    "taken": "нашли хозяина",
+    "sold": "продано с борьбой",
+    "single": "единственному участнику",
+    "none": "не ушли",
+    "failed": "итог ещё не прочитан",
+}
+OUTCOME_RU = {
+    "sold": "продан с борьбой",
+    "single": "единственному участнику",
+    "none": "не ушёл",
+    "failed": "не состоялись, итог не прочитан",
+}
+PRICEY_RATIO = 1.3  # старт за сотку выше медианы проданных в месте — «цена, похоже, завышена»
+WEAK_SELL = 0.4  # в районе находят хозяина меньше 40 % участков — «спрос слабый»
+HISTORY_ROWS = 200
+
+
+def history_row(lot: dict[str, Any], stats: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Строка списка завершённых торгов: исход, рост, заявки, кто взял и почему, вероятно,
+    не ушёл (чат 17.11 №76: цена выше рынка, нет спроса, ФАС, отмена; обременения — позже)."""
+    outcome = torgi_scan._outcome(lot)
+    kind = lot.get("kind") or "sale"
+    area = lot.get("area_m2")
+    start, fin = lot.get("price_start"), lot.get("price_fin")
+    start_m2 = start / area if start and area else None
+    growth = fin / start if fin and start and outcome == "sold" else None
+    signals: list[str] = []
+    median, where = None, None
+    for label, key in (("квартале", lot.get("quarter")), ("районе", lot.get("district"))):
+        ks = ((stats.get(key or "") or {}).get(kind)) or {}
+        if (ks.get("n") or 0) >= torgi_scan.MIN_SAMPLE and ks.get("median_m2"):
+            median, where = ks["median_m2"], label
+            break
+    ratio = start_m2 / median if start_m2 and median else None
+    if ratio and ratio >= PRICEY_RATIO and outcome in ("none", "single", "failed"):
+        signals.append(f"старт ×{ratio:.1f} к медиане проданных в {where} — цена, похоже, завышена")
+    district = stats.get(lot.get("district") or "") or {}
+    sell = district.get("sell_through")
+    if outcome in ("none", "failed") and sell is not None and sell < WEAK_SELL:
+        signals.append(f"в районе находят хозяина {sell:.0%} участков — спрос слабый")
+    if lot.get("appeals"):
+        signals.append("по торгам были жалобы (ФАС)")
+    if lot.get("annulled"):
+        signals.append("торги аннулированы")
+    if lot.get("stopped"):
+        signals.append("торги приостанавливали")
+    reason = torgi.FAIL_KIND_RU.get(torgi_scan._fail_kind(lot) or "")
+    return {
+        **lot,
+        "outcome": outcome,
+        "outcome_ru": OUTCOME_RU.get(outcome, outcome),
+        "reason": reason,
+        "start_sotka": start_m2 * torgi_scan.SOTKA if start_m2 else None,
+        "fin_sotka": fin / area * torgi_scan.SOTKA if fin and area else None,
+        "median_sotka": median * torgi_scan.SOTKA if median else None,
+        "ratio": ratio,
+        "growth": growth,
+        "signals": signals,
+    }
+
+
+@router.get("/tools/torgi-history", response_class=HTMLResponse)
+def torgi_history_page(request: Request, user: TorgiDep, page: int = 1):
+    q = request.query_params
+    region = _region_code(q.get("region")) or _default_region(user)
+    place = (q.get("d") or "").strip()
+    outcome = q.get("outcome") if q.get("outcome") in HISTORY_OUTCOMES else "closed"
+    kind = q.get("kind") if q.get("kind") in torgi_scan.KIND_RU else None
+    group = q.get("group") if q.get("group") in torgi_scan.GROUPS else None
+    ctx: dict[str, Any] = {
+        "regions": _regions_ctx(),
+        "region": region,
+        "region_name": CADASTRAL_REGIONS.get(region or "", ""),
+        "place": place,
+        "outcome": outcome,
+        "outcomes": HISTORY_LABELS,
+        "kind": kind,
+        "group": group,
+        "groups": torgi_scan.GROUPS,
+        "kinds": torgi_scan.KIND_RU,
+        "user": user,
+        "q": q,
+    }
+    if not region:
+        return render(request, "torgi_history.html", rows=[], counts={}, **ctx)
+    lots = torgi_sync.lots_of(region, months=settings.torgi_scan_months)
+    stats = torgi_scan.index_by(lots)
+    wanted = HISTORY_OUTCOMES[outcome]
+    rows, counts = [], {key: 0 for key in HISTORY_LABELS}
+    for lot in lots:
+        if place and not torgi_scan.in_place(lot, place):
+            continue
+        if (kind and lot.get("kind") != kind) or (group and lot.get("vri_group") != group):
+            continue
+        o = torgi_scan._outcome(lot)
+        if o not in HISTORY_OUTCOMES["closed"]:
+            continue
+        for key, members in HISTORY_OUTCOMES.items():
+            counts[key] += o in members
+        if o in wanted:
+            rows.append(history_row(lot, stats))
+    rows.sort(key=lambda r: r.get("auction_date") or r.get("published") or "", reverse=True)
+    pages = max(1, (len(rows) + HISTORY_ROWS - 1) // HISTORY_ROWS)
+    page = min(max(page, 1), pages)
+    return render(
+        request,
+        "torgi_history.html",
+        rows=rows[(page - 1) * HISTORY_ROWS : page * HISTORY_ROWS],
+        total=len(rows),
+        counts=counts,
+        names=district_names(lots),
+        page=page,
+        pages=pages,
+        qs=_query(q, region=region),
+        qs_outcome=_query(q, region=region, outcome=None),
         **ctx,
     )
 

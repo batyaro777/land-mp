@@ -7,7 +7,7 @@
   {% if sync %}
   <p class="small">
     <strong>В базе аукционов:</strong> идут сейчас {{ sync.active }}, завершены за год {{ sync.succeed + sync.failed }}
-    (состоялись {{ sync.succeed }}, с итоговой ценой {{ sync.succeed_priced }}; не состоялись {{ sync.failed }}){% if sync.cards_left %}, карточек ещё не прочитано {{ sync.cards_left }}{% endif %}{% if sync.reread_left %}, у {{ sync.reread_left }} завершённых перечитывается карточка (причина из протокола, число заявок, вид сделки){% endif %}.{% if sync.notices %} Извещений о предоставлении (ст. 39.18): {{ sync.notices }}, из них идут {{ sync.notices_active }}.{% endif %}
+    (состоялись {{ sync.succeed }}, с итоговой ценой {{ sync.succeed_priced }}; не состоялись {{ sync.failed }}){% if sync.cards_left %}, карточек ещё не прочитано {{ sync.cards_left }}{% endif %}{% if sync.reread_left %}, у {{ sync.reread_left }} завершённых перечитывается карточка (причина из протокола, число заявок, вид сделки){% endif %}.{% if sync.notices %} Извещений о предоставлении (ст. 39.18): {{ sync.notices }}, из них идут {% if sync.notices_active %}<a href="/tools/torgi-scan?region={{ region }}&amp;form=notice">{{ sync.notices_active }}</a>{% else %}0{% endif %}.{% endif %}
     {% if running %}
       {% set pg = sync.progress.get('page') or 0 %}{% set pgs = sync.progress.get('pages') or 0 %}
       </p>
