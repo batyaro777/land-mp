@@ -1120,4 +1120,7 @@ def test_pick_division_exact_number_largest_contour():
     assert pick_division(feats, "24:50:0300102")["coordinates"][0][1] == [2, 0]
     assert pick_division([feat("24:50", 3, top=True)], "24:50") is not None
     assert pick_division(feats, "24:51") is None
+    child = feat("24:50:0300103", 50)
+    child["properties"]["options"]["parent_cad_num"] = "24:50"
+    assert pick_division([child, feat("24:50", 9)], "24:50")["coordinates"][0][1] == [9, 0]
     assert pick_division([{"properties": {"label": "24:50"}, "geometry": None}], "24:50") is None

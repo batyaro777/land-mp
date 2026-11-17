@@ -266,12 +266,15 @@ class LiveNspdProvider:
 
 
 def _exact(props: Any, key: str) -> bool:
-    """Номер места стоит значением в свойствах объекта (верхний уровень или options)."""
+    """Номер места стоит значением в свойствах объекта (верхний уровень или options).
+    Поля options с «parent» в имени не считаем: у квартала там номер его района —
+    так же фильтрует сама pynspd."""
     if not isinstance(props, dict):
         return False
     if any(v == key for v in props.values()):
         return True
-    return any(v == key for v in (props.get("options") or {}).values())
+    opts = props.get("options") or {}
+    return any(v == key and "parent" not in str(k) for k, v in opts.items())
 
 
 def pick_division(features: list[dict[str, Any]], key: str) -> dict[str, Any] | None:
