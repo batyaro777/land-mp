@@ -44,6 +44,10 @@ from landcheck.web.db import TorgiLot, TorgiSync, session
 log = logging.getLogger("landcheck.web.torgi_sync")
 
 HISTORY_STATUSES = (torgi.STATUS_SUCCEED, torgi.STATUS_FAILED)
+# Отменённые организатором (чат 17.11 №76: «была отмена от администрации») — только поиск,
+# карточки не читаем. Регионы, собранные до 17.11, догружают их за год один раз: признак
+# `canceled_done` в сводке прохода переносится из прохода в проход.
+STATUS_CANCELED = "CANCELED"
 MAX_ACTIVE_PAGES = 300  # 3000 идущих лотов на регион — с запасом
 MAX_HISTORY_PAGES = 800
 MAX_FINISHED = 150  # карточек «пропавших из идущих» за проход
@@ -401,9 +405,11 @@ def sync_region(
         st = _state(db, region)
         backfill_done = st.backfill_done
         cursors = dict((st.progress or {}).get("cursors") or {})
+        canceled_done = bool((st.stats or {}).get("canceled_done"))
         db.commit()
     _update(region, state="running", phase="active", started_at=now, error=None)
-    stats = {"new": 0, "changed": 0, "cards": 0, "nspd": 0, "requests": 0}
+    stats: dict[str, Any] = {"new": 0, "changed": 0, "cards": 0, "nspd": 0, "requests": 0}
+    stats["canceled_done"] = canceled_done
     try:
         # 1. идущие ------------------------------------------------------------------------
         seen: set[str] = set()
@@ -479,6 +485,20 @@ def sync_region(
                 on_page=on_history,
             )
             complete = complete and (done or backfill_done)
+        # отменённые: до первого полного прохода — вглубь с места остановки, потом — пока есть новое
+        deep = not (backfill_done and canceled_done)
+        on_canceled = _history_handler(region, STATUS_CANCELED, now, stats, cursors, not deep)
+        _, done = _pages(
+            api,
+            region,
+            STATUS_CANCELED,
+            pub_from,
+            start_page=int(cursors.get(STATUS_CANCELED, 0)) if deep else 0,
+            max_pages=MAX_HISTORY_PAGES if deep else SHALLOW_PAGES,
+            on_page=on_canceled,
+        )
+        if done and deep:
+            stats["canceled_done"] = True
         if complete and not backfill_done:
             backfill_done = True
             _update(region, backfill_done=True, progress={"cursors": {}})

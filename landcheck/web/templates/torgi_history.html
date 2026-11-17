@@ -32,7 +32,7 @@
 {% else %}
 <div class="toolbar no-print">
   <div>
-    {% for key, label in outcomes.items() %}{% if key != 'failed' or counts.get('failed') %}
+    {% for key, label in outcomes.items() %}{% if key not in ('failed', 'canceled') or counts.get(key) %}
     <a href="/tools/torgi-history?{{ qs_outcome }}&amp;outcome={{ key }}" role="button" class="sm {{ '' if outcome == key else 'outline secondary' }}">{{ label }} {{ counts.get(key, 0) }}</a>
     {% endif %}{% endfor %}
   </div>

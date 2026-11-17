@@ -964,6 +964,7 @@ HISTORY_OUTCOMES = {
     "single": ("single",),
     "none": ("none",),
     "failed": ("failed",),
+    "canceled": ("canceled",),  # отменены организатором (чат 17.11 №76) — не входят в «все»
 }
 HISTORY_LABELS = {
     "closed": "все завершённые",
@@ -972,12 +973,14 @@ HISTORY_LABELS = {
     "single": "единственному участнику",
     "none": "не ушли",
     "failed": "итог ещё не прочитан",
+    "canceled": "отменены организатором",
 }
 OUTCOME_RU = {
     "sold": "продан с борьбой",
     "single": "единственному участнику",
     "none": "не ушёл",
     "failed": "не состоялись, итог не прочитан",
+    "canceled": "отменён организатором",
 }
 PRICEY_RATIO = 1.3  # старт за сотку выше медианы проданных в месте — «цена, похоже, завышена»
 WEAK_SELL = 0.4  # в районе находят хозяина меньше 40 % участков — «спрос слабый»
@@ -1066,7 +1069,7 @@ def torgi_history_page(request: Request, user: TorgiDep, page: int = 1):
         if (kind and lot.get("kind") != kind) or (group and lot.get("vri_group") != group):
             continue
         o = torgi_scan._outcome(lot)
-        if o not in HISTORY_OUTCOMES["closed"]:
+        if o not in HISTORY_OUTCOMES["closed"] and o != "canceled":
             continue
         for key, members in HISTORY_OUTCOMES.items():
             counts[key] += o in members

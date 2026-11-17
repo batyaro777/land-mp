@@ -80,11 +80,18 @@ def _full(card: dict, *, fin: float | None, applied: int) -> dict:
 class FakeTorgi:
     """torgi.gov.ru в памяти: поиск по статусам со страницами по 10 и карточки."""
 
-    def __init__(self, active: list[dict], succeed: list[dict], failed: list[dict]):
+    def __init__(
+        self,
+        active: list[dict],
+        succeed: list[dict],
+        failed: list[dict],
+        canceled: list[dict] | None = None,
+    ):
         self.lists = {
             torgi.STATUS_ACTIVE: active,
             torgi.STATUS_SUCCEED: succeed,
             torgi.STATUS_FAILED: failed,
+            "CANCELED": canceled or [],
         }
         self.cards: dict[str, dict] = {}
         self.seen: list[dict] = []
@@ -1241,3 +1248,32 @@ def test_zones_summary_fill_retry_and_pages(client):  # noqa: F811
     assert "Обременения (ЗОУИТ): Охранная зона ВЛ 10 кВ" in scan  # ACT_0
     hist = client.get("/tools/torgi-history?region=40&outcome=none").text
     assert "обременения: Охранная зона ВЛ 10 кВ" in hist
+
+
+def test_canceled_lots_backfill_once_and_history_tab(client):  # noqa: F811
+    """Чат 17.11 №76 «была отмена от администрации»: отменённые организатором торги
+    собираются поиском (без карточек), у регионов, собранных раньше, — один раз за год
+    вглубь; в «Завершённых» — своя вкладка, в «все завершённые» и индекс они не входят."""
+    from landcheck.web.db import TorgiLot, TorgiSync, session
+
+    fake = _seed(client)
+    fake.lists["CANCELED"] = [_done(i + 70, "CANCELED") for i in range(12)]
+    with session() as db:  # регион собран до 17.11: история есть, отменённых ещё не брали
+        db.add(TorgiSync(region="40", state="idle", backfill_done=True, stats={}))
+        db.commit()
+    _sync(fake, provider=FakeNspd())
+    pages = [int(s["page"]) for s in fake.seen if s.get("lotStatus") == "CANCELED"]
+    assert pages == [0, 1]  # вглубь до конца, хотя история уже собрана
+    with session() as db:
+        st = db.get(TorgiSync, "40")
+        assert st.stats["canceled_done"] is True
+        canceled = db.scalars(select(TorgiLot).where(TorgiLot.status == "CANCELED")).all()
+        assert len(canceled) == 12 and all(c.card_at is None for c in canceled)
+    fake.seen.clear()
+    _sync(fake, provider=FakeNspd())  # дальше — только сверху, пока есть новое
+    assert [s["page"] for s in fake.seen if s.get("lotStatus") == "CANCELED"] == ["0"]
+    _admin(client)
+    page = client.get("/tools/torgi-history?region=40").text
+    assert "отменены организатором 12" in page and "все завершённые 21" in page
+    tab = client.get("/tools/torgi-history?region=40&outcome=canceled").text
+    assert tab.count("отменён организатором") == 12
