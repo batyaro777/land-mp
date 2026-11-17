@@ -1061,6 +1061,7 @@ def test_history_outcomes_winner_and_signals(client):  # noqa: F811
     assert "все завершённые 22" in page and "продано с борьбой 15" in page
     assert "единственному участнику 3" in page and "не ушли 4" in page
     assert "физлицо" in page and "×1.50" in page and SECRET_NAME not in page
+    assert '/сот.</div><div class="small ok">×1.50' in page  # итог и за сотку (чат №81)
     none = client.get("/tools/torgi-history?region=40&outcome=none").text
     assert "40:13:120102:100" in none and "40:13:120102:51" in none
     assert "40:13:120102:52" not in none  # одна заявка — ушёл единственному участнику

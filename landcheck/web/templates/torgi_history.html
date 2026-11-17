@@ -63,7 +63,7 @@
     <td class="num small">{% if r.auction_date %}{{ r.auction_date[8:10] }}.{{ r.auction_date[5:7] }}.{{ r.auction_date[2:4] }}{% else %}—{% endif %}</td>
     <td class="num">{% if r.area_m2 %}{{ (r.area_m2 / 100)|round(1) }} сот.{% else %}—{% endif %}</td>
     <td class="num">{% if r.price_start %}{{ r.price_start|money }}{% if r.start_sotka %}<div class="small muted">{{ r.start_sotka|money }}/сот.</div>{% endif %}{% else %}—{% endif %}</td>
-    <td class="num">{% if r.price_fin %}{{ r.price_fin|money }}{% if r.growth %}<div class="small {{ 'ok' if r.growth >= 1.5 else 'muted' }}">×{{ '%.2f'|format(r.growth) }}</div>{% endif %}{% else %}—{% endif %}</td>
+    <td class="num">{% if r.price_fin %}{{ r.price_fin|money }}{% if r.fin_sotka %}<div class="small muted">{{ r.fin_sotka|money }}/сот.</div>{% endif %}{% if r.growth %}<div class="small {{ 'ok' if r.growth >= 1.5 else 'muted' }}">×{{ '%.2f'|format(r.growth) }}</div>{% endif %}{% else %}—{% endif %}</td>
     <td class="num">{% if r.applied is not none %}{{ '≥' if r.applied_min }}{{ r.applied }}{% else %}—{% endif %}</td>
     <td class="small"><span class="badge mini v-{{ {'sold': 'ok', 'single': 'check', 'none': 'stop'}.get(r.outcome, '') }}">{{ r.outcome_ru }}</span>{% if r.reason %}<div class="muted">{{ r.reason }}</div>{% endif %}</td>
     <td class="small">{{ r.winner_type or ('—' if r.outcome in ('sold', 'single') else '') }}</td>
