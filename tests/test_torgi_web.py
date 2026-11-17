@@ -1023,6 +1023,46 @@ def test_scan_all_regions_one_list(client):  # noqa: F811
     assert '<a href="/tools/torgi-scan?roi=40&amp;region=all">' in lot
 
 
+def test_scan_cache_reuses_until_data_changes(client, monkeypatch):  # noqa: F811
+    """Общий список всех регионов не пересчитывает регион на каждый запрос: расчёт хранится,
+    пока в регионе не записали лот или запись рынка. Сортировка страницы не портит его."""
+    import re
+
+    from landcheck.web import torgi_sync
+    from landcheck.web.db import TorgiLot, TorgiMarket, session
+
+    fake = _seed(client)
+    _sync(fake, provider=FakeNspd())
+    _admin(client)
+    with session() as db:  # самый дорогой лот — первым при сортировке по цене
+        db.get(TorgiLot, "ACT_5").price_start = 900_000
+        db.commit()
+    calls: list[str] = []
+    real = torgi_sync.lots_of
+
+    def counting(region, **kw):
+        calls.append(region)
+        return real(region, **kw)
+
+    monkeypatch.setattr(torgi_sync, "lots_of", counting)
+
+    def order(url: str) -> list[str]:
+        return re.findall(r"/tools/torgi-lot/(\w+)", client.get(url).text)
+
+    first = order("/tools/torgi-scan?region=40&roi=40")
+    by_price = order("/tools/torgi-scan?region=40&roi=40&sort=price_desc")
+    assert by_price[0] == "ACT_5" and first[0] != "ACT_5"
+    assert order("/tools/torgi-scan?region=all&roi=40") == first  # тот же расчёт региона
+    assert order("/tools/torgi-scan?region=40&roi=40") == first and calls == ["40"]
+    with session() as db:
+        db.add(TorgiMarket(scope="40:13", kind="sale", price_mid=50_000, source="manual"))
+        db.commit()
+    order("/tools/torgi-scan?region=40&roi=40")
+    assert calls == ["40", "40"]
+    order("/tools/torgi-scan?region=40&roi=10")  # другие критерии — свой расчёт
+    assert calls == ["40", "40", "40"]
+
+
 def test_liquidity_links_bids_slider_and_map(client):  # noqa: F811
     """Чат 17.11 (№72–75, 78–79): числа таблицы ведут к лотам, ползунок «заявок не меньше N»,
     заголовок говорит, что это медиана, идущие извещения открываются, карта районов."""

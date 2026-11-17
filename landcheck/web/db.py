@@ -551,10 +551,14 @@ class LandScan(Base):
 
 _engine = None
 SessionLocal: sessionmaker[Session] | None = None
+# Номер подключения к базе: растёт при каждом init_db. Кэши в памяти (расчёт торгов) держат
+# его в ключе — после переподключения (в тестах — новая база) старое не отдаётся.
+generation = 0
 
 
 def init_db(path: str | Path) -> None:
-    global _engine, SessionLocal
+    global _engine, SessionLocal, generation
+    generation += 1
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     _engine = create_engine(f"sqlite:///{p}", connect_args={"check_same_thread": False})

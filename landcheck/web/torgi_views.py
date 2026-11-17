@@ -13,6 +13,8 @@ from __future__ import annotations
 import re
 import statistics
 import tempfile
+import threading
+import time
 from collections import Counter
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -21,12 +23,14 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
-from sqlalchemy import select
+from sqlalchemy import event, select
+from sqlalchemy.orm import Session
 
 from landcheck import ruproxy, torgi, torgi_calc, torgi_scan
 from landcheck.models import Purpose
 from landcheck.models import Request as CheckRequest
 from landcheck.regions import CADASTRAL_REGIONS
+from landcheck.web import db as dbmod
 from landcheck.web import jobs, torgi_places, torgi_sync
 from landcheck.web.app import render, require_user
 from landcheck.web.config import settings
@@ -249,14 +253,59 @@ def district_names(lots: list[dict[str, Any]]) -> dict[str, str]:
     return {d: _REGION_PREFIX.sub("", c.most_common(1)[0][0]) for d, c in votes.items()}
 
 
+# --- кэш расчёта списка лотов по региону ---------------------------------------------------
+# Общий список всех регионов на каждый запрос пересчитывал бы каждый регион: на проде 17.11 —
+# 1,17 с на 4 регионах, с ростом числа регионов растёт линейно. Расчёт региона хранится, пока
+# в регионе не записали лот, запись рынка или сделку (версия ниже), и не дольше 10 минут
+# (срок «осталось дней» и прочее, что зависит от часов). Сырые лоты не храним — только итог
+# расчёта и подписи районов: память не растёт с размером базы.
+SCAN_CACHE_TTL_S = 600
+SCAN_CACHE_MAX = 256
+_scan_cache: dict[tuple[str, str], tuple[float, int, dict[str, Any], dict[str, str]]] = {}
+_data_version: dict[str, int] = {}
+_cache_lock = threading.Lock()  # расчёты идут в потоках запросов, записи — и в потоке сбора
+
+
+@event.listens_for(Session, "after_flush")
+def _bump_versions(db: Session, _ctx: Any) -> None:
+    """Записали лот, запись слоя рынка или сделку — расчёт по этому региону устарел."""
+    for obj in (*db.new, *db.dirty, *db.deleted):
+        if isinstance(obj, TorgiLot):
+            region = obj.region or ""
+        elif isinstance(obj, TorgiMarket):
+            region = (obj.scope or "")[:2]
+        elif isinstance(obj, TorgiDeal):
+            region = (obj.district or obj.cad_num or "")[:2]
+        else:
+            continue
+        with _cache_lock:
+            _data_version[region] = _data_version.get(region, 0) + 1
+
+
 def _region_scan(
     region: str, params: torgi_scan.ScanParams
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    lots = torgi_sync.lots_of(region, months=settings.torgi_scan_months)
-    return torgi_scan.scan(lots, params, layer=_layer(region)), lots
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Расчёт списка лотов региона и подписи его районов (из кэша, если данные не менялись).
+    Отдаём копию: страница сортирует и фильтрует строки на месте."""
+    key = (f"{dbmod.generation}:{region}", repr(params))
+    version = _data_version.get(region, 0)  # до расчёта: запись во время расчёта его устарит
+    now = time.monotonic()
+    hit = _scan_cache.get(key)
+    if hit and hit[1] == version and now - hit[0] < SCAN_CACHE_TTL_S:
+        result, names = hit[2], hit[3]
+    else:
+        lots = torgi_sync.lots_of(region, months=settings.torgi_scan_months)
+        result = torgi_scan.scan(lots, params, layer=_layer(region))
+        names = district_names(lots)
+        with _cache_lock:
+            _scan_cache.pop(key, None)
+            while len(_scan_cache) >= SCAN_CACHE_MAX:
+                _scan_cache.pop(next(iter(_scan_cache)))  # самый давний расчёт
+            _scan_cache[key] = (now, version, result, names)
+    return {**result, "rows": list(result["rows"])}, names
 
 
-def _scan_all(params: torgi_scan.ScanParams) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def _scan_all(params: torgi_scan.ScanParams) -> tuple[dict[str, Any], dict[str, str]]:
     """Все собранные регионы одним списком (запрос Тони 17.11: видеть все ликвидные
     предложения сразу). Ликвидность и цены перепродажи считаются внутри своего региона,
     общий у списка только порядок: лучшие лоты всех регионов первыми."""
@@ -270,32 +319,32 @@ def _scan_all(params: torgi_scan.ScanParams) -> tuple[dict[str, Any], list[dict[
         "market_based": 0,
         "priced": 0,
     }
-    lots_all: list[dict[str, Any]] = []
+    names_all: dict[str, str] = {}
     regions = _synced_regions()
     for code in regions:
-        result, lots = _region_scan(code, params)
+        result, names = _region_scan(code, params)
         merged["rows"] += result["rows"]
         for key in ("total", "market_based", "priced"):
             merged[key] += result[key]
         for group in ("counts", "forms", "hidden"):
             for k, v in result[group].items():
                 merged[group][k] = merged[group].get(k, 0) + v
-        lots_all += lots
+        names_all.update(names)
     for k in torgi_scan.VERDICTS:
         merged["counts"].setdefault(k, 0)
     for k in ("auction", "notice"):
         merged["forms"].setdefault(k, 0)
     merged["regions"] = regions
     merged["rows"].sort(key=lambda r: (r["s"]["rank"], -r["s"]["score"]))
-    return merged, lots_all
+    return merged, names_all
 
 
-def _scan(region: str, q) -> tuple[dict[str, Any], torgi_scan.ScanParams, list[dict[str, Any]]]:
+def _scan(region: str, q) -> tuple[dict[str, Any], torgi_scan.ScanParams, dict[str, str]]:
     params = _scan_params(q)
     if region == ALL_REGIONS:
-        result, lots = _scan_all(params)
+        result, names = _scan_all(params)
     else:
-        result, lots = _region_scan(region, params)
+        result, names = _region_scan(region, params)
     rows = result["rows"]
     _, parcel = torgi_scan.place_of(q.get("d"))
     verdict = q.get("verdict") or ""
@@ -320,7 +369,7 @@ def _scan(region: str, q) -> tuple[dict[str, Any], torgi_scan.ScanParams, list[d
     result["shown"] = len(rows)
     result["place"] = params.place
     result["parcel"] = parcel
-    return result, params, lots
+    return result, params, names
 
 
 def _query(q, **override: Any) -> str:
@@ -377,8 +426,7 @@ def torgi_scan_page(request: Request, user: TorgiDep, page: int = 1):
     }
     if not region:
         return render(request, "torgi_scan.html", sync=None, result=None, params=None, **ctx)
-    result, params, lots = _scan(region, q)
-    names = district_names(lots)
+    result, params, names = _scan(region, q)
     place_label = None
     if params.place:
         level = "квартале" if params.place.count(":") >= 2 else "районе"
