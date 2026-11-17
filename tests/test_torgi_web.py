@@ -975,3 +975,48 @@ def test_image_proxy_caches_and_rejects_non_images(client, monkeypatch):  # noqa
     assert calls == ["6aed5f6b2c4c500c90717aef"]  # второй раз — с диска
     assert client.get("/tools/torgi-img/badbadbad0001").status_code == 404
     assert client.get("/tools/torgi-img/..%2Fsecret").status_code == 404
+
+
+def test_scan_all_regions_one_list(client):  # noqa: F811
+    """Запрос Тони 17.11: все собранные регионы одним списком — лоты обоих регионов, регион
+    подписан у лота, выгрузки работают, из карточки лота возврат в общий список."""
+    from landcheck import torgi_scan
+    from landcheck.web import torgi_sync
+    from landcheck.web.db import TorgiSync, session
+    from tests.test_torgi import _card as card_of
+
+    fake = _seed(client)
+    _sync(fake, provider=FakeNspd())
+    _admin(client)
+    card = card_of(
+        "KAR_1",
+        "10:03:0010901:1354",
+        area=1500,
+        start=90_000,
+        fin=None,
+        status="APPLICATIONS_SUBMISSION",
+    )
+    card["biddEndTime"] = BIDD_END_TS
+    now = datetime.now(UTC)
+    with session() as db:
+        torgi_sync.upsert(db, torgi_scan.lot_row(card), now, card=True)
+        db.add(TorgiSync(region="10", state="idle", finished_at=now))
+        db.commit()
+    page = client.get("/tools/torgi-scan?region=all&roi=40").text
+    assert "Всего 13" in page
+    assert "/tools/torgi-lot/ACT_0" in page and "/tools/torgi-lot/KAR_1" in page
+    assert "<strong>Республика Карелия</strong>" in page
+    assert "<strong>Калужская область</strong>" in page
+    assert 'value="все — все собранные регионы"' in page
+    assert "Общий список: 2 собранных региона" in page
+    assert "Лучшие лоты всех собранных регионов" not in page
+    # по подсказке поля и по слову «все» — тот же общий список
+    assert "Всего 13" in client.get("/tools/torgi-scan?region=все — все собранные регионы").text
+    # один регион — без чужих лотов, со ссылкой на общий список
+    one = client.get("/tools/torgi-scan?region=40&roi=40").text
+    assert "/tools/torgi-lot/KAR_1" not in one and "Лучшие лоты всех собранных регионов" in one
+    x = client.get("/tools/torgi-scan/export.xlsx?region=all&roi=40")
+    assert x.status_code == 200 and "torgi-all-" in x.headers["content-disposition"]
+    assert client.get("/tools/torgi-scan/export.kml?region=all&roi=40").status_code == 200
+    lot = client.get("/tools/torgi-lot/KAR_1?region=all&roi=40").text
+    assert '<a href="/tools/torgi-scan?roi=40&amp;region=all">' in lot

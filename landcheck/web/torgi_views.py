@@ -105,6 +105,22 @@ def _region_code(value: str | None) -> str | None:
     return hits[0] if len(hits) == 1 else None
 
 
+ALL_REGIONS = "all"  # «все собранные регионы» в поле региона списка лотов
+ALL_REGIONS_LABEL = "все собранные регионы"
+
+
+def _is_all(value: str | None) -> bool:
+    """«all», «все», «все — все собранные регионы» из подсказки поля региона."""
+    v = (value or "").strip().lower()
+    return v == ALL_REGIONS or v.startswith("все")
+
+
+def _synced_regions() -> list[str]:
+    """Регионы, которые собирали (или собирают сейчас): вход общего списка лотов."""
+    with session() as db:
+        return sorted(db.scalars(select(TorgiSync.region)).all())
+
+
 def _default_region(user: User) -> str | None:
     code = _region_code(user.region)
     with session() as db:
@@ -233,10 +249,53 @@ def district_names(lots: list[dict[str, Any]]) -> dict[str, str]:
     return {d: _REGION_PREFIX.sub("", c.most_common(1)[0][0]) for d, c in votes.items()}
 
 
+def _region_scan(
+    region: str, params: torgi_scan.ScanParams
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    lots = torgi_sync.lots_of(region, months=settings.torgi_scan_months)
+    return torgi_scan.scan(lots, params, layer=_layer(region)), lots
+
+
+def _scan_all(params: torgi_scan.ScanParams) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Все собранные регионы одним списком (запрос Тони 17.11: видеть все ликвидные
+    предложения сразу). Ликвидность и цены перепродажи считаются внутри своего региона,
+    общий у списка только порядок: лучшие лоты всех регионов первыми."""
+    merged: dict[str, Any] = {
+        "rows": [],
+        "counts": {},
+        "total": 0,
+        "stats": {},
+        "forms": {},
+        "hidden": {},
+        "market_based": 0,
+        "priced": 0,
+    }
+    lots_all: list[dict[str, Any]] = []
+    regions = _synced_regions()
+    for code in regions:
+        result, lots = _region_scan(code, params)
+        merged["rows"] += result["rows"]
+        for key in ("total", "market_based", "priced"):
+            merged[key] += result[key]
+        for group in ("counts", "forms", "hidden"):
+            for k, v in result[group].items():
+                merged[group][k] = merged[group].get(k, 0) + v
+        lots_all += lots
+    for k in torgi_scan.VERDICTS:
+        merged["counts"].setdefault(k, 0)
+    for k in ("auction", "notice"):
+        merged["forms"].setdefault(k, 0)
+    merged["regions"] = regions
+    merged["rows"].sort(key=lambda r: (r["s"]["rank"], -r["s"]["score"]))
+    return merged, lots_all
+
+
 def _scan(region: str, q) -> tuple[dict[str, Any], torgi_scan.ScanParams, list[dict[str, Any]]]:
     params = _scan_params(q)
-    lots = torgi_sync.lots_of(region, months=settings.torgi_scan_months)
-    result = torgi_scan.scan(lots, params, layer=_layer(region))
+    if region == ALL_REGIONS:
+        result, lots = _scan_all(params)
+    else:
+        result, lots = _region_scan(region, params)
     rows = result["rows"]
     _, parcel = torgi_scan.place_of(q.get("d"))
     verdict = q.get("verdict") or ""
@@ -300,11 +359,14 @@ def _regions_ctx() -> list[dict[str, Any]]:
 @router.get("/tools/torgi-scan", response_class=HTMLResponse)
 def torgi_scan_page(request: Request, user: TorgiDep, page: int = 1):
     q = request.query_params
-    region = _region_code(q.get("region")) or _default_region(user)
+    all_mode = _is_all(q.get("region"))
+    region = ALL_REGIONS if all_mode else _region_code(q.get("region")) or _default_region(user)
     ctx: dict[str, Any] = {
         "regions": _regions_ctx(),
         "region": region,
-        "region_name": CADASTRAL_REGIONS.get(region or "", ""),
+        "region_name": ALL_REGIONS_LABEL if all_mode else CADASTRAL_REGIONS.get(region or "", ""),
+        "all_mode": all_mode,
+        "region_names": CADASTRAL_REGIONS,
         "q": q,
         "groups": torgi_scan.GROUPS,
         "sel_groups": q.getlist("group"),
@@ -328,7 +390,7 @@ def torgi_scan_page(request: Request, user: TorgiDep, page: int = 1):
     return render(
         request,
         "torgi_scan.html",
-        sync=torgi_sync.state_of(region),
+        sync=None if all_mode else torgi_sync.state_of(region),
         result=result,
         rows=rows,
         params=params,
@@ -409,13 +471,16 @@ def _back(back: str, default: str) -> str:
 @router.get("/tools/torgi-scan/export.{fmt}")
 def torgi_scan_export(request: Request, user: TorgiDep, fmt: str):
     q = request.query_params
-    region = _region_code(q.get("region"))
+    region = ALL_REGIONS if _is_all(q.get("region")) else _region_code(q.get("region"))
     if not region or fmt not in ("xlsx", "kml"):
         raise HTTPException(404)
     result, _, _ = _scan(region, q)
     stamp = f"{datetime.now(UTC):%Y%m%d}"
     if fmt == "kml":
-        name = f"Торги {CADASTRAL_REGIONS.get(region, region)} · {stamp}"
+        title = (
+            ALL_REGIONS_LABEL if region == ALL_REGIONS else CADASTRAL_REGIONS.get(region, region)
+        )
+        name = f"Торги {title} · {stamp}"
         return Response(
             torgi_scan.to_kml(result["rows"], name=name),
             media_type="application/vnd.google-earth.kml+xml",
@@ -423,7 +488,8 @@ def torgi_scan_export(request: Request, user: TorgiDep, fmt: str):
         )
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "torgi.xlsx"
-        torgi_scan.to_xlsx(result["rows"], path, title=f"Торги {region}")
+        title = "Торги, все регионы" if region == ALL_REGIONS else f"Торги {region}"
+        torgi_scan.to_xlsx(result["rows"], path, title=title)
         body = path.read_bytes()
     return Response(
         body,
@@ -593,7 +659,7 @@ def torgi_lot_page(request: Request, user: TorgiDep, lot_id: str, saved: str = "
         groups=torgi_scan.GROUPS,
         kinds=torgi_scan.KIND_RU,
         status_ru=torgi.STATUS_RU,
-        qs=_query(q, saved=None, region=region),
+        qs=_query(q, saved=None, region=ALL_REGIONS if _is_all(q.get("region")) else region),
         q=q,
         img_base=torgi.FILE_URL.format(file_id=""),
         saved=saved,
