@@ -1309,3 +1309,33 @@ def test_zones_queue_keeps_requests_while_busy(client, monkeypatch):  # noqa: F8
             break
         _time.sleep(0.02)
     assert batches == [["ACT_0", "ACT_1"], ["ACT_2", "ACT_3"]] and torgi_zones.queued() == 0
+
+
+def test_debtor_and_forest_lots_kept_out_of_market_stats(client):  # noqa: F811
+    """Прод 17.11 (Клавдий 84ce037d): в сборе 395 торгов имущества должников (229-ФЗ, 86 % не
+    состоялись), лесные (200-ФЗ), публичные торги изъятых участков. Это другой рынок: в
+    ликвидность и медианы не идут; в «Завершённых» — отдельно, с пометкой вида торгов."""
+    from landcheck import torgi_scan
+    from landcheck.web import torgi_sync
+    from landcheck.web.db import TorgiLot, session
+
+    fake = _seed(client)
+    _sync(fake, provider=FakeNspd())
+    _admin(client)
+    before = client.get("/tools/torgi-liquidity?region=40").text
+    with session() as db:
+        for i, code in ((80, "229FZ"), (81, "229FZ"), (82, "200FZ")):
+            card = _done(i, "FAILED")
+            torgi_sync.upsert(db, torgi_scan.lot_row(_full(card, fin=None, applied=0)), NOW)
+            db.flush()
+            db.get(TorgiLot, card["id"]).bidd_type = code
+        db.commit()
+    lots = torgi_sync.lots_of("40")
+    assert torgi_scan.index_by(lots)["40:13"]["closed"] == 21  # 15 + 6, без чужих торгов
+    after = client.get("/tools/torgi-liquidity?region=40").text
+    assert after.count(">21</a>") == before.count(">21</a>") >= 1
+    hist = client.get("/tools/torgi-history?region=40").text
+    assert "все завершённые 21" in hist and "Ещё 3 завершённых торгов другого вида" in hist
+    other = client.get("/tools/torgi-history?region=40&bt=other").text
+    assert "все завершённые 3" in other and other.count("имущество должников</span>") == 2
+    assert "лесной участок</span>" in other and 'name="bt" value="other"' in other

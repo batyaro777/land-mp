@@ -175,7 +175,9 @@ def auctions_from_store(cad_num: str, *, now: datetime | None = None) -> dict[st
     lots = [
         lot
         for lot in lots_of(region, months=torgi.MONTHS)
-        if lot.get("district") == district and lot.get("form") == "EA"
+        if lot.get("district") == district
+        and lot.get("form") == "EA"
+        and torgi_scan.in_market(lot)  # имущество должников, лесные — другой рынок
     ]
     result = torgi.empty_result(cad_num)
     by_status: dict[str, list[dict[str, Any]]] = {"SUCCEED": [], "FAILED": [], "ACTIVE": []}

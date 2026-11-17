@@ -1045,7 +1045,11 @@ def torgi_history_page(request: Request, user: TorgiDep, page: int = 1):
     outcome = q.get("outcome") if q.get("outcome") in HISTORY_OUTCOMES else "closed"
     kind = q.get("kind") if q.get("kind") in torgi_scan.KIND_RU else None
     group = q.get("group") if q.get("group") in torgi_scan.GROUPS else None
+    # вид торгов: по умолчанию земельные по ЗК — как в ликвидности; остальные отдельно
+    bt = q.get("bt") if q.get("bt") == "other" else "zk"
     ctx: dict[str, Any] = {
+        "bt": bt,
+        "bidd": torgi_scan.bidd_label,
         "regions": _regions_ctx(),
         "region": region,
         "region_name": CADASTRAL_REGIONS.get(region or "", ""),
@@ -1065,6 +1069,7 @@ def torgi_history_page(request: Request, user: TorgiDep, page: int = 1):
     stats = torgi_scan.index_by(lots)
     wanted = HISTORY_OUTCOMES[outcome]
     rows, counts = [], {key: 0 for key in HISTORY_LABELS}
+    other = 0  # завершённые торги другого вида (должники, лесные, изъятые) в этом месте
     for lot in lots:
         if place and not torgi_scan.in_place(lot, place):
             continue
@@ -1072,6 +1077,9 @@ def torgi_history_page(request: Request, user: TorgiDep, page: int = 1):
             continue
         o = torgi_scan._outcome(lot)
         if o not in HISTORY_OUTCOMES["closed"] and o != "canceled":
+            continue
+        if torgi_scan.in_market(lot) != (bt == "zk"):
+            other += o in HISTORY_OUTCOMES["closed"]
             continue
         for key, members in HISTORY_OUTCOMES.items():
             counts[key] += o in members
@@ -1096,6 +1104,8 @@ def torgi_history_page(request: Request, user: TorgiDep, page: int = 1):
         pages=pages,
         qs=_query(q, region=region),
         qs_outcome=_query(q, region=region, outcome=None),
+        qs_bt=_query(q, region=region, bt=None, page=None),
+        other=other,
         **ctx,
     )
 

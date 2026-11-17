@@ -211,7 +211,20 @@ BIDD_TYPE_SHORT = {
     "178FZ": "приватизация",
     "200FZ": "лесной участок",
     "127FZ": "банкротство",
+    "ZKPT": "публичные торги изъятого участка",
 }
+
+
+# Рынок для ликвидности и медиан цен — земельные торги по Земельному кодексу (ZK). Имущество
+# должников (229-ФЗ), публичные торги изъятых участков (ZKPT), лесные участки (200-ФЗ) и
+# приватизация (178-ФЗ) — другие рынки: аресты и запреты, понижение цены; 86 % торгов
+# имущества должников не состоялись (прод, 17.11.2026, 341 из 395). В сводки они не идут,
+# в списках лотов остаются с пометкой вида торгов. Лот без вида (старая запись) — как ZK.
+MARKET_TYPES = (None, "", "ZK")
+
+
+def in_market(lot: dict[str, Any]) -> bool:
+    return lot.get("bidd_type") in MARKET_TYPES
 
 
 def bidd_label(lot: dict[str, Any]) -> str:
@@ -405,9 +418,12 @@ def _admitted(lot: dict[str, Any]) -> int | None:
 
 
 def stats_of(lots: list[dict[str, Any]]) -> dict[str, Any]:
-    """Сводка одной группы лотов (район, квартал или весь регион)."""
+    """Сводка одной группы лотов (район, квартал или весь регион). Только земельные торги по
+    ЗК (`in_market`): другие виды торгов — другой рынок."""
     by: dict[str, list[dict[str, Any]]] = {}
     for lot in lots:
+        if not in_market(lot):
+            continue
         by.setdefault(_outcome(lot), []).append(lot)
     sold, single = by.get("sold", []), by.get("single", [])
     none, failed = by.get("none", []), by.get("failed", [])
