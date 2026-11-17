@@ -146,12 +146,10 @@ class LiveNspdProvider:
         GeoJSON-геометрия в долготе и широте; не нашли — None."""
         from pynspd.map_types.enums import ThemeId
 
-        feat = self._client().find(key, ThemeId.CADASTRAL_DIVISION)
-        if feat is None or feat.geometry is None:
-            return None
-        if feat.geometry.type not in ("Polygon", "MultiPolygon"):
-            return None
-        return feat.geometry.model_dump(by_alias=True, mode="json")
+        # `find` библиотеки на номер района («24:50») отвечает AmbiguousSearchError: поиск
+        # возвращает район вместе с его кварталами (прод, 17.11.2026). Выбираем сами.
+        feats = self._client().search(key, ThemeId.CADASTRAL_DIVISION) or []
+        return pick_division([f.model_dump(by_alias=True, mode="json") for f in feats], key)
 
     # --- окружение участка (модуль «Локация», по запросу из отчёта) ------------------------
     def fetch_area_raw(
@@ -265,3 +263,33 @@ class LiveNspdProvider:
             except Exception as e:  # noqa: BLE001
                 raw["nspd"]["errors"].append(f"{key}: {type(e).__name__}: {e}")
         return slim_raw(raw, parcel_geojson)
+
+
+def _exact(props: Any, key: str) -> bool:
+    """Номер места стоит значением в свойствах объекта (верхний уровень или options)."""
+    if not isinstance(props, dict):
+        return False
+    if any(v == key for v in props.values()):
+        return True
+    return any(v == key for v in (props.get("options") or {}).values())
+
+
+def pick_division(features: list[dict[str, Any]], key: str) -> dict[str, Any] | None:
+    """Контур кадастрового района или квартала с номером ровно `key` из ответа поиска НСПД.
+    Совпадений несколько — берём самый большой контур (район, а не его часть)."""
+    from shapely.geometry import shape
+
+    best, best_area = None, -1.0
+    for f in features:
+        geom = f.get("geometry") or {}
+        if geom.get("type") not in ("Polygon", "MultiPolygon"):
+            continue
+        if not _exact(f.get("properties"), key):
+            continue
+        try:
+            area = shape(geom).area
+        except Exception:  # noqa: BLE001 — кривой контур пропускаем
+            continue
+        if area > best_area:
+            best, best_area = geom, area
+    return best

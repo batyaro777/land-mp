@@ -1103,3 +1103,21 @@ def test_places_fill_store_retry_and_map_contour(client):  # noqa: F811
     _admin(client)
     page = client.get("/tools/torgi-liquidity?region=40").text
     assert '"type": "Polygon"' in page
+
+
+def test_pick_division_exact_number_largest_contour():
+    """Поиск НСПД на номер района отдаёт район вместе с его кварталами (прод, 17.11.2026:
+    AmbiguousSearchError у библиотеки) — берём объект ровно с этим номером."""
+    from landcheck.providers.nspd import pick_division
+
+    def feat(number: str, size: float, top: bool = False) -> dict:
+        ring = [[0, 0], [size, 0], [size, size], [0, size], [0, 0]]
+        props = {"label": number} if top else {"options": {"cad_num": number}}
+        return {"properties": props, "geometry": {"type": "Polygon", "coordinates": [ring]}}
+
+    feats = [feat("24:50:0300101", 1), feat("24:50", 9), feat("24:50:0300102", 2)]
+    assert pick_division(feats, "24:50")["coordinates"][0][1] == [9, 0]
+    assert pick_division(feats, "24:50:0300102")["coordinates"][0][1] == [2, 0]
+    assert pick_division([feat("24:50", 3, top=True)], "24:50") is not None
+    assert pick_division(feats, "24:51") is None
+    assert pick_division([{"properties": {"label": "24:50"}, "geometry": None}], "24:50") is None
