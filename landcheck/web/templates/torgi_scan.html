@@ -208,6 +208,8 @@ document.querySelectorAll('form.torgi-filter select:not([onchange]), form.torgi-
       {% for t in (s.minus|reject('in', s.why)|list)[:2] %}<li><span class="dot check"></span>{{ t }}</li>{% endfor %}
       {% for t in (s.plus|reject('in', s.why)|list)[:2] %}<li><span class="dot ok"></span>{{ t }}</li>{% endfor %}
       {% for t in (s.ask|reject('in', s.why)|list)[:1] %}<li><span class="dot"></span>{{ t }}</li>{% endfor %}
+      {% set zl = zone_label(r) if zone_label else none %}
+      {% if zl %}<li><span class="dot {{ 'ok' if zl == 'нет' else ('check' if r.zones else '') }}"></span>Обременения (ЗОУИТ): {{ zl|truncate(200) }}</li>{% elif s.verdict in ('go', 'edge') and r.cad_num %}<li><span class="dot"></span><span class="muted">Обременения (ЗОУИТ) проверяем в НСПД — обновите страницу через пару минут</span></li>{% endif %}
     </ul></td>
   </tr>
   {% endfor %}

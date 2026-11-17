@@ -406,6 +406,12 @@ class TorgiLot(Base):
     seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     card_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     nspd_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # обременения участка (ЗОУИТ, ООПТ, лесопарк) из полного запроса НСПД — `torgi_zones`:
+    # zones — короткие строки (пустой список — пересечений нет), zones_state — ok | noborders |
+    # notfound | error (error повторяется через сутки). Сбор лотов эти поля не трогает.
+    zones: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    zones_state: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    zones_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     FIELDS = (
         "id region district quarter cad_num kind form bidd_type bidd_type_name status area_m2 "
@@ -422,6 +428,8 @@ class TorgiLot(Base):
         # не ушёл» от «ещё не знаем» (в базу поле не пишется, см. `torgi_sync.upsert`)
         out = {f: getattr(self, f) for f in self.FIELDS}
         out["card"] = self.card_at is not None
+        out["zones"] = self.zones
+        out["zones_state"] = self.zones_state
         # время окончания приёма заявок и торгов по местному времени лота и подпись пояса
         out["bidd_end_hm"] = torgi_time.local_hm(self.bidd_end_at, self.tz_offset)
         out["auction_hm"] = torgi_time.local_hm(self.auction_at, self.tz_offset)
@@ -587,6 +595,9 @@ _NEW_COLUMNS: dict[str, dict[str, str]] = {
         "tz_offset": "INTEGER",
         "applied_min": "BOOLEAN",
         "images": "JSON",
+        "zones": "JSON",
+        "zones_state": "VARCHAR(12)",
+        "zones_at": "DATETIME",
     },
     "users": {
         "email": "VARCHAR(200)",

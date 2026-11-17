@@ -31,7 +31,7 @@ from landcheck.models import Purpose
 from landcheck.models import Request as CheckRequest
 from landcheck.regions import CADASTRAL_REGIONS
 from landcheck.web import db as dbmod
-from landcheck.web import jobs, torgi_places, torgi_sync
+from landcheck.web import jobs, torgi_places, torgi_sync, torgi_zones
 from landcheck.web.app import render, require_user
 from landcheck.web.config import settings
 from landcheck.web.db import (
@@ -435,9 +435,12 @@ def torgi_scan_page(request: Request, user: TorgiDep, page: int = 1):
     pages = max(1, (len(result["rows"]) + PAGE_ROWS - 1) // PAGE_ROWS)
     page = min(max(page, 1), pages)
     rows = result["rows"][(page - 1) * PAGE_ROWS : page * PAGE_ROWS]
+    # обременения у «интересен» и «на грани» на этой странице (обещано в чате 17.11 к 19.11)
+    torgi_zones.start_fill([r["id"] for r in rows if r["s"]["verdict"] in ("go", "edge")])
     return render(
         request,
         "torgi_scan.html",
+        zone_label=torgi_zones.label,
         sync=None if all_mode else torgi_sync.state_of(region),
         result=result,
         rows=rows,
@@ -983,7 +986,7 @@ HISTORY_ROWS = 200
 
 def history_row(lot: dict[str, Any], stats: dict[str, dict[str, Any]]) -> dict[str, Any]:
     """Строка списка завершённых торгов: исход, рост, заявки, кто взял и почему, вероятно,
-    не ушёл (чат 17.11 №76: цена выше рынка, нет спроса, ФАС, отмена; обременения — позже)."""
+    не ушёл (чат 17.11 №76: цена выше рынка, нет спроса, ФАС, отмена, обременения)."""
     outcome = torgi_scan._outcome(lot)
     kind = lot.get("kind") or "sale"
     area = lot.get("area_m2")
@@ -1010,6 +1013,10 @@ def history_row(lot: dict[str, Any], stats: dict[str, dict[str, Any]]) -> dict[s
         signals.append("торги аннулированы")
     if lot.get("stopped"):
         signals.append("торги приостанавливали")
+    if lot.get("zones_state") == "ok" and lot.get("zones"):
+        zones = lot["zones"]
+        more = f" и ещё {len(zones) - 3}" if len(zones) > 3 else ""
+        signals.append("обременения: " + "; ".join(zones[:3]) + more)
     reason = torgi.FAIL_KIND_RU.get(torgi_scan._fail_kind(lot) or "")
     return {
         **lot,
@@ -1068,10 +1075,15 @@ def torgi_history_page(request: Request, user: TorgiDep, page: int = 1):
     rows.sort(key=lambda r: r.get("auction_date") or r.get("published") or "", reverse=True)
     pages = max(1, (len(rows) + HISTORY_ROWS - 1) // HISTORY_ROWS)
     page = min(max(page, 1), pages)
+    shown = rows[(page - 1) * HISTORY_ROWS : page * HISTORY_ROWS]
+    # обременения — у тех, кто не нашёл хозяина (чат 17.11 №76): фоном, страница не ждёт НСПД
+    unsold = [r["id"] for r in shown if r["outcome"] in ("none", "failed")]
+    torgi_zones.start_fill(unsold)
     return render(
         request,
         "torgi_history.html",
-        rows=rows[(page - 1) * HISTORY_ROWS : page * HISTORY_ROWS],
+        rows=shown,
+        zones_pending=len(torgi_zones.missing(unsold)),
         total=len(rows),
         counts=counts,
         names=district_names(lots),

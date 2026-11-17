@@ -1165,3 +1165,79 @@ def test_pick_division_exact_number_largest_contour():
     child["properties"]["options"]["parent_cad_num"] = "24:50"
     assert pick_division([child, feat("24:50", 9)], "24:50")["coordinates"][0][1] == [9, 0]
     assert pick_division([{"properties": {"label": "24:50"}, "geometry": None}], "24:50") is None
+
+
+def test_zones_summary_fill_retry_and_pages(client):  # noqa: F811
+    """Чат 17.11 №76 (обещано к 19.11): обременения у лотов — ЗОУИТ, ООПТ, лесопарк из
+    полного ответа НСПД; кэш участков первым; НСПД не ответил — повтор через сутки; в списке
+    лотов строка «Обременения», у не ушедших — сигнал «обременения: …»."""
+    from landcheck import torgi_scan
+    from landcheck.web import torgi_sync, torgi_zones
+    from landcheck.web.db import TorgiLot, session
+    from tests.helpers import zone
+
+    lep = zone("ЗОУИТ", "40:13-6.1", "Охранная зона", "Охранная зона ВЛ 10 кВ")
+    park = zone("ООПТ", "40:00-6.9", None, "Национальный парк Угра")
+    assert torgi_zones.summary({"found": False}) == (None, "notfound")
+    assert torgi_zones.summary({"found": False, "errors": ["timeout"]}) == (None, "error")
+    ok = make_payload("40:13:120101:100", zouit=[lep], oopt=[park])
+    zones, state = torgi_zones.summary(ok)
+    assert state == "ok" and len(zones) == 2 and zones[1].startswith("ООПТ: ")
+    assert "Охранная зона ВЛ 10 кВ" in zones[0] and "40:13-6.1" in zones[0]
+    assert torgi_zones.summary(make_payload("x", zouit=[]))[0] == []
+    assert torgi_zones.summary(make_payload("x", borders=False, zouit_checked=False))[1] == (
+        "noborders"
+    )
+
+    fake = _seed(client)
+    _sync(fake, provider=FakeNspd())
+    _admin(client)
+    card = _done(98, "FAILED")
+    with session() as db:
+        torgi_sync.upsert(db, torgi_scan.lot_row(_full(card, fin=None, applied=0)), NOW, card=True)
+        db.commit()
+
+    class Cache:
+        def __init__(self):
+            self.data = {"40:13:120101:101": make_payload("40:13:120101:101", zouit=[])}
+            self.put_calls: list[str] = []
+
+        def get(self, cad, allow_stale=False):
+            return self.data.get(cad)
+
+        def put(self, cad, payload):
+            self.put_calls.append(cad)
+
+    class Provider:
+        calls: list[str] = []
+
+        def fetch_raw(self, cad):
+            self.calls.append(cad)
+            if cad.endswith(":102"):
+                raise TimeoutError("НСПД молчит")
+            return make_payload(cad, zouit=[lep])
+
+        def close(self):
+            pass
+
+    cache, provider = Cache(), Provider()
+    with session() as db:
+        failed_cad = db.get(TorgiLot, "F_98").cad_num
+    ids = ["ACT_0", "ACT_1", "ACT_2", "F_98"]
+    done = torgi_zones.fill(ids, provider=provider, cache=cache, sleep=lambda _s: None, now=NOW)
+    assert done == 4 and "40:13:120101:101" not in provider.calls  # из кэша
+    assert cache.put_calls == ["40:13:120101:100", failed_cad]  # ответ с зонами — в кэш
+    with session() as db:
+        lots = {i: db.get(TorgiLot, i) for i in ids}
+        assert lots["ACT_0"].zones_state == "ok" and lots["ACT_0"].zones
+        assert lots["ACT_1"].zones == [] and lots["ACT_1"].zones_state == "ok"
+        assert lots["ACT_2"].zones is None and lots["ACT_2"].zones_state == "error"
+    assert torgi_zones.missing(ids, now=NOW + timedelta(hours=1)) == []
+    assert torgi_zones.missing(ids, now=NOW + timedelta(days=2)) == ["ACT_2"]
+
+    scan = client.get("/tools/torgi-scan?region=40&roi=40").text
+    assert "Обременения (ЗОУИТ): нет" in scan  # ACT_1
+    assert "Обременения (ЗОУИТ): НСПД не ответил, повторим завтра" in scan  # ACT_2
+    assert "Обременения (ЗОУИТ): Охранная зона ВЛ 10 кВ" in scan  # ACT_0
+    hist = client.get("/tools/torgi-history?region=40&outcome=none").text
+    assert "обременения: Охранная зона ВЛ 10 кВ" in hist
