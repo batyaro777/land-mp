@@ -29,6 +29,7 @@ SIMPLIFY_DEG = 0.0002  # ~20 м: границу квартала на карте
 
 _lock = threading.Lock()
 _running = False
+_queue: dict[str, None] = {}  # районы и кварталы в очереди, по порядку постановки
 
 
 def _aware(dt: datetime | None) -> datetime | None:
@@ -146,28 +147,38 @@ def fill(
 
 
 def start_fill(keys: Iterable[str | None]) -> int:
-    """Фоном, один поток на сервер: страница не ждёт НСПД. Возвращает, сколько контуров
-    поставлено в загрузку (0 — всё есть, загрузка уже идёт или демо-режим)."""
+    """Фоном, один поток на сервер: страница не ждёт НСПД. Районы и кварталы встают в общую
+    очередь — открытые во время чужой загрузки не теряются (прод, 17.11: кварталы 24:50 не
+    встали в загрузку, пока грузились районы). Возвращает, сколько добавлено в очередь
+    (0 — всё есть, уже в очереди или демо-режим)."""
     global _running
     if settings.fixtures is not None:
         return 0
     todo = missing(keys)
-    if not todo:
-        return 0
     with _lock:
-        if _running:
-            return 0
+        fresh = [k for k in todo if k not in _queue]
+        for k in fresh:
+            _queue[k] = None
+        if not _queue or _running:
+            return len(fresh)
         _running = True
 
     def job() -> None:
         global _running
-        try:
-            fill(todo)
-        except Exception as exc:  # noqa: BLE001 — фоновая догрузка не должна ронять сервер
-            log.warning("torgi places: %s", exc)
-        finally:
+        while True:
             with _lock:
-                _running = False
+                batch = list(_queue)[:MAX_PER_RUN]
+                if not batch:
+                    _running = False
+                    return
+            try:
+                fill(batch)
+            except Exception as exc:  # noqa: BLE001 — фоновая догрузка не должна ронять сервер
+                log.warning("torgi places: %s", exc)
+            finally:
+                with _lock:
+                    for k in batch:
+                        _queue.pop(k, None)
 
     threading.Thread(target=job, name="torgi-places", daemon=True).start()
-    return min(len(todo), MAX_PER_RUN)
+    return len(fresh)

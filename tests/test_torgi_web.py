@@ -1277,3 +1277,35 @@ def test_canceled_lots_backfill_once_and_history_tab(client):  # noqa: F811
     assert "отменены организатором 12" in page and "все завершённые 21" in page
     tab = client.get("/tools/torgi-history?region=40&outcome=canceled").text
     assert tab.count("отменён организатором") == 12
+
+
+def test_zones_queue_keeps_requests_while_busy(client, monkeypatch):  # noqa: F811
+    """Прод 17.11 (Клавдий d6a609f0): страница «не ушедших», открытая во время проверки
+    списка лотов, теряла свои лоты. Теперь они встают в очередь за текущими."""
+    import threading
+    import time as _time
+
+    from landcheck.web import torgi_zones
+    from landcheck.web.config import settings
+
+    fake = _seed(client)
+    _sync(fake, provider=FakeNspd())
+    monkeypatch.setattr(settings, "fixtures", None)
+    monkeypatch.setattr(torgi_zones, "MAX_PER_RUN", 2)
+    gate, batches = threading.Event(), []
+
+    def slow_fill(ids, **kw):
+        batches.append(list(ids))
+        gate.wait(5)
+        return len(ids)
+
+    monkeypatch.setattr(torgi_zones, "fill", slow_fill)
+    assert torgi_zones.start_fill(["ACT_0", "ACT_1"]) == 2
+    assert torgi_zones.start_fill(["ACT_1", "ACT_2", "ACT_3"]) == 2  # ACT_1 уже в очереди
+    assert torgi_zones.queued() == 4
+    gate.set()
+    for _ in range(100):
+        if torgi_zones.queued() == 0 and not torgi_zones._running:
+            break
+        _time.sleep(0.02)
+    assert batches == [["ACT_0", "ACT_1"], ["ACT_2", "ACT_3"]] and torgi_zones.queued() == 0

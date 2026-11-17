@@ -902,7 +902,9 @@ def _map_data(
     ещё догружается."""
     keys = [r["key"] for r in rows]
     have = torgi_places.shapes(keys)
-    pending = torgi_places.start_fill(keys)
+    torgi_places.start_fill(keys)
+    # ещё не загружены (в очереди или грузятся сейчас); без НСПД в демо-режиме — 0
+    pending = len(torgi_places.missing(keys)) if settings.fixtures is None else 0
     spots: dict[str, list[tuple[float, float]]] = {}
     points = []
     for lot in lots:

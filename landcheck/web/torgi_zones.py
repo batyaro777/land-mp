@@ -37,6 +37,7 @@ STATE_RU = {
 
 _lock = threading.Lock()
 _running = False
+_queue: dict[str, None] = {}  # лоты в очереди на проверку, по порядку постановки
 
 
 def _aware(dt: datetime | None) -> datetime | None:
@@ -141,31 +142,47 @@ def fill(
 
 
 def start_fill(lot_ids: Iterable[str | None]) -> int:
-    """Фоном, один поток на сервер. Возвращает, сколько лотов поставлено в проверку
-    (0 — всё проверено, проверка уже идёт или демо-режим)."""
+    """Фоном, один поток на сервер. Лоты встают в общую очередь: страница, открытая во время
+    чужой проверки, не теряет свои (прод, 17.11: запрос «не ушедших» во время проверки списка
+    лотов отбрасывался). Возвращает, сколько лотов добавлено в очередь (0 — всё проверено,
+    уже в очереди или демо-режим)."""
     global _running
     if settings.fixtures is not None:
         return 0
     todo = missing(lot_ids)
-    if not todo:
-        return 0
     with _lock:
-        if _running:
-            return 0
+        fresh = [i for i in todo if i not in _queue]
+        for i in fresh:
+            _queue[i] = None
+        if not _queue or _running:
+            return len(fresh)
         _running = True
 
     def job() -> None:
         global _running
-        try:
-            fill(todo)
-        except Exception as exc:  # noqa: BLE001 — фоновая проверка не должна ронять сервер
-            log.warning("torgi zones: %s", exc)
-        finally:
+        while True:
             with _lock:
-                _running = False
+                batch = list(_queue)[:MAX_PER_RUN]
+                if not batch:
+                    _running = False
+                    return
+            try:
+                fill(batch)
+            except Exception as exc:  # noqa: BLE001 — фоновая проверка не должна ронять сервер
+                log.warning("torgi zones: %s", exc)
+            finally:
+                with _lock:
+                    for i in batch:
+                        _queue.pop(i, None)
 
     threading.Thread(target=job, name="torgi-zones", daemon=True).start()
-    return min(len(todo), MAX_PER_RUN)
+    return len(fresh)
+
+
+def queued() -> int:
+    """Сколько лотов ждут проверки обременений (для подписи на странице)."""
+    with _lock:
+        return len(_queue)
 
 
 def label(lot: dict[str, Any]) -> str | None:
