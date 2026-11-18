@@ -537,8 +537,12 @@ def sync_region(
         _read_cards(api, region, [r[0] for r in need[:max_cards]], now, stats, "cards")
 
         # 5. НСПД по идущим ----------------------------------------------------------------------
-        _update(region, phase="nspd")
-        stats["nspd"] = enrich_nspd(region, now, provider=provider, limit=max_nspd, sleep=sleep)
+        # На сервере точки читает отдельный поток (`start_points_loop`): он не ждёт очереди
+        # регионов. Здесь — только когда его нет (тесты, запуск сбора из командной строки).
+        stats["nspd"] = 0
+        if provider is not None or not points_loop_alive():
+            _update(region, phase="nspd")
+            stats["nspd"] = enrich_nspd(region, now, provider=provider, limit=max_nspd, sleep=sleep)
 
         stats["requests"] = api.requests
         _update(
@@ -653,29 +657,39 @@ def _read_card(
 
 
 def enrich_nspd(
-    region: str, now: datetime, *, provider=None, limit: int = 300, sleep=time.sleep
+    region: str | None,
+    now: datetime,
+    *,
+    provider=None,
+    limit: int = 300,
+    sleep=time.sleep,
+    skip: set[str] | None = None,
+    failed: list[str] | None = None,
+    max_fail_streak: int | None = None,
 ) -> int:
     """Кадастровая стоимость и точка на карте для идущих лотов: из кэша участков, иначе лёгкий
-    запрос НСПД (без зон). Урезанный ответ в общий кэш не пишем."""
+    запрос НСПД (без зон). Урезанный ответ в общий кэш не пишем. `region=None` — все регионы.
+    `skip` — лоты, которые пока не трогаем; в `failed` попадают те, по которым НСПД не
+    ответил; `max_fail_streak` отказов подряд — выходим, не добивая пачку."""
     if limit <= 0 or (provider is None and settings.fixtures is not None):
         return 0
     from landcheck.cache import ParcelCache
     from landcheck.normalize import parcel_from_payload
 
     with session() as db:
-        need = list(
-            db.scalars(
-                select(TorgiLot.id).where(
-                    TorgiLot.region == region,
-                    TorgiLot.status.in_(sorted(torgi.ACTIVE)),
-                    TorgiLot.cad_num.is_not(None),
-                    TorgiLot.nspd_at.is_(None),
-                )
-            ).all()
-        )[:limit]
+        q = select(TorgiLot.id).where(
+            TorgiLot.status.in_(sorted(torgi.ACTIVE)),
+            TorgiLot.cad_num.is_not(None),
+            TorgiLot.nspd_at.is_(None),
+        )
+        if region is not None:
+            q = q.where(TorgiLot.region == region)
+        ids = db.scalars(q.order_by(TorgiLot.region, TorgiLot.id)).all()
+    need = [i for i in ids if not skip or i not in skip][:limit]
     if not need:
         return 0
-    if provider is None:
+    own_provider = provider is None
+    if own_provider:
         from landcheck.providers.nspd import LiveNspdProvider
 
         provider = LiveNspdProvider(
@@ -683,8 +697,11 @@ def enrich_nspd(
         )
     cache = ParcelCache(settings.cache_path, ttl_days=30)
     done = 0
+    streak = 0
     try:
         for lot_id in need:
+            if max_fail_streak and streak >= max_fail_streak:
+                break
             with session() as db:
                 lot = db.get(TorgiLot, lot_id)
                 if lot is None or not lot.cad_num:
@@ -696,8 +713,12 @@ def enrich_nspd(
                     payload = provider.fetch_raw(cad)
                 except Exception as exc:  # noqa: BLE001 — НСПД не ответил: попробуем в следующий раз
                     log.info("torgi nspd %s: %s", cad, exc)
+                    streak += 1
+                    if failed is not None:
+                        failed.append(lot_id)
                     sleep(NSPD_PAUSE_S)
                     continue
+                streak = 0
                 sleep(NSPD_PAUSE_S)
             parcel = parcel_from_payload(payload)
             with session() as db:
@@ -720,7 +741,87 @@ def enrich_nspd(
             done += 1
     finally:
         cache.close()
+        if own_provider:
+            provider.close()
     return done
+
+
+# --- точки на карте отдельным потоком --------------------------------------------------------
+# Прод, 18.11.2026: точка на карте была у 1088 идущих продаж из 4484, в четырёх больших
+# регионах — ни у одного лота. НСПД читался последним шагом прохода по региону, по 300 лотов,
+# а регионы стоят в одной очереди: Московская область заполнялась бы днями. Без точки нет
+# цены по объявлениям рядом с лотом. Поэтому точки читает свой поток, по всем регионам подряд.
+POINTS_BATCH = 50
+POINTS_IDLE_S = 300.0  # всё дочитано — следующая проверка через пять минут
+POINTS_FAIL_STREAK = 8  # столько отказов НСПД подряд — сервис лежит или закрыл адрес
+POINTS_BACKOFF_S = 1800.0
+POINTS_RETRY = timedelta(days=1)  # участок, на котором НСПД споткнулся, — не раньше суток
+
+_points_thread: threading.Thread | None = None
+
+
+def points_loop_alive() -> bool:
+    return _points_thread is not None and _points_thread.is_alive()
+
+
+def points_step(
+    failed: dict[str, datetime],
+    *,
+    now: datetime | None = None,
+    provider=None,
+    sleep=time.sleep,
+    limit: int = POINTS_BATCH,
+) -> tuple[int, int]:
+    """Одна пачка точек по всем регионам: (прочитано, отказов НСПД). `failed` — память
+    потока: по какому лоту и когда НСПД не ответил."""
+    now = now or utcnow()
+    skip = {i for i, at in failed.items() if now - at < POINTS_RETRY}
+    bad: list[str] = []
+    done = enrich_nspd(
+        None,
+        now,
+        provider=provider,
+        limit=limit,
+        sleep=sleep,
+        skip=skip,
+        failed=bad,
+        max_fail_streak=POINTS_FAIL_STREAK,
+    )
+    for lot_id in bad:
+        failed[lot_id] = now
+    if not done and len(bad) >= POINTS_FAIL_STREAK:
+        # отказы подряд без единого ответа — дело в НСПД, а не в участках: их не запоминаем
+        for lot_id in bad:
+            failed.pop(lot_id, None)
+    return done, len(bad)
+
+
+def start_points_loop(*, first_delay_s: float = 240.0) -> threading.Thread | None:
+    """Фоновое чтение точек и кадастровой стоимости идущих лотов. В демо-режиме и при
+    `LANDCHECK_TORGI_SCAN_NSPD=0` не запускается."""
+    global _points_thread
+    if settings.torgi_scan_nspd <= 0 or settings.fixtures is not None or points_loop_alive():
+        return None
+
+    def loop() -> None:
+        time.sleep(first_delay_s)
+        failed: dict[str, datetime] = {}
+        while True:
+            try:
+                done, bad = points_step(failed)
+            except Exception as exc:  # noqa: BLE001 — поток не должен умереть от одной ошибки
+                log.warning("torgi points: %s", type(exc).__name__)
+                time.sleep(POINTS_IDLE_S)
+                continue
+            if not done and bad >= POINTS_FAIL_STREAK:
+                log.warning("torgi points: НСПД не отвечает, пауза %s мин", POINTS_BACKOFF_S // 60)
+                time.sleep(POINTS_BACKOFF_S)
+            elif not done:
+                time.sleep(POINTS_IDLE_S)
+
+    _points_thread = threading.Thread(target=loop, name="torgi-points", daemon=True)
+    _points_thread.start()
+    return _points_thread
 
 
 # --- запуск --------------------------------------------------------------------------------
@@ -797,18 +898,6 @@ def due_regions(now: datetime | None = None) -> list[str]:
                 .group_by(TorgiLot.region)
             ).all()
         )
-        no_point = dict(
-            db.execute(
-                select(TorgiLot.region, func.count())
-                .where(
-                    TorgiLot.status.in_(sorted(torgi.ACTIVE)),
-                    TorgiLot.cad_num.is_not(None),
-                    TorgiLot.nspd_at.is_(None),
-                )
-                .group_by(TorgiLot.region)
-            ).all()
-        )
-    batch = settings.torgi_scan_nspd
     out = []
     for region, finished, state, stats in rows:
         if state in ("running", "queued"):
@@ -821,12 +910,6 @@ def due_regions(now: datetime | None = None) -> list[str]:
         elif unread.get(region) and (stats or {}).get("cards"):
             # цены и заявки дочитываются: прошлый проход карточки читал и они ещё остались.
             # Если не прочитал ни одной — карточки не отдаются, ждём обычный срок.
-            wait = timedelta(minutes=CARDS_RETRY_MIN)
-        elif no_point.get(region) and batch > 0 and ((stats or {}).get("nspd") or 0) >= batch:
-            # точки на карте и кадастровая стоимость дочитываются пачками: прошлый проход взял
-            # полную пачку, а идущие лоты без точки остались. Прод, 18.11.2026: в четырёх
-            # больших регионах точки не было ни у одного лота, а без неё нет цены по
-            # объявлениям рядом. Неполная пачка — НСПД не отвечает, ждём обычный срок.
             wait = timedelta(minutes=CARDS_RETRY_MIN)
         if finished is None or now - finished >= wait:
             out.append(region)
