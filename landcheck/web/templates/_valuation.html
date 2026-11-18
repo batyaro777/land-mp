@@ -12,6 +12,20 @@
     {% if d.price_per_sotka %}<tr><th>Цена в объявлении</th><td>{{ d.price_per_sotka|money }} за сотку</td></tr>{% endif %}
   </table>
   {% if valuation.verdict %}<p><strong>Вердикт:</strong> {{ valuation.verdict }}. <span class="muted small">Уверенность: {{ valuation.confidence }}.</span></p>{% endif %}
+  {% set deals = valuation.deals %}
+  {% if deals %}
+  <details id="deals-in-quarter"><summary class="small">Сделки в кадастровом {{ 'квартале' if deals.deals_level == 'quarter' else 'районе' }}: {{ deals.deals_n }} за {{ deals.deals_span }} · от {{ (deals.deals_lo_m2 * 100)|money }} до {{ (deals.deals_hi_m2 * 100)|money }} за сотку, середина {{ (deals.min_m2 * 100)|money }} – {{ (deals.max_m2 * 100)|money }}</summary>
+    <div class="table-wrap">
+    <table class="results">
+      <thead><tr><th>Квартал года</th><th class="num">Площадь участка</th><th class="num">₽ за сотку</th><th class="num">Сделок в строке</th></tr></thead>
+      {% for x in deals.deals %}
+      <tr><td>{{ x.period }}</td><td class="num">{{ (x.area_m2 / 100)|round(1) }} сот.</td><td class="num">{{ x.pps|money }}</td><td class="num">{{ x.n }}</td></tr>
+      {% endfor %}
+    </table>
+    </div>
+    <p class="muted small">Сделки с участками той же группы назначения и площадью от 1/5 до 5 площадей этого участка, зарегистрированные Росреестром{% if deals.deals_level != 'quarter' %} в кадастровом районе: в самом квартале сопоставимых сделок меньше трёх{% endif %}. Это цены из договоров: они бывают занижены, а среди сделок встречается льготный выкуп у муниципалитета — считайте это нижней границей рынка. Кадастровых номеров Росреестр в этих данных не раскрывает; одинаковые сделки объединены в одну строку. Источник: <a href="{{ valuation.deals_source }}" target="_blank" rel="noopener">Росреестр, государственные дата-сеты</a>.</p>
+  </details>
+  {% endif %}
   {% set ads = valuation.ads %}
   {% if ads and ads.n %}
   <details><summary class="small">Объявления {% if ads.scope == 'district' %}в районе ({{ ads.n }}) · {{ ads.scope_label }}: в населённом пункте нашлось {{ ads.n_local or 0 }}, добрано по району{% else %}в локации ({{ ads.n }}){% if ads.locality %} · {{ ads.locality }}{% endif %}{% endif %}{% if ads.fetched_at %} · {{ ads.fetched_at|dt }}{% endif %}</summary>

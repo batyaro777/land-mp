@@ -32,7 +32,7 @@ from landcheck.models import SOTKA_M2, BatchResult, Purpose
 from landcheck.models import Request as CheckRequest
 from landcheck.regions import CADASTRAL_REGIONS
 from landcheck.rules import classifier
-from landcheck.rules.catalog import is_wide_zone
+from landcheck.rules.catalog import is_wide_zone, share_text, zone_shares
 from landcheck.summary import merge_documents, plain_summary
 from landcheck.web import jobs
 from landcheck.web.auth import (
@@ -90,6 +90,8 @@ templates.env.filters["money"] = fmt_money
 templates.env.filters["wide_zone"] = lambda z: is_wide_zone(
     str((z or {}).get("kind") or ""), str((z or {}).get("name") or "")
 )
+templates.env.filters["zone_shares"] = zone_shares
+templates.env.filters["share_text"] = share_text
 templates.env.filters["sotka"] = fmt_sotka
 templates.env.filters["dt"] = fmt_date
 templates.env.filters["day"] = fmt_day
@@ -858,7 +860,34 @@ def _corridor_for(data: dict[str, Any]) -> dict[str, Any] | None:
 def _valuation_for(data, corridor, median_batch):
     from landcheck.web.content import valuation
 
-    return valuation(data, corridor=corridor, ads=data.get("market_ads"), median_batch=median_batch)
+    return valuation(
+        data,
+        corridor=corridor,
+        ads=data.get("market_ads"),
+        median_batch=median_batch,
+        deals=_parcel_deals(data),
+    )
+
+
+def _parcel_deals(data) -> dict[str, Any] | None:
+    """Сделки Росреестра в кадастровом квартале участка (или районе) — для блока «Рынок»."""
+    from landcheck import torgi_scan
+    from landcheck.web import rr_sync
+
+    p = data.get("parcel") or {}
+    try:
+        return rr_sync.market(
+            {
+                "quarter": torgi_scan.quarter_of(p.get("cad_num")),
+                "area_m2": p.get("area_m2"),
+                "vri_group": torgi_scan.vri_group(
+                    p.get("permitted_use"), category=p.get("category")
+                ),
+            }
+        )
+    except Exception as exc:  # noqa: BLE001 — справочный блок не должен ронять отчёт
+        log.warning("rr deals: %s", type(exc).__name__)
+        return None
 
 
 @router.get("/checks/{check_id}/items/{cad_num}/admin-docs", response_class=HTMLResponse)

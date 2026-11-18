@@ -412,6 +412,35 @@ def _pct(share: float) -> str:
     return "<1%" if 0 < share < 0.01 else f"{share:.0%}"
 
 
+def zone_shares(parcel: dict | None) -> dict[str, float]:
+    """Доля площади участка под каждой ЗОУИТ — по реестровому номеру зоны (у зоны без номера
+    — по названию). Задача из чата, 18.11.2026: в отчёте было только «действует на участок»,
+    а «охранная зона ЛЭП на 3 % площади» и «на весь участок» — разные риски. Считается по
+    контурам, сохранённым для карты, поэтому работает и на уже сделанных проверках."""
+    out: dict[str, float] = {}
+    geometry = (parcel or {}).get("geometry")
+    for z in (parcel or {}).get("zouit_geometries") or []:
+        key = str(z.get("reg_number") or z.get("name") or "")
+        share = _overlap_share(geometry, [z]) if key else None
+        if share is not None:
+            out[key] = max(share, out.get(key, 0.0))
+    return out
+
+
+def share_text(share: float | None) -> str | None:
+    """«весь участок», «37 % площади участка», «меньше 1 % площади участка» или «только
+    касается границы»; None — контура зоны нет."""
+    if share is None:
+        return None
+    if share >= 0.995:
+        return "весь участок"
+    if share <= 0:
+        return "только касается границы"
+    if share < 0.01:
+        return "меньше 1 % площади участка"
+    return f"{share:.0%} площади участка".replace("%", " %")
+
+
 def _overlap_share(parcel_geojson, features: list) -> float | None:
     """Доля площади участка внутри объединения контуров (0–1); None — геометрии нет."""
     try:

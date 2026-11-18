@@ -330,3 +330,129 @@ def test_store_sync_and_pages(client, monkeypatch):  # noqa: F811
     with pytest.raises(ValueError):
         rr_sync.load_zip("2026Q3", q3_url, tmp)
     assert rr_sync.market(lot)["deals_n"] == 3
+
+
+def test_zone_shares_and_text():
+    """Задача из чата (№87–89): доля площади участка под каждой ЗОУИТ, а не только «действует
+    на участок»."""
+    from landcheck.rules.catalog import share_text, zone_shares
+    from tests.helpers import SQUARE
+
+    def box(x0: float, x1: float) -> dict:
+        ring = [[x0, 55.0], [x1, 55.0], [x1, 55.001], [x0, 55.001], [x0, 55.0]]
+        return {"type": "Polygon", "coordinates": [ring]}
+
+    parcel = {
+        "geometry": SQUARE,  # 37.000–37.001
+        "zouit_geometries": [
+            {
+                "reg_number": "50:09-6.1",
+                "name": "Охранная зона ЛЭП",
+                "geometry": box(37.0, 37.0003),
+            },
+            {"reg_number": "50:09-6.2", "name": "Водоохранная зона", "geometry": box(36.9, 37.1)},
+            {"reg_number": "50:09-6.3", "name": "Газопровод", "geometry": box(37.001, 37.002)},
+            {"reg_number": None, "name": "Зона без номера", "geometry": box(37.0, 37.00005)},
+            {"reg_number": "50:09-6.5", "name": "Без контура", "geometry": None},
+            {"reg_number": None, "name": None, "geometry": box(37.0, 37.001)},
+        ],
+    }
+    shares = zone_shares(parcel)
+    assert shares["50:09-6.1"] == pytest.approx(0.3, abs=0.001)
+    assert shares["50:09-6.2"] == 1.0 and shares["50:09-6.3"] == 0.0
+    assert shares["Зона без номера"] == pytest.approx(0.05, abs=0.001)
+    assert "50:09-6.5" not in shares and "" not in shares
+    assert zone_shares(None) == {} and zone_shares({"zouit_geometries": []}) == {}
+    assert zone_shares({**parcel, "geometry": None}) == {}  # границ участка нет — доли нет
+    assert share_text(0.3) == "30 % площади участка" and share_text(1.0) == "весь участок"
+    assert share_text(0.997) == "весь участок" and share_text(0.004) == "меньше 1 % площади участка"
+    assert share_text(0.0) == "только касается границы" and share_text(None) is None
+
+
+def test_valuation_takes_rosreestr_deals_as_market_anchor():
+    from landcheck.web.content import valuation
+
+    item = {"parcel": {"area_m2": 1000.0, "cadastral_cost_rub": 1_500_000}, "price_per_sotka": None}
+    index = _idx(*[_deal(120101, "housing", 1000, 200_000 + i * 50_000) for i in range(9)])
+    deals = rr_deals.deals_market(LOT, index)
+    assert deals["deals_n"] == 9 and deals["deals_level"] == "quarter"
+
+    v = valuation(
+        {**item, "price_per_sotka": 60_000}, corridor=None, ads=None, median_batch=None, deals=deals
+    )
+    labels = [a["label"] for a in v["market_anchors"]]
+    assert labels == ["сделки Росреестра в кадастровом квартале"] and v["has_market"] is True
+    assert (
+        v["market_anchors"][0]["pps"] == 40_000
+        and "9 сделок за 3 кв. 2026" in (v["market_anchors"][0]["note"])
+    )
+    # ни своей базы, ни объявлений — диапазоном становятся сделки квартала
+    assert v["range_source"] == "сделки Росреестра в квартале" and v["range"] == (30_000, 50_000)
+    assert (
+        v["verdict"].startswith("выше цен сделок в квартале на 20%") and "ожидаемо" in v["verdict"]
+    )
+    assert v["confidence"] == "средняя" and v["coef"]["n"] == 9 and v["deals"] is deals
+    assert v["deals_source"] == rr_deals.SOURCE_URL
+    inside = valuation(
+        {**item, "price_per_sotka": 45_000}, corridor=None, ads=None, median_batch=None, deals=deals
+    )
+    assert inside["verdict"].startswith("в диапазоне цен сделок")
+    low = valuation(
+        {**item, "price_per_sotka": 15_000}, corridor=None, ads=None, median_batch=None, deals=deals
+    )
+    assert low["verdict"].startswith("ниже цен сделок в квартале на 50%")
+
+    # есть объявления — диапазон и вердикт по ним, сделки остаются ориентиром рядом
+    ads = {"n": 5, "median": 210_000, "p25": 180_000, "p75": 250_000, "ads": []}
+    v = valuation(
+        {**item, "price_per_sotka": 200_000}, corridor=None, ads=ads, median_batch=None, deals=deals
+    )
+    assert v["range_source"] == "объявления в локации" and v["verdict"].startswith("в рынке")
+    assert [a["label"] for a in v["market_anchors"]] == [
+        "объявления в локации",
+        "сделки Росреестра в кадастровом квартале",
+    ]
+    # сделки только по району — ориентир есть, диапазона и вердикта «по сделкам» нет
+    far = rr_deals.deals_market(
+        {**LOT, "quarter": "24:11:0999999"},
+        _idx(*[_deal(120101, "housing", 1000, 300_000) for _ in range(12)]),
+    )
+    v = valuation(
+        {**item, "price_per_sotka": 60_000}, corridor=None, ads=None, median_batch=None, deals=far
+    )
+    assert v["market_anchors"][0]["label"] == "сделки Росреестра в кадастровом районе"
+    assert v["range"] is None and v["confidence"] == "низкая"
+    # сделок нет — блок прежний
+    v = valuation({**item, "price_per_sotka": 60_000}, corridor=None, ads=None, median_batch=None)
+    assert v["deals"] is None and v["has_market"] is False
+
+
+def test_report_shows_zone_share_and_deals_in_quarter(client):  # noqa: F811
+    from landcheck.web import rr_sync
+    from tests.test_web import login
+
+    login(client)
+    r = client.post(
+        "/checks", data={"title": "Доли", "numbers": "50:09:0060202:104", "purpose": "izhs"}
+    )
+    assert r.status_code == 303
+    url = r.headers["location"] + "/items/50:09:0060202:104"
+    page = client.get(url).text
+    # контур зоны в тестовых данных совпадает с участком
+    assert "действует на участок" in page and "· под зоной весь участок" in page
+    assert "Сделки в кадастровом" not in page
+
+    def line(price: int, n: int = 1) -> str:
+        return (
+            f"{n}~46000000000~50~Солнечногорский~Село~50:09:0060202~Новая~002001001000~~~~"
+            f"142001010000~{1000 * n}~2026-07-01~{price * n}~руб~ДКП"
+        )
+
+    rr_sync.load_lines(
+        "2026Q3", "test://q3", [HEADER, line(2_000_000), line(2_500_000, 2), line(3_000_000)]
+    )
+    page = client.get(url).text
+    assert "Сделки Росреестра в кадастровом квартале" in page
+    assert "Сделки в кадастровом квартале: 4 за 3 кв. 2026" in page
+    assert f'href="{rr_deals.SOURCE_URL}"' in page and "нижней границей рынка" in page
+    assert "<td>3 кв. 2026</td>" in page

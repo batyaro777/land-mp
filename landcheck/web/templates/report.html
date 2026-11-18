@@ -166,9 +166,11 @@
 {% if p.zouit %}
 <article>
   <h4>Зоны с особыми условиями использования ({{ p.zouit|length }})</h4>
+  {% set zshare = p|zone_shares %}
   {% for z in p.zouit %}
+  {% set zs = zshare.get(z.reg_number or z.name or '')|share_text %}
   <details {% if loop.first %}open{% endif %}>
-    <summary><strong>{{ z.kind or 'ЗОУИТ' }}</strong>{% if z.name %} — {{ z.name }}{% endif %} <span class="muted small">{{ z.reg_number or '' }}</span> {% if z|wide_zone %}<span class="badge mini v-ok">действует на весь курорт/муниципалитет, участок не ограничивает</span>{% else %}<span class="badge mini v-check">действует на участок</span>{% endif %}</summary>
+    <summary><strong>{{ z.kind or 'ЗОУИТ' }}</strong>{% if z.name %} — {{ z.name }}{% endif %} <span class="muted small">{{ z.reg_number or '' }}</span> {% if z|wide_zone %}<span class="badge mini v-ok">действует на весь курорт/муниципалитет, участок не ограничивает</span>{% else %}<span class="badge mini v-check">действует на участок</span>{% endif %}{% if zs %} <span class="small"{% if zs != 'весь участок' %} title="Доля площади участка внутри контура зоны по данным НСПД"{% endif %}>· под зоной {{ zs }}</span>{% endif %}</summary>
     {% if z.restrictions %}<p class="small restrictions">{{ z.restrictions }}</p>{% else %}<p class="muted small">Текст ограничений в НСПД не приведён.</p>{% endif %}
     {% set ex = z.extra %}
     {% if ex.get('legal_act_document_name') %}<p class="muted small">Основание: {{ ex.get('legal_act_document_name') }} № {{ ex.get('legal_act_document_number') }} от {{ ex.get('legal_act_document_date') }}, {{ ex.get('legal_act_document_issuer') }}</p>{% endif %}

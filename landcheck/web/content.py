@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from landcheck import rr_deals
 from landcheck.models import SOTKA_M2, Level, Purpose
 
 CHECKLIST: list[dict[str, Any]] = [
@@ -605,10 +606,16 @@ def valuation(
     corridor: dict[str, Any] | None,
     ads: dict[str, Any] | None,
     median_batch: float | None,
+    deals: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Оценка ориентира за сотку по открытым данным: база Land-MP, объявления в локации,
-    кадастр участка и соседей, медиана подборки. Диапазон — середина рынка (25–75 %) по самому
-    надёжному источнику; вердикт — положение цены объявления. Не отчёт об оценке."""
+    сделки Росреестра в кадастровом квартале, кадастр участка и соседей, медиана подборки.
+    Диапазон — середина рынка (25–75 %) по самому надёжному источнику; вердикт — положение
+    цены объявления. Не отчёт об оценке.
+
+    `deals` — оценка `rr_deals.deals_market`. Сделки — цены из договоров, обычно ниже
+    предложений, поэтому диапазоном они становятся, только когда нет ни своей базы, ни
+    объявлений, и только по своему кварталу; по району — справочный ориентир."""
     p = item.get("parcel") or {}
     area = p.get("area_m2")
     if not area or area < MIN_AREA_M2:
@@ -664,11 +671,38 @@ def valuation(
         anchors.append({"label": ads_label, "pps": ads["median"], "note": note})
         if rng is None:
             source, rng = ads_label, (ads["p25"], ads["p75"])
+    by_deals = False
+    if deals and deals.get("mid_m2"):
+        quarter = deals.get("deals_level") == "quarter"
+        anchors.append(
+            {
+                "label": "сделки Росреестра в кадастровом " + ("квартале" if quarter else "районе"),
+                "pps": deals["mid_m2"] * SOTKA_M2,
+                "note": f"{deals['deals_n']} сделок за {deals['deals_span']}; цены из договоров, "
+                "обычно ниже предложений",
+            }
+        )
+        if rng is None and quarter:
+            source = "сделки Росреестра в квартале"
+            rng = (deals["min_m2"] * SOTKA_M2, deals["max_m2"] * SOTKA_M2)
+            by_deals = True
     if not anchors:
         return None
     verdict = None
     position = None
-    if pps and rng:
+    if pps and rng and by_deals:
+        low, high = rng
+        position = round(pps / ((low + high) / 2) - 1, 3)
+        if low <= pps <= high:
+            verdict = "в диапазоне цен сделок, зарегистрированных в этом кадастровом квартале"
+        elif pps > high:
+            verdict = (
+                f"выше цен сделок в квартале на {pps / high - 1:.0%} — это ожидаемо: в договорах "
+                "цены обычно ниже предложений; объявлений для сравнения не нашлось"
+            )
+        else:
+            verdict = f"ниже цен сделок в квартале на {1 - pps / low:.0%} — проверить, почему"
+    elif pps and rng:
         low, high = rng
         mid = (low + high) / 2
         position = round(pps / mid - 1, 3)
@@ -699,7 +733,10 @@ def valuation(
         position = None
     coef = None
     if rng and cadastral and cadastral[0]["pps"]:
-        n = (corridor or {}).get("n") if source == "база Land-MP" else (ads or {}).get("n")
+        if by_deals:
+            n = deals["deals_n"]
+        else:
+            n = (corridor or {}).get("n") if source == "база Land-MP" else (ads or {}).get("n")
         coef = {
             "value": round(((rng[0] + rng[1]) / 2) / cadastral[0]["pps"], 1),
             "basis": source,
@@ -711,6 +748,8 @@ def valuation(
         confidence = "средняя"
     if n_sources == 2 and corridor.get("n", 0) >= 8 and ads.get("n", 0) >= 8:
         confidence = "высокая"
+    if by_deals and deals["deals_n"] >= 8:
+        confidence = "средняя"
     return {
         "area_sotka": round(area_sotka, 2),
         "anchors": anchors,
@@ -725,6 +764,9 @@ def valuation(
         "position": position,
         "confidence": confidence,
         "ads": ads,
-        "disclaimer": "Ориентир по открытым данным (кадастр, база Land-MP, объявления). "
+        "deals": deals if deals and deals.get("mid_m2") else None,
+        "deals_source": rr_deals.SOURCE_URL,
+        "disclaimer": "Ориентир по открытым данным (кадастр, база Land-MP, объявления, сделки "
+        "Росреестра). "
         "Не отчёт об оценке по 135-ФЗ: для сделки, залога или суда нужен оценщик.",
     }
