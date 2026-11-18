@@ -1032,6 +1032,46 @@ def test_scan_all_regions_one_list(client):  # noqa: F811
     assert '<a href="/tools/torgi-scan?roi=40&amp;region=all">' in lot
 
 
+def test_points_are_topped_up_soon_while_full_batches_remain(client, monkeypatch):  # noqa: F811
+    """Прод, 18.11.2026: в больших регионах точки на карте не было ни у одного идущего лота —
+    НСПД читается пачкой за проход, а проход шёл раз в сутки. Пока прошлый проход взял полную
+    пачку и лоты без точки остались, следующий — через 10 минут."""
+    from landcheck.web import torgi_sync
+    from landcheck.web.config import settings
+    from landcheck.web.db import TorgiLot, session
+
+    def without_point() -> int:
+        with session() as db:
+            lots = db.scalars(select(TorgiLot).where(TorgiLot.status.in_(sorted(torgi.ACTIVE))))
+            return sum(1 for x in lots if x.nspd_at is None)
+
+    monkeypatch.setattr(settings, "torgi_scan_nspd", 5)
+    fake = _seed(client)
+    nspd = FakeNspd()
+    _sync(fake, provider=nspd)
+    assert without_point() == 7 and len(nspd.calls) == 5
+    soon = datetime.now(UTC) + timedelta(minutes=torgi_sync.CARDS_RETRY_MIN + 1)
+    assert torgi_sync.due_regions(soon) == ["40"]
+    assert torgi_sync.due_regions(datetime.now(UTC) + timedelta(minutes=5)) == []
+    _sync(fake, provider=nspd)
+    assert without_point() == 2 and torgi_sync.due_regions(soon) == ["40"]
+    _sync(fake, provider=nspd)  # неполная пачка: всё дочитано
+    assert without_point() == 0 and torgi_sync.due_regions(soon) == []
+
+    # НСПД не отвечает: пачка неполная, хотя лоты без точки есть, — не дёргаем каждые 10 минут
+    with session() as db:
+        for lot in db.scalars(select(TorgiLot).where(TorgiLot.status.in_(sorted(torgi.ACTIVE)))):
+            lot.nspd_at = None
+        db.commit()
+
+    class Down:
+        def fetch_raw(self, cad_num: str) -> dict:
+            raise TimeoutError("nspd")
+
+    _sync(fake, provider=Down())
+    assert without_point() == 12 and torgi_sync.due_regions(soon) == []
+
+
 def test_scan_cache_reuses_until_data_changes(client, monkeypatch):  # noqa: F811
     """Общий список всех регионов не пересчитывает регион на каждый запрос: расчёт хранится,
     пока в регионе не записали лот или запись рынка. Сортировка страницы не портит его."""

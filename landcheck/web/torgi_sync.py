@@ -797,6 +797,18 @@ def due_regions(now: datetime | None = None) -> list[str]:
                 .group_by(TorgiLot.region)
             ).all()
         )
+        no_point = dict(
+            db.execute(
+                select(TorgiLot.region, func.count())
+                .where(
+                    TorgiLot.status.in_(sorted(torgi.ACTIVE)),
+                    TorgiLot.cad_num.is_not(None),
+                    TorgiLot.nspd_at.is_(None),
+                )
+                .group_by(TorgiLot.region)
+            ).all()
+        )
+    batch = settings.torgi_scan_nspd
     out = []
     for region, finished, state, stats in rows:
         if state in ("running", "queued"):
@@ -809,6 +821,12 @@ def due_regions(now: datetime | None = None) -> list[str]:
         elif unread.get(region) and (stats or {}).get("cards"):
             # цены и заявки дочитываются: прошлый проход карточки читал и они ещё остались.
             # Если не прочитал ни одной — карточки не отдаются, ждём обычный срок.
+            wait = timedelta(minutes=CARDS_RETRY_MIN)
+        elif no_point.get(region) and batch > 0 and ((stats or {}).get("nspd") or 0) >= batch:
+            # точки на карте и кадастровая стоимость дочитываются пачками: прошлый проход взял
+            # полную пачку, а идущие лоты без точки остались. Прод, 18.11.2026: в четырёх
+            # больших регионах точки не было ни у одного лота, а без неё нет цены по
+            # объявлениям рядом. Неполная пачка — НСПД не отвечает, ждём обычный срок.
             wait = timedelta(minutes=CARDS_RETRY_MIN)
         if finished is None or now - finished >= wait:
             out.append(region)
