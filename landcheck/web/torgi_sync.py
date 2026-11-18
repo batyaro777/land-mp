@@ -48,13 +48,17 @@ HISTORY_STATUSES = (torgi.STATUS_SUCCEED, torgi.STATUS_FAILED)
 # карточки не читаем. Регионы, собранные до 17.11, догружают их за год один раз: признак
 # `canceled_done` в сводке прохода переносится из прохода в проход.
 STATUS_CANCELED = "CANCELED"
-MAX_ACTIVE_PAGES = 300  # 3000 идущих лотов на регион — с запасом
+# 10 000 идущих лотов на регион: в Московской области 17.11 их было 2988 — старый предел
+# в 3000 оставлял без запаса, а недочитанный список идущих отключает поиск «пропавших».
+MAX_ACTIVE_PAGES = 1000
 MAX_HISTORY_PAGES = 800
 MAX_FINISHED = 150  # карточек «пропавших из идущих» за проход
 SHALLOW_PAGES = 5  # после первого полного сбора — столько страниц истории сверху
 STALE_RUNNING_MIN = 20  # нет отметок прогресса дольше — считаем, что процесс умер
 NSPD_PAUSE_S = 1.0
-ERROR_RETRY_HOURS = 1.0
+# После сбоя (шлюз RU, сайт) — новый проход через 15 минут, а не через час: ночью 17–18.11
+# шлюз дважды падал, и четыре региона простояли около 4 часов (Клавдий 78f56b5b).
+ERROR_RETRY_HOURS = 0.25
 CARDS_RETRY_MIN = 10.0  # остались непрочитанные карточки аукционов — следующий проход скоро
 NOTICE_FORMS = sorted(torgi_scan.NOTICE_FORMS)
 
@@ -477,33 +481,40 @@ def sync_region(
         complete = True
         for statuses in HISTORY_STATUSES:
             on_history = _history_handler(region, statuses, now, stats, cursors, backfill_done)
+            # предел страниц — на проход, от места остановки: абсолютный предел навсегда
+            # оставлял регион несобранным (прод 18.11: Курганская область упёрлась в 800)
+            start = 0 if backfill_done else int(cursors.get(statuses, 0))
             _, done = _pages(
                 api,
                 region,
                 statuses,
                 pub_from,
-                start_page=0 if backfill_done else int(cursors.get(statuses, 0)),
-                max_pages=SHALLOW_PAGES if backfill_done else MAX_HISTORY_PAGES,
+                start_page=start,
+                max_pages=SHALLOW_PAGES if backfill_done else start + MAX_HISTORY_PAGES,
                 on_page=on_history,
             )
             complete = complete and (done or backfill_done)
         # отменённые: до первого полного прохода — вглубь с места остановки, потом — пока есть новое
         deep = not (backfill_done and canceled_done)
         on_canceled = _history_handler(region, STATUS_CANCELED, now, stats, cursors, not deep)
+        start = int(cursors.get(STATUS_CANCELED, 0)) if deep else 0
         _, done = _pages(
             api,
             region,
             STATUS_CANCELED,
             pub_from,
-            start_page=int(cursors.get(STATUS_CANCELED, 0)) if deep else 0,
-            max_pages=MAX_HISTORY_PAGES if deep else SHALLOW_PAGES,
+            start_page=start,
+            max_pages=start + MAX_HISTORY_PAGES if deep else SHALLOW_PAGES,
             on_page=on_canceled,
         )
         if done and deep:
             stats["canceled_done"] = True
+            cursors.pop(STATUS_CANCELED, None)
         if complete and not backfill_done:
             backfill_done = True
-            _update(region, backfill_done=True, progress={"cursors": {}})
+            for done_status in HISTORY_STATUSES:
+                cursors.pop(done_status, None)
+            _update(region, backfill_done=True, progress={"cursors": dict(cursors)})
 
         # 4. карточки завершённых --------------------------------------------------------------
         _update(region, phase="cards")
@@ -536,7 +547,8 @@ def sync_region(
             phase=None,
             finished_at=utcnow(),
             stats=stats,
-            progress={"page": 0, "pages": 0, "phase": "done"},
+            # место остановки недочитанной истории — до следующего прохода
+            progress={"page": 0, "pages": 0, "phase": "done", "cursors": dict(cursors)},
         )
     except Exception as exc:  # noqa: BLE001 — фоновая задача: ошибка в состояние, не наружу
         log.warning("torgi sync %s: %s", region, exc)

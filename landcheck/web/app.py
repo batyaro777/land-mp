@@ -1330,7 +1330,8 @@ def _gpzu_torgi_job(item_id: int, check_id: int, cad_num: str, offer: dict[str, 
     try:
         if not ruproxy.enabled():
             raise RuntimeError("RU-шлюз не настроен — torgi.gov.ru из-за рубежа закрыт")
-        api = torgi.TorgiClient(ruproxy.client(timeout=120))  # ГПЗУ до 15 МБ, шлюз медленный
+        # ГПЗУ до 15 МБ, шлюз медленный; запрос со страницы — без долгих повторов при обрыве
+        api = torgi.TorgiClient(ruproxy.client(timeout=120), transport_retry=())
         try:
             raw = api.file(offer["file_id"])
         finally:

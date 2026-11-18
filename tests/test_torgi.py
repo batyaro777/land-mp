@@ -701,3 +701,37 @@ def test_outcome_text_uses_protocol_reason():
     outcome, meaning = torgi.outcome_of(lot)
     assert outcome == "торги не состоялись (на торги вышел один участник)"
     assert "единственным участником" in meaning
+
+
+def test_transport_error_is_retried_then_succeeds():
+    """Прод 18.11: шлюз RU ночью дважды обрывался, и сбор прерывался на первом же сбое.
+    Теперь обрыв связи повторяется с паузами; проверка участка повторов не ждёт."""
+    calls = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        if len(calls) < 3:
+            raise httpx.ConnectError("шлюз молчит")
+        return httpx.Response(200, json={"content": [], "totalPages": 0})
+
+    slept: list[float] = []
+    api = torgi.TorgiClient(
+        httpx.Client(transport=httpx.MockTransport(handler)), interval=0, sleep=slept.append
+    )
+    data = api.search(region="40", statuses="SUCCEED", pub_from="2025-11-18")
+    assert data["totalPages"] == 0 and api.retries == 2 and slept == [30.0, 120.0]
+
+    calls.clear()
+    quick = torgi.TorgiClient(
+        httpx.Client(transport=httpx.MockTransport(handler)),
+        interval=0,
+        sleep=slept.append,
+        transport_retry=(),
+    )
+    try:
+        quick.search(region="40", statuses="SUCCEED", pub_from="2025-11-18")
+    except httpx.ConnectError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("без повторов обрыв должен уйти наружу сразу")
+    assert len(calls) == 1

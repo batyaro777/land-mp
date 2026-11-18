@@ -750,13 +750,15 @@ def test_sync_stops_when_cards_do_not_answer_and_rereads_finished(client):  # no
     fake.fail_after = 2  # обе страницы идущих прочитаны, дальше карточки не отвечают
     state = _sync(fake, max_nspd=0)
     assert state["state"] == "error" and state["active"] == 12
-    # не все 12 карточек перебраны впустую: стоп после пяти сбоев подряд
-    assert len(fake.seen) == 2 + torgi_sync.MAX_CARD_FAILURES
-    # через час после сбоя регион снова в очереди автосбора, а не через сутки
+    # не все 12 карточек перебраны впустую: стоп после пяти сбоев подряд; каждый сбой связи
+    # перед тем повторён (шлюз RU мог мигнуть, прод 18.11)
+    per_card = len(torgi.TRANSPORT_RETRY_S) + 1
+    assert len(fake.seen) == 2 + torgi_sync.MAX_CARD_FAILURES * per_card
+    # через 15 минут после сбоя регион снова в очереди автосбора, а не через сутки
     from datetime import timedelta
 
     assert torgi_sync.due_regions(now=NOW) == []
-    assert torgi_sync.due_regions(now=datetime.now(UTC) + timedelta(minutes=61)) == ["40"]
+    assert torgi_sync.due_regions(now=datetime.now(UTC) + timedelta(minutes=16)) == ["40"]
     fake.fail_after = None
     _sync(fake, max_nspd=0)
     # лот ACT_1 завершился, но в «пропавших» не дочитан (лимит), статус пришёл из поиска истории
@@ -1339,3 +1341,27 @@ def test_debtor_and_forest_lots_kept_out_of_market_stats(client):  # noqa: F811
     other = client.get("/tools/torgi-history?region=40&bt=other").text
     assert "все завершённые 3" in other and other.count("имущество должников</span>") == 2
     assert "лесной участок</span>" in other and 'name="bt" value="other"' in other
+
+
+def test_history_limit_is_per_pass_and_resumes(client, monkeypatch):  # noqa: F811
+    """Прод 18.11 (Клавдий 78f56b5b): Курганская область упёрлась в предел 800 страниц
+    истории и никогда не стала бы «собранной». Предел — на проход; следующий проход
+    продолжает с места остановки, место хранится между проходами."""
+    from landcheck.web import torgi_sync
+    from landcheck.web.db import TorgiSync, session
+
+    fake = _seed(client)  # состоявшихся 15 — две страницы
+    monkeypatch.setattr(torgi_sync, "MAX_HISTORY_PAGES", 1)
+    _sync(fake, provider=FakeNspd())
+    with session() as db:
+        st = db.get(TorgiSync, "40")
+        assert st.backfill_done is False
+        assert st.progress["cursors"][torgi.STATUS_SUCCEED] == 1
+    fake.seen.clear()
+    _sync(fake, provider=FakeNspd())
+    pages = [s["page"] for s in fake.seen if s.get("lotStatus") == torgi.STATUS_SUCCEED]
+    assert pages == ["1"]  # с места остановки, не с начала
+    with session() as db:
+        st = db.get(TorgiSync, "40")
+        assert st.backfill_done is True
+        assert torgi.STATUS_SUCCEED not in (st.progress.get("cursors") or {})

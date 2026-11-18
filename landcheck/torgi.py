@@ -50,6 +50,10 @@ MAX_CARDS = 12  # карточек состоявшихся лотов (итог
 # (Клавдий, прод 01.11). Пауза общая на процесс, повтор на 503 с нарастающей выдержкой.
 REQUEST_INTERVAL_S = 6.0
 RETRY_DELAYS_S = (10.0, 20.0, 40.0)
+# Шлюз RU не ответил (обрыв туннеля, DNS на его стороне): ждём и повторяем, прежде чем
+# прервать проход. Ночью 17–18.11 шлюз падал дважды — без повторов четыре региона
+# простояли около 4 часов (Клавдий 78f56b5b). Всего до ~7,5 минуты на один запрос.
+TRANSPORT_RETRY_S = (30.0, 120.0, 300.0)
 STATUS_ACTIVE = "PUBLISHED,APPLICATIONS_SUBMISSION,DETERMINING_WINNER"
 STATUS_SUCCEED = "SUCCEED"
 STATUS_FAILED = "FAILED"
@@ -123,6 +127,7 @@ class TorgiClient:
         *,
         interval: float = REQUEST_INTERVAL_S,
         retry_delays: tuple[float, ...] = RETRY_DELAYS_S,
+        transport_retry: tuple[float, ...] = TRANSPORT_RETRY_S,
         sleep=time.sleep,
     ):
         self._c = client or ruproxy.client()
@@ -130,6 +135,7 @@ class TorgiClient:
         self.retries = 0
         self._interval = interval
         self._retry_delays = retry_delays
+        self._transport_retry = transport_retry
         self._sleep = sleep
 
     def close(self) -> None:
@@ -137,9 +143,7 @@ class TorgiClient:
 
     def _get(self, url: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         for attempt in range(len(self._retry_delays) + 1):
-            _wait_turn(self._interval, self._sleep)
-            self.requests += 1
-            r = self._c.get(url, params=params)
+            r = self._send(url, params)
             if r.status_code in (429, 503) and attempt < len(self._retry_delays):
                 self.retries += 1
                 delay = self._retry_delays[attempt]
@@ -149,6 +153,22 @@ class TorgiClient:
             r.raise_for_status()
             return r.json()
         raise httpx.HTTPError("torgi: исчерпаны повторы")  # pragma: no cover
+
+    def _send(self, url: str, params: dict[str, Any] | None) -> httpx.Response:
+        """Запрос с повторами при обрыве связи (шлюз RU, DNS): последняя ошибка — наружу."""
+        for attempt in range(len(self._transport_retry) + 1):
+            _wait_turn(self._interval, self._sleep)
+            self.requests += 1
+            try:
+                return self._c.get(url, params=params)
+            except httpx.TransportError as exc:
+                if attempt >= len(self._transport_retry):
+                    raise
+                self.retries += 1
+                delay = self._transport_retry[attempt]
+                log.info("torgi: %s — %s, повтор через %.0f с", url, type(exc).__name__, delay)
+                self._sleep(delay)
+        raise httpx.HTTPError("torgi: обрыв связи")  # pragma: no cover
 
     def search(
         self,
@@ -378,7 +398,8 @@ def nearby_auctions(
         )
     now = now or datetime.now(UTC)
     pub_from = (now - timedelta(days=30 * MONTHS)).date().isoformat()
-    api = TorgiClient(client, interval=interval, sleep=sleep)
+    # проверка участка ждёт ответа — без долгих повторов при обрыве шлюза (они — для сбора)
+    api = TorgiClient(client, interval=interval, sleep=sleep, transport_retry=())
     result = empty_result(cad_num)
     try:
         # Поиск по тексту «40:13» отдаёт и соседние районы (40:14, 40:17…), поэтому считаем
@@ -983,7 +1004,8 @@ def parcel_lot(
         out["error"] = "RU-шлюз не настроен — torgi.gov.ru из-за рубежа закрыт"
         return out
     pub_from = (now - timedelta(days=LOT_MONTHS * 30)).date().isoformat()
-    api = TorgiClient(client, interval=interval, sleep=sleep)
+    # проверка участка ждёт ответа — без долгих повторов при обрыве шлюза (они — для сбора)
+    api = TorgiClient(client, interval=interval, sleep=sleep, transport_retry=())
     try:
         page = api.search(
             region=region, text=cad_num, statuses=ALL_STATUSES, pub_from=pub_from, form=None

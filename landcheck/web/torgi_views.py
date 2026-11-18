@@ -613,7 +613,7 @@ def torgi_img(user: TorgiDep, file_id: str):
     if not path.exists():
         if not ruproxy.enabled() or settings.fixtures is not None:
             raise HTTPException(404)
-        api = torgi.TorgiClient(retry_delays=())
+        api = torgi.TorgiClient(retry_delays=(), transport_retry=())
         try:
             data = api.file(file_id, max_mb=5)
         except Exception:  # noqa: BLE001 — нет фото, сайт не ответил: просто без картинки

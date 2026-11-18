@@ -105,7 +105,7 @@ def test_gpzu_from_torgi_auto_then_retry(client, monkeypatch):  # noqa: F811
     downloads: list[str] = []
 
     class FakeTorgi:
-        def __init__(self, client=None):
+        def __init__(self, client=None, **kw):
             if client is not None:
                 client.close()
 
