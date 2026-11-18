@@ -217,6 +217,9 @@ def create_app() -> FastAPI:
     from landcheck.web import ads_sync
 
     ads_sync.start_loop()
+    from landcheck.web import rr_sync
+
+    rr_sync.start_loop()
     return app
 
 

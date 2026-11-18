@@ -119,6 +119,9 @@ class Settings:
     adsapi_hours: float = field(
         default_factory=lambda: float(os.environ.get("LANDCHECK_ADSAPI_HOURS", "24"))
     )
+    # Цены сделок с участками из открытых дата-сетов Росреестра (18.11.2026): источник рынка
+    # для анализатора торгов. Нужен RU-шлюз; LANDCHECK_RR_DEALS=0 — выключить.
+    rr_deals: bool = field(default_factory=lambda: os.environ.get("LANDCHECK_RR_DEALS", "1") != "0")
     # Документы администрации (ТЗ v3, п. 2.5): кэш автопоиска по муниципалитету
     admin_docs_ttl_days: float = field(
         default_factory=lambda: float(os.environ.get("LANDCHECK_ADMIN_DOCS_TTL_DAYS", "7"))

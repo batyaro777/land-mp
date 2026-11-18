@@ -26,11 +26,11 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Resp
 from sqlalchemy import event, select
 from sqlalchemy.orm import Session
 
-from landcheck import ads_api, ruproxy, torgi, torgi_calc, torgi_scan
+from landcheck import ads_api, rr_deals, ruproxy, torgi, torgi_calc, torgi_scan
 from landcheck.models import Purpose
 from landcheck.models import Request as CheckRequest
 from landcheck.regions import CADASTRAL_REGIONS
-from landcheck.web import ads_sync, jobs, torgi_places, torgi_sync, torgi_zones
+from landcheck.web import ads_sync, jobs, rr_sync, torgi_places, torgi_sync, torgi_zones
 from landcheck.web import db as dbmod
 from landcheck.web.app import render, require_user
 from landcheck.web.config import settings
@@ -282,6 +282,22 @@ def _bump_versions(db: Session, _ctx: Any) -> None:
             _data_version[region] = _data_version.get(region, 0) + 1
 
 
+def _local_fn(region: str, lots: list[dict[str, Any]]):
+    """Оценка по месту самого лота: сделки Росреестра в его квартале или районе и объявления
+    вокруг (что из этого загружено). None — нет ни того, ни другого."""
+    ads_fn = ads_sync.near_fn(region, lots)
+    deals_fn = rr_sync.market_fn()
+    if ads_fn is None and deals_fn is None:
+        return None
+
+    def fn(lot: dict[str, Any]) -> dict[str, Any] | None:
+        return torgi_scan.pick_local(
+            deals_fn(lot) if deals_fn else None, ads_fn(lot) if ads_fn else None
+        )
+
+    return fn
+
+
 def _region_scan(
     region: str, params: torgi_scan.ScanParams
 ) -> tuple[dict[str, Any], dict[str, str]]:
@@ -289,7 +305,7 @@ def _region_scan(
     Отдаём копию: страница сортирует и фильтрует строки на месте."""
     key = (f"{dbmod.generation}:{region}", repr(params))
     # до расчёта: запись во время расчёта его устарит; объявления ленты — своя версия
-    version = (_data_version.get(region, 0), ads_sync.version(region))
+    version = (_data_version.get(region, 0), ads_sync.version(region), rr_sync.version())
     now = time.monotonic()
     hit = _scan_cache.get(key)
     if hit and hit[1] == version and now - hit[0] < SCAN_CACHE_TTL_S:
@@ -297,7 +313,7 @@ def _region_scan(
     else:
         lots = torgi_sync.lots_of(region, months=settings.torgi_scan_months)
         result = torgi_scan.scan(
-            lots, params, layer=_layer(region), near_fn=ads_sync.near_fn(region, lots)
+            lots, params, layer=_layer(region), near_fn=_local_fn(region, lots)
         )
         names = district_names(lots)
         with _cache_lock:
@@ -664,7 +680,7 @@ def torgi_lot_page(request: Request, user: TorgiDep, lot_id: str, saved: str = "
     lots = torgi_sync.lots_of(region, months=settings.torgi_scan_months)
     stats = torgi_scan.index_by(lots)
     layer = _layer(region, few=True)
-    near_fn = ads_sync.near_fn(region, lots)
+    near_fn = _local_fn(region, lots)
     s = torgi_scan.score_lot(
         lot,
         stats,
@@ -730,6 +746,7 @@ def torgi_lot_page(request: Request, user: TorgiDep, lot_id: str, saved: str = "
         s=s,
         near_ads=near_ads,
         near_cheap=near_cheap,
+        rr_source=rr_deals.SOURCE_URL,
         params=params,
         lot_url=torgi.LOT_URL.format(lot_id=lot_id),
         same_parcel=sorted(same_parcel, key=lambda x: x.get("published") or "", reverse=True),
@@ -913,6 +930,8 @@ def torgi_liquidity_page(request: Request, user: TorgiDep):
         sync=torgi_sync.state_of(region),
         ads=ads_sync.status(region),
         ads_class=ads_api.LAND_CLASSES,
+        rr=rr_sync.status(region),
+        rr_source=rr_deals.SOURCE_URL,
         layer=sorted(layer, key=lambda m: (m["scope"], m["kind"], m.get("vri_group") or "")),
         by_scope=by_scope,
         sotka=torgi_scan.SOTKA,
