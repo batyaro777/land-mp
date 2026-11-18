@@ -861,13 +861,23 @@ def fix_kinds() -> int:
 
 
 def resume_interrupted() -> list[str]:
-    """После рестарта: регионы, чей сбор оборвался, ставим в очередь снова."""
+    """После рестарта: регионы, чей сбор оборвался, ставим в очередь снова — так, чтобы
+    очередь шла по кругу. Первыми идут те, кто дольше всех не начинал проход; регион, на
+    котором оборвалось, — последним.
+
+    Прод, 18.11.2026: шесть выкладок за день, каждая поднимала очередь в одном и том же порядке
+    с Московской области. Её проход идёт два часа, выкладки шли чаще, и три региона за ней
+    не получили ни одного прохода с утра. Курсоры истории при этом не теряются — терялась
+    только очередь."""
     with session() as db:
-        regions = list(
-            db.scalars(
-                select(TorgiSync.region).where(TorgiSync.state.in_(["running", "queued"]))
-            ).all()
-        )
+        rows = db.execute(
+            select(TorgiSync.region, TorgiSync.state, TorgiSync.started_at).where(
+                TorgiSync.state.in_(["running", "queued"])
+            )
+        ).all()
+    epoch = datetime.min.replace(tzinfo=UTC)
+    rows.sort(key=lambda r: (r[1] == "running", _aware(r[2]) or epoch, r[0]))
+    regions = [r[0] for r in rows]
     if not ruproxy.enabled() or settings.fixtures is not None:
         for r in regions:
             _update(r, state="idle")

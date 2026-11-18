@@ -1110,6 +1110,35 @@ def test_points_are_read_by_their_own_loop_across_regions(client, monkeypatch): 
     assert _sync(fake)["stats"]["nspd"] == 0 and asked == ["40"]
 
 
+def test_resume_after_restart_rotates_the_queue(client, monkeypatch):  # noqa: F811
+    """Прод, 18.11.2026: выкладки шли чаще, чем длится проход большого региона, очередь каждый
+    раз поднималась с него же, и три региона за ним простояли весь день. После рестарта первым
+    идёт тот, кто дольше всех не начинал проход, а оборванный регион — последним."""
+    from landcheck import ruproxy
+    from landcheck.web import torgi_sync
+    from landcheck.web.config import settings
+    from landcheck.web.db import TorgiSync, session
+
+    t0 = datetime(2026, 11, 18, 9, 0, tzinfo=UTC)
+    with session() as db:
+        db.add_all(
+            [
+                TorgiSync(region="50", state="running", started_at=t0 + timedelta(hours=6)),
+                TorgiSync(region="66", state="queued", started_at=t0 + timedelta(minutes=25)),
+                TorgiSync(region="45", state="queued", started_at=t0),
+                TorgiSync(region="02", state="queued", started_at=None),  # ещё ни разу не шёл
+                TorgiSync(region="24", state="idle", started_at=t0),  # не в очереди
+            ]
+        )
+        db.commit()
+    order: list[str] = []
+    monkeypatch.setattr(torgi_sync, "start_sync", lambda r: order.append(r) or True)
+    monkeypatch.setattr(ruproxy, "enabled", lambda: True)
+    monkeypatch.setattr(settings, "fixtures", None)
+    assert torgi_sync.resume_interrupted() == ["02", "45", "66", "50"]
+    assert order == ["02", "45", "66", "50"]
+
+
 def test_scan_cache_reuses_until_data_changes(client, monkeypatch):  # noqa: F811
     """Общий список всех регионов не пересчитывает регион на каждый запрос: расчёт хранится,
     пока в регионе не записали лот или запись рынка. Сортировка страницы не портит его."""
