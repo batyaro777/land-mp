@@ -94,6 +94,13 @@ def test_parse_rows_keeps_priced_land_deals_only():
     moved = "~".join([line[-1], *line[:-1]])
     assert list(rr_deals.parse_rows(["~".join(swapped), moved])) == [first]
     assert list(rr_deals.parse_rows([])) == []
+    # прежняя версия расчёта (до 3 кв. 2026): первая колонка number, валюта «рубль»
+    old = HEADER.replace("deals_number", "number", 1)
+    line = REAL[2].replace("2026-07-01", "2026-04-01").replace("~руб~", "~рубль~")
+    (row,) = rr_deals.parse_rows([old, line])
+    assert row["n"] == 4 and row["period"] == "2026Q2" and row["price"] == 3401646.0
+    # файл с BOM в начале заголовка читается так же
+    assert len(list(rr_deals.parse_rows(["\ufeff" + HEADER, REAL[0]]))) == 1
     with pytest.raises(ValueError, match="нет ожидаемых колонок"):
         list(rr_deals.parse_rows(["a~b~c", "1~2~3"]))
 
@@ -225,7 +232,13 @@ def test_store_sync_and_pages(client, monkeypatch):  # noqa: F811
     q2_file = '<a href="dataset_%D1%C4%C5%CB%CA%C8_r-r_01-92_y_2026_q_2.csv.zip">x</a>'
     archives = {
         "q_3_v2": _zip([HEADER, *REAL, _kaluga(2, 2_800_000), _kaluga(1, 3_000_000)]),
-        "q_2.csv": _zip([HEADER, _kaluga(1, 3_200_000, period="2026-04-01")]),
+        # 2 квартал — в прежней версии: первая колонка называется number
+        "q_2.csv": _zip(
+            [
+                HEADER.replace("deals_number", "number", 1),
+                _kaluga(1, 3_200_000, period="2026-04-01"),
+            ]
+        ),
     }
 
     def handler(req: httpx.Request) -> httpx.Response:
