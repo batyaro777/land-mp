@@ -804,7 +804,7 @@ def due_regions(now: datetime | None = None) -> list[str]:
         finished = _aware(finished)
         wait = timedelta(hours=hours)
         if state == "error":
-            # после сбоя (шлюз, сайт) пробуем снова через час, а не через сутки
+            # после сбоя (шлюз, сайт) — снова через 15 минут, а не через сутки
             wait = timedelta(hours=min(hours, ERROR_RETRY_HOURS))
         elif unread.get(region) and (stats or {}).get("cards"):
             # цены и заявки дочитываются: прошлый проход карточки читал и они ещё остались.
