@@ -44,6 +44,8 @@ MIN_QUARTER = 3  # столько сделок в квартале хватае�
 MIN_DISTRICT = 10  # в целом районе участки разнороднее — сделок нужно больше
 TRIM = 5.0  # цена за м² дальше медианы в пять раз — в расчёт не идёт
 MAX_SHOWN = 15
+# Версия разбора: файл, отклонённый этой версией, заново не качаем, пока она не сменится.
+PARSER_REV = 1
 
 # Группа назначения по коду классификатора видов использования земель (57_УНСИ). Группы те
 # же, что у лотов (`torgi_scan.GROUPS`): цена за метр у поля и у участка под дом в одном
@@ -235,17 +237,18 @@ def _wquantile(pairs: list[tuple[float, int]], q: float) -> float:
 
 class DealIndex:
     """Сделки кадастрового округа (первые две цифры номера), разложенные по кварталам и
-    районам. Строка — (группа, площадь одного участка, цена за м², число сделок, период)."""
+    районам и сразу по группам назначения: в районе тысячи строк, перебирать их все для
+    каждого лота долго. Строка — (площадь одного участка, цена за м², число сделок, период)."""
 
     def __init__(self, rows: Iterable[tuple[str, int, str, float, float, int, str]]):
-        self.by_quarter: dict[tuple[str, int], list[tuple]] = {}
-        self.by_district: dict[str, list[tuple]] = {}
+        self.by_quarter: dict[tuple[str, int, str], list[tuple]] = {}
+        self.by_district: dict[tuple[str, str], list[tuple]] = {}
         self.size = 0
         self.periods: set[str] = set()
         for district, q, group, area, price, n, period in rows:
-            item = (group, area / n, price / area, n, period)
-            self.by_quarter.setdefault((district, q), []).append(item)
-            self.by_district.setdefault(district, []).append(item)
+            item = (area / n, price / area, n, period)
+            self.by_quarter.setdefault((district, q, group), []).append(item)
+            self.by_district.setdefault((district, group), []).append(item)
             self.size += 1
             self.periods.add(period)
 
@@ -263,20 +266,21 @@ def deals_market(lot: dict[str, Any], index: DealIndex | None) -> dict[str, Any]
     if index is None or not index.size or key is None or not area or group in (None, "other"):
         return None
     district = f"{key[0]}:{key[1]}"
+    lo, hi = area / AREA_BAND, area * AREA_BAND
     for level, rows, need in (
-        ("quarter", index.by_quarter.get((district, key[2]), ()), MIN_QUARTER),
-        ("district", index.by_district.get(district, ()), MIN_DISTRICT),
+        ("quarter", index.by_quarter.get((district, key[2], group), ()), MIN_QUARTER),
+        ("district", index.by_district.get((district, group), ()), MIN_DISTRICT),
     ):
-        pool = [r for r in rows if r[0] == group and area / AREA_BAND <= r[1] <= area * AREA_BAND]
-        if sum(r[3] for r in pool) < need:
+        pool = [r for r in rows if lo <= r[0] <= hi]
+        if sum(r[2] for r in pool) < need:
             continue
-        med = _wquantile([(r[2], r[3]) for r in pool], 0.5)
-        kept = [r for r in pool if med / TRIM <= r[2] <= med * TRIM]
-        n = sum(r[3] for r in kept)
+        med = _wquantile([(r[1], r[2]) for r in pool], 0.5)
+        kept = [r for r in pool if med / TRIM <= r[1] <= med * TRIM]
+        n = sum(r[2] for r in kept)
         if n < need:
             continue
-        pairs = [(r[2], r[3]) for r in kept]
-        periods = sorted({r[4] for r in kept})
+        pairs = [(r[1], r[2]) for r in kept]
+        periods = sorted({r[3] for r in kept})
         span = period_label(periods[0])
         if len(periods) > 1:
             span += " – " + period_label(periods[-1])
@@ -286,7 +290,7 @@ def deals_market(lot: dict[str, Any], index: DealIndex | None) -> dict[str, Any]
             "бывает занижена, среди сделок есть льготный выкуп у муниципалитета — это скорее "
             "нижняя граница рынка"
         )
-        dropped = sum(r[3] for r in pool) - n
+        dropped = sum(r[2] for r in pool) - n
         if dropped:
             note += f"; не учтено сделок с ценой дальше медианы в пять раз: {dropped}"
         return {
@@ -307,8 +311,8 @@ def deals_market(lot: dict[str, Any], index: DealIndex | None) -> dict[str, Any]
             "deals_span": span,
             # для карточки лота: сами сделки, свежие первыми
             "deals": [
-                {"period": period_label(r[4]), "area_m2": r[1], "pps": r[2] * 100, "n": r[3]}
-                for r in sorted(kept, key=lambda r: (r[4], r[2]), reverse=True)[:MAX_SHOWN]
+                {"period": period_label(r[3]), "area_m2": r[0], "pps": r[1] * 100, "n": r[2]}
+                for r in sorted(kept, key=lambda r: (r[3], r[1]), reverse=True)[:MAX_SHOWN]
             ],
         }
     return None

@@ -303,6 +303,14 @@ def test_store_sync_and_pages(client, monkeypatch):  # noqa: F811
     assert problems[0].startswith("2 кв. 2026: в файле сделок нет ожидаемых колонок")
     assert problems[1] == "2 кв. 2025: HTTPStatusError"
     assert rr_sync.market(lot)["deals_n"] == 3  # загруженное на месте
+    # отклонённый файл заново не качаем, пока версия разбора та же; недоступную папку — пробуем
+    n = len(served)
+    done, again = rr_sync.sync(api, sleep=lambda s: None, keep=3)
+    assert done == {} and again == problems
+    assert [u for u in served[n:] if u.endswith(".zip")] == []
+    monkeypatch.setattr(rr_deals, "PARSER_REV", rr_deals.PARSER_REV + 1)
+    rr_sync.sync(api, sleep=lambda s: None, keep=3)
+    assert sum(1 for u in served if "q_2.csv.zip" in u) == 3  # загрузка, отказ, новая версия
 
     # битый архив: прежние строки остаются
     tmp.write_bytes(_zip(["a~b", "1~2"]))

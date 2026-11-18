@@ -34,7 +34,7 @@ KEEP_PERIODS = 4  # год сделок: меньше — мало сопост�
 CHECK_HOURS = 12.0
 REQUEST_PAUSE_S = 3.0
 MAX_FILE_MB = 400
-INDEX_REGIONS = 4  # сколько кадастровых округов держим в памяти разом
+INDEX_REGIONS = 12  # сколько кадастровых округов держим в памяти разом
 BATCH = 5000
 
 _lock = threading.Lock()
@@ -73,6 +73,10 @@ def _connect() -> sqlite3.Connection:
     )
     con.execute("CREATE INDEX IF NOT EXISTS ix_deals_region ON deals(region)")
     con.execute("CREATE INDEX IF NOT EXISTS ix_deals_file ON deals(file)")
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS skipped (url TEXT PRIMARY KEY, rev INTEGER NOT NULL, "
+        "period TEXT NOT NULL, reason TEXT NOT NULL)"
+    )
     return con
 
 
@@ -155,6 +159,18 @@ def _download(client: httpx.Client, url: str, dest: Path) -> int:
     return size
 
 
+def _skip(url: str, period: str, reason: str) -> None:
+    con = _connect()
+    try:
+        con.execute(
+            "INSERT OR REPLACE INTO skipped VALUES (?,?,?,?)",
+            (url, rr_deals.PARSER_REV, period, reason),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
 def loaded() -> dict[str, dict[str, Any]]:
     """Что уже загружено: период → число файлов и строк."""
     con = _connect()
@@ -183,6 +199,11 @@ def sync(
     con = _connect()
     try:
         have = {u for (u,) in con.execute("SELECT url FROM files WHERE rows > 0")}
+        skipped = dict(
+            con.execute(
+                "SELECT url, reason FROM skipped WHERE rev = ?", (rr_deals.PARSER_REV,)
+            ).fetchall()
+        )
     finally:
         con.close()
     done: dict[str, int] = {}
@@ -202,13 +223,19 @@ def sync(
         for file_period, url in files:
             if url in have or file_period != period:
                 continue
+            if url in skipped:  # формат этой версией разбора не читается — заново не качаем
+                problems.append(f"{rr_deals.period_label(period)}: {skipped[url]}")
+                continue
             sleep(REQUEST_PAUSE_S)
             try:
                 _download(client, url, tmp)
                 done[period] = done.get(period, 0) + load_zip(period, url, tmp)
-            except (httpx.HTTPError, ValueError, zipfile.BadZipFile, OSError) as exc:
-                text = str(exc)[:120] if isinstance(exc, ValueError) else type(exc).__name__
-                problems.append(f"{rr_deals.period_label(period)}: {text}")
+            except (ValueError, zipfile.BadZipFile) as exc:
+                reason = str(exc)[:120] or type(exc).__name__
+                problems.append(f"{rr_deals.period_label(period)}: {reason}")
+                _skip(url, period, reason)
+            except (httpx.HTTPError, OSError) as exc:  # связь: попробуем в следующий проход
+                problems.append(f"{rr_deals.period_label(period)}: {type(exc).__name__}")
             finally:
                 tmp.unlink(missing_ok=True)
     keep_periods = [p for p, _ in folders]
