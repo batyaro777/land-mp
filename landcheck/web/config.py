@@ -100,6 +100,25 @@ class Settings:
     torgi_scan_hours: float = field(
         default_factory=lambda: float(os.environ.get("LANDCHECK_TORGI_SCAN_HOURS", "24"))
     )
+    # Объявления о продаже земли из ленты ads-api.ru — цена рынка рядом с лотом (18.11.2026).
+    # Логин и ключ — только в окружении; пусто — модуль выключен. Тестовый доступ отдаёт не
+    # больше 50 объявлений за запрос и цену 0: для него LANDCHECK_ADSAPI_LIMIT=50.
+    adsapi_user: str | None = field(
+        default_factory=lambda: os.environ.get("LANDCHECK_ADSAPI_USER") or None
+    )
+    adsapi_token: str | None = field(
+        default_factory=lambda: os.environ.get("LANDCHECK_ADSAPI_TOKEN") or None
+    )
+    adsapi_limit: int = field(
+        default_factory=lambda: int(os.environ.get("LANDCHECK_ADSAPI_LIMIT", "1000"))
+    )
+    # за сколько дней загружать объявления при первом сборе региона и как часто догружать
+    adsapi_days: int = field(
+        default_factory=lambda: int(os.environ.get("LANDCHECK_ADSAPI_DAYS", "90"))
+    )
+    adsapi_hours: float = field(
+        default_factory=lambda: float(os.environ.get("LANDCHECK_ADSAPI_HOURS", "24"))
+    )
     # Документы администрации (ТЗ v3, п. 2.5): кэш автопоиска по муниципалитету
     admin_docs_ttl_days: float = field(
         default_factory=lambda: float(os.environ.get("LANDCHECK_ADMIN_DOCS_TTL_DAYS", "7"))

@@ -26,12 +26,12 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Resp
 from sqlalchemy import event, select
 from sqlalchemy.orm import Session
 
-from landcheck import ruproxy, torgi, torgi_calc, torgi_scan
+from landcheck import ads_api, ruproxy, torgi, torgi_calc, torgi_scan
 from landcheck.models import Purpose
 from landcheck.models import Request as CheckRequest
 from landcheck.regions import CADASTRAL_REGIONS
+from landcheck.web import ads_sync, jobs, torgi_places, torgi_sync, torgi_zones
 from landcheck.web import db as dbmod
-from landcheck.web import jobs, torgi_places, torgi_sync, torgi_zones
 from landcheck.web.app import render, require_user
 from landcheck.web.config import settings
 from landcheck.web.db import (
@@ -261,7 +261,7 @@ def district_names(lots: list[dict[str, Any]]) -> dict[str, str]:
 # расчёта и подписи районов: память не растёт с размером базы.
 SCAN_CACHE_TTL_S = 600
 SCAN_CACHE_MAX = 256
-_scan_cache: dict[tuple[str, str], tuple[float, int, dict[str, Any], dict[str, str]]] = {}
+_scan_cache: dict[tuple[str, str], tuple[float, Any, dict[str, Any], dict[str, str]]] = {}
 _data_version: dict[str, int] = {}
 _cache_lock = threading.Lock()  # расчёты идут в потоках запросов, записи — и в потоке сбора
 
@@ -288,14 +288,17 @@ def _region_scan(
     """Расчёт списка лотов региона и подписи его районов (из кэша, если данные не менялись).
     Отдаём копию: страница сортирует и фильтрует строки на месте."""
     key = (f"{dbmod.generation}:{region}", repr(params))
-    version = _data_version.get(region, 0)  # до расчёта: запись во время расчёта его устарит
+    # до расчёта: запись во время расчёта его устарит; объявления ленты — своя версия
+    version = (_data_version.get(region, 0), ads_sync.version(region))
     now = time.monotonic()
     hit = _scan_cache.get(key)
     if hit and hit[1] == version and now - hit[0] < SCAN_CACHE_TTL_S:
         result, names = hit[2], hit[3]
     else:
         lots = torgi_sync.lots_of(region, months=settings.torgi_scan_months)
-        result = torgi_scan.scan(lots, params, layer=_layer(region))
+        result = torgi_scan.scan(
+            lots, params, layer=_layer(region), near_fn=ads_sync.near_fn(region, lots)
+        )
         names = district_names(lots)
         with _cache_lock:
             _scan_cache.pop(key, None)
@@ -514,6 +517,22 @@ def torgi_scan_auto(
     return RedirectResponse(_back(back, f"/tools/torgi-scan?region={code}"), status_code=303)
 
 
+@router.post("/tools/torgi-ads/sync")
+def torgi_ads_sync(
+    user: TorgiDep,
+    region: Annotated[str, Form()],
+    full: Annotated[str, Form()] = "",
+    back: Annotated[str, Form()] = "",
+):
+    """Загрузить объявления региона из ленты вне очереди; `full` — заново за весь срок.
+    Только администратору: кнопка тратит запросы платной ленты."""
+    code = _region_code(region)
+    if not code or not user.is_admin:
+        raise HTTPException(404)
+    ads_sync.request(code, full=bool(full))
+    return RedirectResponse(_back(back, f"/tools/torgi-liquidity?region={code}"), status_code=303)
+
+
 def _back(back: str, default: str) -> str:
     """Возврат только на свои страницы инструментов (никаких внешних адресов)."""
     return back if back.startswith("/tools/torgi-") else default
@@ -645,7 +664,19 @@ def torgi_lot_page(request: Request, user: TorgiDep, lot_id: str, saved: str = "
     lots = torgi_sync.lots_of(region, months=settings.torgi_scan_months)
     stats = torgi_scan.index_by(lots)
     layer = _layer(region, few=True)
-    s = torgi_scan.score_lot(lot, stats, params, layer=layer, repeats=torgi_scan.repeats_of(lots))
+    near_fn = ads_sync.near_fn(region, lots)
+    s = torgi_scan.score_lot(
+        lot,
+        stats,
+        params,
+        layer=layer,
+        repeats=torgi_scan.repeats_of(lots),
+        near=near_fn(lot) if near_fn else None,
+    )
+    # объявления, из которых сложилась цена рядом с лотом, — показать, чтобы проверить глазами
+    mk = s.get("market") or {}
+    near_ads = ads_sync.rows_for(mk.get("ad_dist")) if mk.get("near") else []
+    near_cheap = ads_sync.rows_for(mk.get("cheap_dist")) if mk.get("near") else []
     same_parcel = [
         x
         for x in lots
@@ -697,6 +728,8 @@ def torgi_lot_page(request: Request, user: TorgiDep, lot_id: str, saved: str = "
         "torgi_lot.html",
         lot=lot,
         s=s,
+        near_ads=near_ads,
+        near_cheap=near_cheap,
         params=params,
         lot_url=torgi.LOT_URL.format(lot_id=lot_id),
         same_parcel=sorted(same_parcel, key=lambda x: x.get("published") or "", reverse=True),
@@ -878,6 +911,8 @@ def torgi_liquidity_page(request: Request, user: TorgiDep):
         total=torgi_scan.stats_of(lots),
         names=district_names(lots),
         sync=torgi_sync.state_of(region),
+        ads=ads_sync.status(region),
+        ads_class=ads_api.LAND_CLASSES,
         layer=sorted(layer, key=lambda m: (m["scope"], m["kind"], m.get("vri_group") or "")),
         by_scope=by_scope,
         sotka=torgi_scan.SOTKA,

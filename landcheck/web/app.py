@@ -213,6 +213,9 @@ def create_app() -> FastAPI:
     if scans:
         log.warning("возобновлены поиски свободной земли после рестарта: %s", len(scans))
     torgi_sync.start_auto_loop()
+    from landcheck.web import ads_sync
+
+    ads_sync.start_loop()
     return app
 
 

@@ -159,6 +159,29 @@
   <h4>Слой рынка: цена перепродажи за сотку</h4>
   <p class="small muted">Как полигоны на вашей карте: «край по торгам 240, рынок 320–350». Запись по кварталу главнее записи по району. Для аренды задаётся цена переуступки права.</p>
   <p class="small">Не знаете рынок района — не вводите цифру на глаз. Откройте идущий лот этого района на вкладке «Лоты» и нажмите «объявления рядом»: сервис найдёт объявления о продаже похожих участков в том же населённом пункте, покажет их списком со ссылками и сам запишет сюда медиану и разброс за сотку. Потом диапазон можно поправить руками. Столбец «Продажа, ₽/сот.» в таблице выше — нижняя граница для сверки: почём землю покупали у государства. Если рынок вы знаете, задайте «от» и «до»: вердикт «интересен» проверяется и по нижней цене.</p>
+  {% if ads and (ads.enabled or ads.count) %}
+  <div id="ads-feed">
+  <p class="small"><strong>Объявления о продаже земли:</strong> {% if ads.count %}в базе {{ ads.count }}{% if ads.newest %}, загружены по {{ ads.newest[:16] }} МСК{% endif %}{% else %}пока не загружены{% endif %}{% if ads.state == 'running' or ads.pending %} — идёт загрузка{% if ads.cursor %}, дошли до {{ ads.cursor[:10] }}{% endif %}{% elif ads.queued %} — в очереди на загрузку{% endif %}. По ним цена перепродажи считается для каждого лота отдельно: объявления той же категории земли и сопоставимой площади в радиусе от 2 до 20 км, не старше полугода. Запись в слое рынка, сделанная вручную, главнее объявлений.</p>
+  {% if not ads.known %}<p class="small muted">Этого региона нет в справочнике ленты объявлений.</p>{% endif %}
+  {% if ads.fatal or ads.error %}<p class="small warn">Лента объявлений не отвечает как надо: {{ ads.fatal or ads.error }}.</p>{% endif %}
+  {% if user.is_admin and ads.enabled and ads.known %}
+  <form method="post" action="/tools/torgi-ads/sync" class="inline no-print">
+    <input type="hidden" name="region" value="{{ region }}">
+    <input type="hidden" name="back" value="/tools/torgi-liquidity?region={{ region }}&amp;level={{ level }}#ads-feed">
+    <button class="outline secondary sm">Обновить объявления</button>
+    <button class="outline secondary sm" name="full" value="1" title="Загрузить заново за весь срок — тратит много запросов ленты">Загрузить заново</button>
+  </form>
+  {% set st = ads.stats %}{% if st.got %}
+  <details><summary class="small muted">Разбор последней загрузки (видит только администратор)</summary>
+    <p class="small">Пришло {{ st.got }}, годятся в расчёт {{ st.kept }}, запросов {{ st.requests or 0 }}{% if st.window %}; окно {{ st.window.lo[:16] }} – {{ st.window.hi[:16] }} МСК{% endif %}.
+    {% if st.skip %}Отброшено: {% for k, v in st.skip.items() %}{{ {'lease': 'аренда', 'house': 'дом', 'no_coords': 'нет точки', 'no_area': 'нет площади в заголовке', 'metric': 'цена не за участок', 'no_price': 'нет цены', 'no_time': 'нет времени', 'other_region': 'другой регион', 'no_class': 'нет категории земли', 'no_id': 'нет номера'}.get(k, k) }} — {{ v }}{% if not loop.last %}, {% endif %}{% endfor %}.{% endif %}
+    {% if st.sources %}Площадки: {% for k, v in st.sources.items() %}{{ k }} — {{ v }}{% if not loop.last %}, {% endif %}{% endfor %}.{% endif %}
+    {% if st.units %}Поле «Площадь» при сверке с заголовком: {% for src, box in st.units.items() %}{{ src }} ({% for k, v in box.items() %}{{ k }} — {{ v }}{% if not loop.last %}, {% endif %}{% endfor %}){% if not loop.last %}; {% endif %}{% endfor %}.{% endif %}</p>
+  </details>
+  {% endif %}
+  {% endif %}
+  </div>
+  {% endif %}
   <form method="post" action="/tools/torgi-market">
     <input type="hidden" name="back" value="/tools/torgi-liquidity?region={{ region }}&amp;level={{ level }}">
     <div class="grid">

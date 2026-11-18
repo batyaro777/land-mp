@@ -539,6 +539,45 @@ class TorgiDeal(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class MarketAd(Base):
+    """Объявление о продаже участка из ленты ads-api.ru (18.11.2026) — сырьё для цены рынка
+    рядом с лотом. Храним цену, площадь, категорию земли, точку, заголовок, адрес и ссылку.
+    Телефона, имени продавца и текста описания здесь нет."""
+
+    __tablename__ = "market_ads"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    region: Mapped[str] = mapped_column(String(2), index=True)
+    source: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    url: Mapped[str | None] = mapped_column(String(400), nullable=True)
+    title: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    address: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    cls: Mapped[str | None] = mapped_column(String(8), nullable=True)  # izhs | snt | prom
+    price: Mapped[float] = mapped_column(Float)
+    area_m2: Mapped[float] = mapped_column(Float)
+    lat: Mapped[float] = mapped_column(Float)
+    lon: Mapped[float] = mapped_column(Float)
+    posted: Mapped[str] = mapped_column(String(19), index=True)  # когда пришло в ленту, МСК
+    seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AdsSync(Base):
+    """Загрузка объявлений региона из ленты: до какого времени загружено, незаконченное окно
+    (после рестарта продолжаем с него), счётчики разбора и ошибка."""
+
+    __tablename__ = "ads_sync"
+
+    region: Mapped[str] = mapped_column(String(2), primary_key=True)
+    state: Mapped[str] = mapped_column(String(12), default="idle")  # idle|running|error
+    newest: Mapped[str | None] = mapped_column(String(19), nullable=True)
+    pending: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    count: Mapped[int] = mapped_column(Integer, default=0)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    stats: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
 class LandScan(Base):
     """Поиск свободной публичной земли на территории (ТЗ v3, п. 8): квартал или окрестность
     участка. Результат — список участков с отметками, хранится целиком в `result`."""

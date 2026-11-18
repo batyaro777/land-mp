@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import re
 import statistics
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from typing import Any
@@ -707,25 +708,20 @@ def auction_pool_ids(lot: dict[str, Any], stats: dict[str, dict[str, Any]]) -> l
     return [x[3] for x in _pool(lot, stats)[1] if len(x) > 3 and x[3]]
 
 
-def market_for(
-    lot: dict[str, Any],
-    stats: dict[str, dict[str, Any]],
-    layer: list[dict[str, Any]] | None = None,
-    markup: float = 1.0,
-    assign_ratio: float | None = None,
+def _layer_price(
+    lot: dict[str, Any], layer: list[dict[str, Any]] | None, *, strong: bool = False
 ) -> dict[str, Any] | None:
-    """Три сценария цены перепродажи за м² и источник. `layer` — строки слоя рынка
-    (`scope`, `vri_group`, `kind`, `price_min/mid/max` за сотку, `exposure_days`, `source`),
-    от ручного ввода, своих сделок или объявлений; сначала квартал, потом район.
-
-    Аренда: если цены переуступки в слое нет, а задана `assign_ratio`, берём цену такого же
-    участка в собственности (тем же порядком источников) и умножаем на эту долю."""
+    """Цена из слоя рынка: сначала квартал, потом район; в одном месте ручной ввод сильнее
+    своих сделок, сделки — объявлений. `strong` — только ручной ввод и свои сделки."""
     kind, group = lot.get("kind"), lot.get("vri_group")
-    scopes = [s for s in (lot.get("quarter"), lot.get("district")) if s]
-    for scope in scopes:
+    for scope in (lot.get("quarter"), lot.get("district")):
+        if not scope:
+            continue
         best = None
         for m in layer or []:
             if m.get("scope") != scope or (m.get("kind") or "sale") != kind:
+                continue
+            if strong and (m.get("source") or "manual") not in ("manual", "deals"):
                 continue
             if m.get("vri_group") not in (None, "", "any", group):
                 continue
@@ -752,6 +748,35 @@ def market_for(
                 "liquid": m.get("liquid"),
                 "note": m.get("note"),
             }
+    return None
+
+
+def market_for(
+    lot: dict[str, Any],
+    stats: dict[str, dict[str, Any]],
+    layer: list[dict[str, Any]] | None = None,
+    markup: float = 1.0,
+    assign_ratio: float | None = None,
+    near: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Три сценария цены перепродажи за м² и источник. `layer` — строки слоя рынка
+    (`scope`, `vri_group`, `kind`, `price_min/mid/max` за сотку, `exposure_days`, `source`),
+    от ручного ввода, своих сделок или объявлений; сначала квартал, потом район.
+
+    `near` — готовая оценка по объявлениям вокруг самого лота (`ads_api.near_market`, только
+    продажа). Она точнее объявлений «по району», но слабее того, что эксперт ввёл руками, и
+    своих сделок. Порядок: слой рынка и сделки квартала, потом района → объявления рядом с
+    лотом → объявления района из слоя → итоги торгов → кадастровая стоимость.
+
+    Аренда: если цены переуступки в слое нет, а задана `assign_ratio`, берём цену такого же
+    участка в собственности (тем же порядком источников) и умножаем на эту долю."""
+    kind = lot.get("kind")
+    if kind == "sale" and near and near.get("mid_m2"):
+        found = _layer_price(lot, layer, strong=True) or near
+    else:
+        found = _layer_price(lot, layer)
+    if found:
+        return found
     # Итоги торгов годятся как цена перепродажи только для продажи: у аренды итог — это
     # годовая плата, а не цена переуступки права.
     where, vals = auction_pool(lot, stats)
@@ -788,7 +813,7 @@ def market_for(
             "note": None,
         }
     if kind == "rent" and assign_ratio:
-        own = market_for({**lot, "kind": "sale"}, stats, layer, markup)
+        own = market_for({**lot, "kind": "sale"}, stats, layer, markup, near=near)
         if own:
             share = f"{assign_ratio:.0%}"
             return {
@@ -859,6 +884,7 @@ def score_lot(
     layer: list[dict[str, Any]] | None = None,
     repeats: dict[str, int] | None = None,
     today: date | None = None,
+    near: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Оценка идущего лота. Вердикт строится на предельной цене входа:
     «интересен» — цена перепродажи взята с рынка (слой рынка, свои сделки, объявления), предел
@@ -890,7 +916,7 @@ def score_lot(
     if start and growth and growth > 1 and fought:
         expected = round(start * (1 + (growth - 1) * min(fought * 1.5, 1.0)))
 
-    mk = market_for(lot, stats, layer, p.market_markup, p.assign_ratio)
+    mk = market_for(lot, stats, layer, p.market_markup, p.assign_ratio, near=near)
     sale = {"min": None, "mid": None, "max": None}
     if mk and area:
         for key in ("min", "mid", "max"):
@@ -1147,8 +1173,10 @@ def scan(
     *,
     layer: list[dict[str, Any]] | None = None,
     today: date | None = None,
+    near_fn: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
-    """Весь регион разом: идущие лоты с оценкой (лучшие первыми) и счётчики по вердиктам."""
+    """Весь регион разом: идущие лоты с оценкой (лучшие первыми) и счётчики по вердиктам.
+    `near_fn` — цена рынка по объявлениям рядом с лотом (`ads_sync.near_fn`), если они есть."""
     p = params or ScanParams()
     stats = index_by(lots)
     repeats = repeats_of(lots)
@@ -1185,9 +1213,9 @@ def scan(
         ):
             hidden["price"] += 1
             continue
-        rows.append(
-            {**lot, "s": score_lot(lot, stats, p, layer=layer, repeats=repeats, today=today)}
-        )
+        near = near_fn(lot) if near_fn else None
+        s = score_lot(lot, stats, p, layer=layer, repeats=repeats, today=today, near=near)
+        rows.append({**lot, "s": s})
     rows.sort(key=lambda r: (r["s"]["rank"], -r["s"]["score"]))
     counts = {key: 0 for key in VERDICTS}
     for r in rows:
