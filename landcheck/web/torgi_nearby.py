@@ -65,6 +65,14 @@ def missing(lot_ids: Iterable[str | None], now: datetime | None = None) -> list[
     return out
 
 
+MIRROR_TIMEOUT_S = 60.0
+
+
+def _fetch(query: str) -> dict[str, Any]:
+    """Зеркала карты по очереди: фоновому сбору спешить некуда."""
+    return osm.run_query(query, timeout=MIRROR_TIMEOUT_S, parallel=False)
+
+
 def fill(
     lot_ids: Iterable[str | None],
     *,
@@ -74,7 +82,7 @@ def fill(
 ) -> int:
     """Спросить карту по лотам без ответа (не больше `MAX_PER_RUN` за раз). Возвращает,
     сколько лотов обработано."""
-    fetch = fetch or osm.run_query
+    fetch = fetch or _fetch
     done = 0
     for lot_id in missing(lot_ids, now)[:MAX_PER_RUN]:
         with session() as db:

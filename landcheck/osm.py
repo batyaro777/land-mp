@@ -80,11 +80,25 @@ def fetch_osm(
     return run_query(query, timeout=timeout)
 
 
-def run_query(query: str, *, timeout: float | None = None) -> dict[str, Any]:
-    """Произвольный запрос Overpass по всем зеркалам разом: {"elements": [...]} либо
-    {"elements": [], "error": "..."}; исключений наружу нет."""
+def run_query(query: str, *, timeout: float | None = None, parallel: bool = True) -> dict[str, Any]:
+    """Произвольный запрос Overpass: {"elements": [...]} либо {"elements": [], "error": "..."};
+    исключений наружу нет. `parallel` — все зеркала разом, берётся первый ответ (страница
+    ждёт человека); без него зеркала по очереди до первого успеха — так идёт фоновый сбор,
+    которому спешить некуда, а нагружать четыре общественных сервера сразу незачем."""
     timeout = timeout or default_timeout()
     failures: list[str] = []
+    if not parallel:
+        for url in OVERPASS_URLS:
+            try:
+                return _query_mirror(url, query, timeout)
+            except Exception as e:  # noqa: BLE001 — сеть: пробуем следующее зеркало
+                failures.append(f"{_host(url)}: {type(e).__name__}: {e}"[:120])
+        log.warning("overpass: все зеркала отказали: %s", "; ".join(failures))
+        return {
+            "elements": [],
+            "error": "серверы OpenStreetMap не ответили",
+            "error_detail": "; ".join(failures),
+        }
     pool = ThreadPoolExecutor(max_workers=len(OVERPASS_URLS), thread_name_prefix="overpass")
     futures = {pool.submit(_query_mirror, url, query, timeout): url for url in OVERPASS_URLS}
     try:

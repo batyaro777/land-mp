@@ -77,3 +77,24 @@ def test_nuisances_and_lines_for_investor():
     assert "Газопровод" not in rows  # на карте нет — молчим, а не пишем «газа нет»
     assert nearby.km(30) == "рядом" and nearby.km(None) == "—"
     assert "around:60000" in nearby.query(LAT, LON) and "56.7" in nearby.query(LAT, LON)
+
+
+def test_background_query_tries_mirrors_one_by_one(monkeypatch):
+    """Фоновый сбор не бьёт по всем зеркалам карты разом: идёт по очереди до первого ответа."""
+    from landcheck import osm
+
+    calls: list[str] = []
+
+    def mirror(url: str, query: str, timeout: float) -> dict:
+        calls.append(url)
+        if len(calls) < 3:
+            raise RuntimeError("HTTP 504")
+        return {"elements": [{"type": "node"}], "url": url}
+
+    monkeypatch.setattr(osm, "_query_mirror", mirror)
+    res = osm.run_query("x", timeout=1, parallel=False)
+    assert res["elements"] and calls == list(osm.OVERPASS_URLS[:3])
+    calls.clear()
+    monkeypatch.setattr(osm, "_query_mirror", lambda *a: (_ for _ in ()).throw(RuntimeError("no")))
+    res = osm.run_query("x", timeout=1, parallel=False)
+    assert res["elements"] == [] and "не ответили" in res["error"]
