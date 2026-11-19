@@ -80,15 +80,22 @@ def fetch_osm(
     return run_query(query, timeout=timeout)
 
 
-def run_query(query: str, *, timeout: float | None = None, parallel: bool = True) -> dict[str, Any]:
+def run_query(
+    query: str,
+    *,
+    timeout: float | None = None,
+    parallel: bool = True,
+    urls: tuple[str, ...] | None = None,
+) -> dict[str, Any]:
     """Произвольный запрос Overpass: {"elements": [...]} либо {"elements": [], "error": "..."};
     исключений наружу нет. `parallel` — все зеркала разом, берётся первый ответ (страница
     ждёт человека); без него зеркала по очереди до первого успеха — так идёт фоновый сбор,
-    которому спешить некуда, а нагружать четыре общественных сервера сразу незачем."""
+    которому спешить некуда, а нагружать четыре общественных сервера сразу незачем; `urls`
+    — свой список зеркал для такого обхода."""
     timeout = timeout or default_timeout()
     failures: list[str] = []
     if not parallel:
-        for url in OVERPASS_URLS:
+        for url in urls or OVERPASS_URLS:
             try:
                 return _query_mirror(url, query, timeout)
             except Exception as e:  # noqa: BLE001 — сеть: пробуем следующее зеркало

@@ -1391,11 +1391,10 @@ def test_map_facts_for_candidates_feed_class_and_investor_summary(client):  # no
 
     def fetch(query: str) -> dict:
         asked.append(query)
-        if "54.5" in query:  # село в 300 м, дорога в 200 м, город в 10 км, кладбище в 300 м
+        if "54.5" in query:  # село в 300 м, дорога в 200 м, кладбище в 300 м; Калуга рядом
             return {
                 "elements": [
                     node(54.5, 36.2, 0.003, place="village", name="Ерденево"),
-                    node(54.5, 36.2, 0.09, place="city", name="Калуга", population="330000"),
                     {
                         "type": "way",
                         "tags": {"highway": "tertiary"},
@@ -1420,7 +1419,7 @@ def test_map_facts_for_candidates_feed_class_and_investor_summary(client):  # no
     assert states == {0: "ok", 1: "ok", 2: "nopoint", 3: "error"}
     assert facts["settlement"]["name"] == "Ерденево" and facts["city"]["name"] == "Калуга"
     assert nearby.access(facts)["level"] == "good"
-    # повторно не спрашиваем: ответ есть, а ошибку и лот без точки пробуем не раньше суток
+    # повторно не спрашиваем: ответ есть, а ошибку и лот без точки пробуем через шесть часов
     assert tn.missing([f"ACT_{i}" for i in range(4)]) == []
     later = datetime.now(UTC) + timedelta(days=2)
     assert tn.missing([f"ACT_{i}" for i in range(4)], later) == ["ACT_2", "ACT_3"]
@@ -1430,14 +1429,14 @@ def test_map_facts_for_candidates_feed_class_and_investor_summary(client):  # no
     assert hj.warm_candidates() == 0  # прогрев считает кандидатов, но в демо сеть не трогает
 
     page = client.get("/tools/torgi-hot?annual=100&cap=2000000&days=3&top=25").text
-    assert "Доступность хорошая: село 350 м, дорога с покрытием 200 м, Калуга 10 км" in page
+    assert "Доступность хорошая: село 350 м, дорога 200 м, Калуга 4,0 км" in page
     assert "рядом: кладбище 300 м" in page
     # до участка не доехать — это гипотеза (класс C), причина названа
-    assert "до участка трудно добраться: на карте нет дороги с твёрдым покрытием в 3 км" in page
+    assert "до участка трудно добраться: нет населённого пункта в 5 км" in page
     assert "Гипотезы — класс C: 1" in page or "класс C" in page
     invest = client.get("/tools/torgi-lot/ACT_0/invest").text
     assert "Место и доступность." in invest and "Доступность <strong>хорошая</strong>" in invest
-    assert "<th>Ближайший город</th><td>Калуга, 10 км (330 тыс. жителей)</td>" in invest
+    assert "<th>Ближайший город</th><td>Калуга, 4,0 км (334 тыс. жителей)</td>" in invest
     assert "Портит место: кладбище 300 м" in invest and "Карта неполна" in invest
     # в сравнении подборки — оборот и доступность рядом
     r = client.post("/tools/torgi-picks", data={"lot": ["ACT_0", "ACT_1"]}, follow_redirects=False)
@@ -1445,7 +1444,9 @@ def test_map_facts_for_candidates_feed_class_and_investor_summary(client):  # no
     assert "Доступность места" in pick and "хорошая" in pick and "слабая" in pick
     assert "Сделок в квартале за год" in pick
     assert "У участка нет точки на карте" in client.get("/tools/torgi-lot/ACT_2/invest").text
-    assert "Серверы карты не ответили" in client.get("/tools/torgi-lot/ACT_3/invest").text
+    failed = client.get("/tools/torgi-lot/ACT_3/invest").text
+    # карта не ответила, но города из справочника видны и без неё
+    assert "Серверы карты не ответили" in failed and "Крупный город: Калуга, 23 км" in failed
     assert "ещё не спрошена" in client.get("/tools/torgi-lot/ACT_5/invest").text
 
 

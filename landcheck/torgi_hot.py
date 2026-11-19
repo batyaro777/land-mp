@@ -325,6 +325,12 @@ def item_of(
         "cls_why": cls_why,
         "zones": zones_of(row),
         "place": place_of(row),
+        # города рядом — из справочника, сети не нужно: видны и до ответа карты
+        "towns": (
+            nearby.lines(nearby.far_places(row["lat"], row["lon"]))
+            if row.get("lat") is not None and row.get("lon") is not None
+            else []
+        ),
         "cutoff": cutoff_price(
             row["s"]["sale"].get("mid"),
             sc["hold"],

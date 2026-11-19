@@ -23,7 +23,7 @@ from landcheck.web.db import TorgiLot, session
 
 log = logging.getLogger(__name__)
 
-RETRY_AFTER = timedelta(days=1)  # карта не ответила — повтор не раньше суток
+RETRY_AFTER = timedelta(hours=6)  # карта не ответила — повтор не раньше чем через шесть часов
 REFRESH_AFTER = timedelta(days=90)  # карта меняется медленно
 PAUSE_S = 5.0  # публичные серверы карты: не чаще запроса в несколько секунд
 MAX_PER_RUN = 40
@@ -40,8 +40,8 @@ def _aware(dt: datetime | None) -> datetime | None:
 
 
 def missing(lot_ids: Iterable[str | None], now: datetime | None = None) -> list[str]:
-    """Лоты, по которым карту не спрашивали, спрашивали давно либо она не ответила сутки
-    назад и раньше. Лот без точки на карте тоже берём: отметим, что спросить не о чем."""
+    """Лоты, по которым карту не спрашивали, спрашивали давно либо она не ответила шесть
+    часов назад и раньше. Лот без точки на карте тоже берём: отметим, что спросить не о чем."""
     now = now or datetime.now(UTC)
     todo = list(dict.fromkeys(i for i in lot_ids if i))
     out: list[str] = []
@@ -65,12 +65,19 @@ def missing(lot_ids: Iterable[str | None], now: datetime | None = None) -> list[
     return out
 
 
-MIRROR_TIMEOUT_S = 60.0
+# Замер с прода 19.11.2026 (по четыре запроса на зеркало): отвечают overpass-api.de (три из
+# четырёх, 55–61 с — почти всё время уходит на очередь сервера) и maps.mail.ru (один из
+# четырёх, 30 с, остальные — мгновенный 504); два других зеркала все разы молчали по 90 с.
+MIRRORS = (
+    "https://overpass-api.de/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+)
+MIRROR_TIMEOUT_S = 100.0
 
 
 def _fetch(query: str) -> dict[str, Any]:
-    """Зеркала карты по очереди: фоновому сбору спешить некуда."""
-    return osm.run_query(query, timeout=MIRROR_TIMEOUT_S, parallel=False)
+    """Два живых зеркала карты по очереди: фоновому сбору спешить некуда."""
+    return osm.run_query(query, timeout=MIRROR_TIMEOUT_S, parallel=False, urls=MIRRORS)
 
 
 def fill(

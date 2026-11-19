@@ -1,10 +1,13 @@
 """Факторы спроса у участка: что рядом и как добраться — по OpenStreetMap.
 
 ТЗ v5, п. 7 (зум 18.11.2026, 01:08: «доступность, инфраструктура, коммуникации, дороги»).
-Для лота-кандидата один запрос к карте вокруг его точки: ближайший населённый пункт, город,
-дорога с твёрдым покрытием, линии электропередачи, газопровод, вода, школа и магазин и то, что
-портит место (свалка, кладбище, промзона, карьер). Здесь только разбор ответа и выводы; сеть —
-в `landcheck.web.torgi_nearby`.
+Для лота-кандидата — один лёгкий запрос к карте вокруг его точки (не дальше 5 км): ближайший
+населённый пункт, дорога, линии электропередачи, газопровод, вода, школа и магазин и то, что
+портит место (свалка, кладбище, промзона, карьер). Города берём из справочника в проекте
+(`data/ru_towns.tsv`, 2 675 городов России из той же карты): общественные серверы карты
+медленные (прод и замер 19.11.2026: поиск городов в радиусе 60 км не успевал ни на одном
+зеркале, крошечный запрос шёл 18 секунд), а города не переезжают. Здесь только разбор ответа
+и выводы; сеть — в `landcheck.web.torgi_nearby`.
 
 Карта неполна: распределительные линии и газопроводы в сёлах нанесены не везде. Поэтому
 найденный объект — факт, а отсутствие на карте — не доказательство, что его нет; на этом
@@ -14,31 +17,33 @@
 from __future__ import annotations
 
 import math
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 FAR_M = 60_000  # города ищем в часе езды
-NEAR_M = 5_000  # сёла, школа, магазин, станция
+NEAR_M = 5_000  # населённые пункты
 ROAD_M = 3_000  # дорога с твёрдым покрытием
-UTIL_M = 2_000  # ЛЭП, газ, вода
-BAD_M = 3_000  # что портит место (как в отчёте по участку)
+UTIL_M = 1_000  # ЛЭП, газ, вода: дальше километра подключение — отдельный проект
+BAD_M = 3_000  # что портит место (как в отчёте по участку), школа, магазин
 CITY_POPULATION = 50_000  # с такого населения город тянет спрос на землю вокруг
+TOWNS_PATH = Path(__file__).resolve().parent / "data" / "ru_towns.tsv"
+# Справочник городов собран одним запросом:
+#   area["ISO3166-1"="RU"][admin_level=2]->.a;
+#   (node["place"="city"](area.a);node["place"="town"](area.a););out body;
 
 QUERY = """
-[out:json][timeout:40];
+[out:json][timeout:50];
 (
-  node["place"~"^(city|town)$"](around:{far},{lat},{lon});
-  node["place"~"^(village|hamlet|suburb|neighbourhood)$"](around:{near},{lat},{lon});
+  node["place"~"^(city|town|village|hamlet|suburb|neighbourhood)$"](around:{near},{lat},{lon});
   way["highway"~"^(motorway|trunk|primary|secondary|tertiary)$"](around:{road},{lat},{lon});
-  way["highway"~"^(unclassified|residential|living_street)$"]["surface"~"^(asphalt|concrete|paved|paving_stones|sett)"](around:{road},{lat},{lon});
   way["power"~"^(line|minor_line)$"](around:{util},{lat},{lon});
   way["man_made"="pipeline"]["substance"~"gas"](around:{util},{lat},{lon});
   way["natural"="water"](around:{util},{lat},{lon});
   way["waterway"~"^(river|canal)$"](around:{util},{lat},{lon});
   way["landuse"~"^(industrial|landfill|cemetery|quarry)$"](around:{bad},{lat},{lon});
-  nwr["amenity"="grave_yard"](around:{bad},{lat},{lon});
-  node["amenity"~"^(school|kindergarten)$"](around:{near},{lat},{lon});
-  node["shop"~"^(supermarket|convenience)$"](around:{near},{lat},{lon});
-  node["railway"~"^(station|halt)$"](around:{near},{lat},{lon});
+  node["amenity"~"^(school|kindergarten)$"](around:{bad},{lat},{lon});
+  node["shop"~"^(supermarket|convenience)$"](around:{bad},{lat},{lon});
 );
 out geom tags;
 """
@@ -57,9 +62,6 @@ ROAD_RU = {
     "primary": "региональная дорога",
     "secondary": "дорога",
     "tertiary": "дорога",
-    "unclassified": "местная дорога с покрытием",
-    "residential": "улица с покрытием",
-    "living_street": "улица с покрытием",
 }
 BAD_RU = {
     "landfill": "свалка",
@@ -72,9 +74,40 @@ BAD_NEAR_M = {"landfill": 2000, "cemetery": 500, "industrial": 500, "quarry": 10
 
 
 def query(lat: float, lon: float) -> str:
-    return QUERY.format(
-        far=FAR_M, near=NEAR_M, road=ROAD_M, util=UTIL_M, bad=BAD_M, lat=lat, lon=lon
-    )
+    return QUERY.format(near=NEAR_M, road=ROAD_M, util=UTIL_M, bad=BAD_M, lat=lat, lon=lon)
+
+
+@lru_cache(maxsize=1)
+def towns() -> tuple[tuple[str, float, float, int, str], ...]:
+    """Города России из справочника: (название, широта, долгота, население, вид)."""
+    out = []
+    if TOWNS_PATH.exists():
+        for line in TOWNS_PATH.read_text(encoding="utf-8").splitlines():
+            if not line or line.startswith("#"):
+                continue
+            name, lat, lon, people, place = line.split("\t")
+            out.append((name, float(lat), float(lon), int(people), place))
+    return tuple(out)
+
+
+def far_places(lat: float, lon: float) -> dict[str, dict[str, Any]]:
+    """Ближайший город (`town`) и ближайший крупный (`city`: от `CITY_POPULATION` жителей) в
+    радиусе `FAR_M` — из справочника, без сети."""
+    best: dict[str, dict[str, Any]] = {}
+    lat_span = FAR_M / 111_000
+    for name, t_lat, t_lon, people, _place in towns():
+        if abs(t_lat - lat) > lat_span:
+            continue
+        dist = math.hypot(*_xy(t_lat, t_lon, lat, lon))
+        if dist > FAR_M:
+            continue
+        item = {"m": round(dist), "name": name}
+        if people:
+            item["population"] = people
+        for key in ("town", *(("city",) if people >= CITY_POPULATION else ())):
+            if key not in best or dist < best[key]["m"]:
+                best[key] = item
+    return best
 
 
 def _xy(lat: float, lon: float, lat0: float, lon0: float) -> tuple[float, float]:
@@ -115,11 +148,6 @@ def distance_m(lat: float, lon: float, el: dict[str, Any]) -> float | None:
     return min(_seg(0.0, 0.0, a, b) for a, b in zip(pts, pts[1:], strict=False))
 
 
-def _population(tags: dict[str, str]) -> int | None:
-    digits = "".join(ch for ch in tags.get("population") or "" if ch.isdigit())
-    return int(digits) if digits else None
-
-
 def _kind(tags: dict[str, str]) -> str | None:
     if tags.get("place") in PLACE_RU:
         return "place"
@@ -135,20 +163,16 @@ def _kind(tags: dict[str, str]) -> str | None:
         return "water"
     if tags.get("landuse") in BAD_RU:
         return tags["landuse"]
-    if tags.get("amenity") == "grave_yard":
-        return "cemetery"
     if tags.get("amenity") in ("school", "kindergarten"):
         return "school"
     if tags.get("shop") in ("supermarket", "convenience"):
         return "shop"
-    if tags.get("railway") in ("station", "halt"):
-        return "rail"
     return None
 
 
 def summarize(lat: float, lon: float, elements: list[dict[str, Any]]) -> dict[str, Any]:
-    """Ближайшие объекты каждого вида и расстояния до них в метрах. Ключи, которых нет, —
-    объект на карте в радиусе поиска не найден."""
+    """Ближайшие объекты каждого вида и расстояния до них в метрах: вблизи — из ответа карты,
+    города — из справочника. Ключи, которых нет, — объект в радиусе поиска не найден."""
     best: dict[str, dict[str, Any]] = {}
 
     def keep(key: str, dist: float, **extra: Any) -> None:
@@ -164,22 +188,15 @@ def summarize(lat: float, lon: float, elements: list[dict[str, Any]]) -> dict[st
             continue
         name = tags.get("name")
         if kind == "place":
-            place, people = tags["place"], _population(tags)
-            if place in ("city", "town"):
-                keep("town", dist, name=name, population=people)
-                if place == "city" or (people or 0) >= CITY_POPULATION:
-                    keep("city", dist, name=name, population=people)
             # ближайший населённый пункт любого размера, в том числе сам город
-            if dist <= NEAR_M:
-                keep("settlement", dist, name=name, kind=PLACE_RU[place])
+            keep("settlement", dist, name=name, kind=PLACE_RU[tags["place"]])
         elif kind == "road":
             keep("road", dist, kind=ROAD_RU[tags["highway"]], name=tags.get("ref") or name)
-        elif kind in BAD_RU:
-            keep(kind, dist, name=name)
         else:
             keep(kind, dist, name=name)
     bad = [{"kind": k, "label": BAD_RU[k], **best.pop(k)} for k in list(best) if k in BAD_RU]
     best["bad"] = sorted(bad, key=lambda x: x["m"])
+    best.update(far_places(lat, lon))
     return best
 
 
@@ -195,38 +212,41 @@ def access(facts: dict[str, Any]) -> dict[str, Any]:
     """Итог по доступности места: `good`, `mid` или `weak` — и из чего он сложен.
 
     Правила намеренно простые и проверяемые глазами:
-    - слабая — на карте нет дороги с твёрдым покрытием в 3 км либо нет населённого пункта в
-      5 км: до такого участка трудно доехать, покупателей на него мало;
-    - хорошая — населённый пункт не дальше 1 км, дорога с покрытием не дальше 1 км и город от
-      50 тыс. жителей не дальше 30 км;
+    - слабая — на карте нет населённого пункта в 5 км, либо до ближайшего дальше километра и
+      при этом нет дороги (от местной до магистрали) в 3 км: до такого участка трудно
+      доехать, покупателей на него мало. Участок в самом селе за дорогу не штрафуем —
+      улицы сёл нанесены на карту не везде;
+    - хорошая — населённый пункт и дорога не дальше 1 км и город от 50 тыс. жителей не
+      дальше 30 км;
     - иначе средняя."""
     road, place, city = facts.get("road"), facts.get("settlement"), facts.get("city")
     why: list[str] = []
-    if road is None:
-        why.append(f"на карте нет дороги с твёрдым покрытием в {ROAD_M // 1000} км")
     if place is None:
         why.append(f"нет населённого пункта в {NEAR_M // 1000} км")
+    if road is None and (place is None or place["m"] > 1000):
+        why.append(f"на карте нет дороги в {ROAD_M // 1000} км")
     if why:
         return {"level": "weak", "label": "слабая", "why": why}
-    good = road["m"] <= 1000 and place["m"] <= 1000 and city is not None and city["m"] <= 30_000
-    if good:
+    near_road = road is not None and road["m"] <= 1000
+    if near_road and place["m"] <= 1000 and city is not None and city["m"] <= 30_000:
         return {
             "level": "good",
             "label": "хорошая",
             "why": [
                 f"{place.get('kind') or 'населённый пункт'} {km(place['m'])}",
-                f"дорога с покрытием {km(road['m'])}",
+                f"дорога {km(road['m'])}",
                 f"{city.get('name') or 'город'} {km(city['m'])}",
             ],
         }
-    if road["m"] > 1000:
-        why.append(f"до дороги с покрытием {km(road['m'])}")
-    if place["m"] > 1000:
-        why.append(f"до населённого пункта {km(place['m'])}")
+    why.append(f"{place.get('kind') or 'населённый пункт'} {km(place['m'])}")
+    if road is None:
+        why.append(f"дороги на карте в {ROAD_M // 1000} км нет")
+    elif not near_road:
+        why.append(f"до дороги {km(road['m'])}")
     if city is None:
         why.append(f"города от {CITY_POPULATION // 1000} тыс. жителей в {FAR_M // 1000} км нет")
-    elif city["m"] > 30_000:
-        why.append(f"до города {km(city['m'])}")
+    else:
+        why.append(f"{city.get('name') or 'город'} {km(city['m'])}")
     return {"level": "mid", "label": "средняя", "why": why}
 
 
@@ -268,7 +288,7 @@ def lines(facts: dict[str, Any]) -> list[tuple[str, str]]:
         out.append(("Крупный город", named(city) + people(city)))
     road = facts.get("road")
     if road:
-        out.append(("Дорога с твёрдым покрытием", f"{road.get('kind', 'дорога')}, {km(road['m'])}"))
+        out.append(("Дорога", f"{road.get('kind', 'дорога')}, {km(road['m'])}"))
     if facts.get("power"):
         out.append(("Линия электропередачи 0,4–10 кВ", km(facts["power"]["m"])))
     if facts.get("hv_line"):
@@ -280,7 +300,6 @@ def lines(facts: dict[str, Any]) -> list[tuple[str, str]]:
     for key, label in (
         ("school", "Школа или детский сад"),
         ("shop", "Магазин"),
-        ("rail", "Станция"),
     ):
         if facts.get(key):
             out.append((label, named(facts[key])))
