@@ -1211,6 +1211,148 @@ def test_invest_summary_pick_and_public_link(client):  # noqa: F811
     assert client.get("/tools/torgi-lot/ACT_0/invest", follow_redirects=False).status_code != 200
 
 
+def _hot_ready(client):  # noqa: F811
+    """Регион собран, рынок задан так, что все 12 идущих лотов проходят в «горячие»."""
+    fake = _seed(client)
+    _sync(fake, provider=FakeNspd())
+    _admin(client)
+    market = {"scope": "40:13", "kind": "sale", "vri_group": "any", "price_mid": "45000"}
+    client.post("/tools/torgi-market", data=market)
+    return fake
+
+
+def test_marks_take_lot_to_work_or_hide_it_with_reason(client):  # noqa: F811
+    """ТЗ v5, п. 10: «В работу» и «Не подходит» с причиной — отказы показывают, какой
+    критерий править."""
+    from landcheck.web.db import TorgiMark, session
+
+    _hot_ready(client)
+    hot = "/tools/torgi-hot?annual=100&cap=2000000&days=3&top=5"
+    page = client.get(hot).text
+    assert 'formaction="/tools/torgi-mark/ACT_0/work"' in page and "не подходит" in page
+    assert 'name="reason-ACT_0"' in page and "В работе:" not in page
+    r = client.post(
+        "/tools/torgi-mark/ACT_0/work", headers={"referer": hot}, follow_redirects=False
+    )
+    assert r.status_code == 303 and r.headers["location"] == hot
+    r = client.post(
+        "/tools/torgi-mark/ACT_1/skip",
+        data={"reason-ACT_1": "место неликвидное", "reason-ACT_2": "другое"},
+        headers={"referer": "https://evil.example/x"},
+        follow_redirects=False,
+    )
+    assert r.headers["location"] == "/tools/torgi-hot"  # чужой адрес возврата не берём
+    page = client.get(hot).text
+    assert "В работе: 1" in page and "в работе</span>" in page
+    # лот в работе стоит в своём блоке, убранный скрыт: в предложениях осталось десять
+    assert "Вы убрали из списков 1 лот." in page and "Показано 5 из 10" in page
+    assert 'formaction="/tools/torgi-mark/ACT_1/' not in page
+    shown = client.get(hot + "&skipped=1").text
+    assert "убран: место неликвидное" in shown and "Показано 5 из 11" in shown
+    # причины отказов видит администратор
+    assert "Почему лоты убирали из списка — все пользователи: 1" in page
+    assert "место неликвидное — 1." in page
+    with session() as db:
+        marks = {m.lot_id: (m.mark, m.reason) for m in db.scalars(select(TorgiMark))}
+    assert marks == {"ACT_0": ("work", None), "ACT_1": ("skip", "место неликвидное")}
+    # отметку можно сменить и снять
+    client.post("/tools/torgi-mark/ACT_1/work")
+    client.post("/tools/torgi-mark/ACT_0/clear")
+    page = client.get(hot).text
+    assert "В работе: 1" in page and "Вы убрали" not in page
+    assert client.post("/tools/torgi-mark/ACT_0/delete").status_code == 404
+    assert client.post("/tools/torgi-mark/NO_SUCH/work").status_code == 404
+
+
+def test_morning_digest_sends_only_new_lots_once_a_day(client):  # noqa: F811
+    """Зум 18.11.2026, 01:11: «утром проснулись — система оповестила». Раз в сутки в час
+    пользователя, только новые лоты; нет нового — сообщение не шлём."""
+    from landcheck.web import torgi_hotjobs as hj
+    from landcheck.web.db import Notification, TorgiLot, User, session
+
+    _hot_ready(client)
+    form = client.get("/tools/torgi-hot").text
+    assert "Утренняя сводка" in form and 'name="dg"' in form and "UTC+7" in form
+    # включаем сводку в форме критериев: 09:00 по UTC+7, по пять лотов
+    client.get("/tools/torgi-hot?annual=100&cap=2000000&days=3&top=5&dg=1&dh=9&dz=7")
+    with session() as db:
+        user = db.scalars(select(User).where(User.is_admin)).first()
+        uid, crit = user.id, dict(user.hot_criteria)
+    assert hj.digest_settings(crit) == (True, 9, 7.0)
+    early = datetime(2026, 11, 20, 1, 30, tzinfo=UTC)  # 08:30 по UTC+7 — рано
+    morning = datetime(2026, 11, 20, 2, 30, tzinfo=UTC)  # 09:30
+    assert hj.digest_due(crit, None, early) is None
+    assert hj.digest_due(crit, None, morning) == "2026-11-20"
+    assert hj.digest_due({**crit, "dg": ""}, None, morning) is None
+    assert hj.run_digests(early) == 0 and hj.run_digests(morning) == 1
+
+    def notes() -> list[str]:
+        with session() as db:
+            q = select(Notification).where(Notification.user_id == uid, Notification.kind == "hot")
+            return [n.text for n in db.scalars(q.order_by(Notification.id))]
+
+    first = notes()[0]
+    assert first.startswith("Новых лотов под ваши критерии: 5 (всего проходит 12)")
+    assert "1. " in first and "5. " in first and "6. " not in first
+    assert "вход " + M(150_000) in first and "не выше " + M(209_358) in first
+    assert "174 % годовых" in first and "/tools/torgi-lot/ACT_" in first
+    assert "В работе" not in first
+    # в тот же день второй раз не шлём
+    assert hj.run_digests(morning + timedelta(hours=3)) == 0 and len(notes()) == 1
+    # лот в работе, приём заявок кончается послезавтра; один лот убран как неподходящий
+    with session() as db:
+        seen = set(db.get(User, uid).hot_digest["seen"])
+        rest = sorted(f"ACT_{i}" for i in range(12) if f"ACT_{i}" not in seen)
+        soon = (datetime.now(UTC).date() + timedelta(days=2)).isoformat()
+        db.get(TorgiLot, rest[0]).bidd_end = soon
+        db.commit()
+    client.post(f"/tools/torgi-mark/{rest[0]}/work")
+    client.post(f"/tools/torgi-mark/{rest[1]}/skip", data={f"reason-{rest[1]}": "не моя ниша"})
+    assert hj.run_digests(morning + timedelta(days=1)) == 1
+    second = notes()[1]
+    # из семи оставшихся: один ушёл по сроку, один убран — новых пять
+    assert second.startswith("Новых лотов под ваши критерии: 5 (всего проходит 11)")
+    assert "В работе, приём заявок заканчивается:" in second and "осталось 2 дн." in second
+    assert rest[1] not in second
+    # на третий день нового нет, но срок по лоту в работе близко — напоминание идёт одно
+    assert hj.run_digests(morning + timedelta(days=2)) == 1
+    assert notes()[2].startswith("В работе, приём заявок заканчивается:")
+    client.post(f"/tools/torgi-mark/{rest[0]}/clear")
+    # ни новых лотов, ни сроков — сообщения нет, день отмечен, чтобы не считать каждые 10 минут
+    assert hj.run_digests(morning + timedelta(days=3)) == 0 and len(notes()) == 3
+    with session() as db:
+        assert db.get(User, uid).hot_digest["day"] == "2026-11-23"
+
+
+def test_candidate_cards_are_read_out_of_turn(client):  # noqa: F811
+    """Прод, 19.11.2026: у 994 из 1519 идущих продаж региона карточка не прочитана — нет
+    задатка, шага, отметки о градплане. Кандидатам карточку читаем сразу."""
+    from landcheck.web import torgi_hotjobs as hj
+    from landcheck.web.db import TorgiLot, session
+
+    fake = _hot_ready(client)
+    with session() as db:
+        for lot_id in ("ACT_3", "ACT_7", "S_0"):
+            lot = db.get(TorgiLot, lot_id)
+            lot.card_at, lot.deposit, lot.price_step = None, None, None
+        db.commit()
+    page = client.get("/tools/torgi-hot?annual=100&cap=2000000&days=3&top=25").text
+    assert "задаток: карточка читается" in page
+    # завершённые торги и уже прочитанные карточки не трогаем; порядок — как попросили
+    assert hj.missing_cards(["ACT_7", "ACT_0", "S_0", "ACT_3", None, "ACT_7"]) == ["ACT_7", "ACT_3"]
+    api = torgi.TorgiClient(fake.client(), interval=0, sleep=lambda s: None)
+    before = len(fake.seen)
+    assert hj.fill_cards(["ACT_7", "ACT_0", "ACT_3"], api=api, now=NOW) == 2
+    assert len(fake.seen) - before == 2
+    with session() as db:
+        lot = db.get(TorgiLot, "ACT_3")
+        assert lot.card_at is not None and lot.deposit == 20_000 and lot.price_step == 3_000
+    assert hj.missing_cards(["ACT_7", "ACT_3"]) == [] and hj.fill_cards(["ACT_7"], api=api) == 0
+    # в тестах шлюза нет — фоновые потоки не запускаются
+    assert hj.start_cards(["ACT_3"]) == 0 and hj.start_warm_loop() is None
+    assert hj.start_digest_loop() is None
+
+
 def test_resume_after_restart_rotates_the_queue(client, monkeypatch):  # noqa: F811
     """Прод, 18.11.2026: выкладки шли чаще, чем длится проход большого региона, очередь каждый
     раз поднималась с него же, и три региона за ним простояли весь день. После рестарта первым

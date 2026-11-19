@@ -158,6 +158,12 @@ table.hot td.num div.nw { white-space: nowrap; max-width: none; }
 table.hot .reasons { min-width: 200px; max-width: 320px; }
 .nw { white-space: nowrap; }
 details.hot-funnel { margin-top: 0.8rem; }
+button.linkbtn { all: unset; color: var(--pico-primary); cursor: pointer; text-decoration: underline; }
+.lot-marks { margin-top: 0.25rem; }
+.lot-marks details.skip-form { display: inline-block; margin: 0; vertical-align: top; }
+.lot-marks details.skip-form summary { display: inline; cursor: pointer; color: var(--pico-primary); text-decoration: underline; }
+.lot-marks details.skip-form summary::after { display: none; }
+.lot-marks details.skip-form select { display: inline-block; width: auto; margin: 0.2rem 0; padding: 0.15rem 1.6rem 0.15rem 0.4rem; height: auto; font-size: 0.85em; }
 details.hot-funnel table { max-width: 46rem; }
 /* сводка для инвестора и подборка (ТЗ v5, п. 4) */
 .invest-key { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.6rem; margin: 0.6rem 0 1.2rem; }

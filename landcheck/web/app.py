@@ -222,6 +222,10 @@ def create_app() -> FastAPI:
     from landcheck.web import rr_sync
 
     rr_sync.start_loop()
+    from landcheck.web import torgi_hotjobs
+
+    torgi_hotjobs.start_warm_loop()
+    torgi_hotjobs.start_digest_loop()
     return app
 
 

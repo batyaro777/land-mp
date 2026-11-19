@@ -108,6 +108,9 @@ class User(Base):
     # «Горячие предложения»: критерии отбора, с которыми пользователь смотрел список в прошлый
     # раз (ТЗ v5, зум 18.11.2026) — по ним же пойдёт утренняя сводка.
     hot_criteria: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # Утренняя сводка «Горячих»: за какой день уже отправлена и какие лоты в ней были
+    # (`{"day": "2026-11-20", "seen": [...]}`), чтобы каждое утро приходили только новые.
+    hot_digest: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     # Физлицо или юрлицо/ИП (зум 09.11, Влад: «сначала кто ты, потом роль»): у организации —
     # вид деятельности и ИНН (необязательный).
     entity: Mapped[str] = mapped_column(String(8), default="person", server_default="person")
@@ -491,6 +494,22 @@ class TorgiPick(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class TorgiMark(Base):
+    """Отметка пользователя на лоте из «Горячих» (ТЗ v5, п. 10): `work` — взял в работу,
+    `skip` — не подходит, с причиной. Отказы — обратная связь для отбора: по причинам видно,
+    какой критерий надо править."""
+
+    __tablename__ = "torgi_marks"
+    __table_args__ = (UniqueConstraint("user_id", "lot_id", name="uq_torgi_marks"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    lot_id: Mapped[str] = mapped_column(String(64), index=True)
+    mark: Mapped[str] = mapped_column(String(8))  # work | skip
+    reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class TorgiMarket(Base):
     """Слой рынка: цена перепродажи за сотку по кварталу или району (как полигоны эксперта в
     Google My Maps: «240 — край по торгам, рынок 320–350») и срок экспозиции. Источник —
@@ -673,6 +692,7 @@ _NEW_COLUMNS: dict[str, dict[str, str]] = {
         "region": "VARCHAR(120)",
         "pro_tools": "BOOLEAN NOT NULL DEFAULT 0",
         "hot_criteria": "JSON",
+        "hot_digest": "JSON",
         "entity": "VARCHAR(8) NOT NULL DEFAULT 'person'",
         "org_kind": "VARCHAR(16)",
         "inn": "VARCHAR(12)",

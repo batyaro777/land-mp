@@ -19,7 +19,7 @@ from collections import Counter
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Annotated, Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
@@ -30,7 +30,15 @@ from landcheck import ads_api, rr_deals, ruproxy, torgi, torgi_calc, torgi_hot, 
 from landcheck.models import Purpose
 from landcheck.models import Request as CheckRequest
 from landcheck.regions import CADASTRAL_REGIONS
-from landcheck.web import ads_sync, jobs, rr_sync, torgi_places, torgi_sync, torgi_zones
+from landcheck.web import (
+    ads_sync,
+    jobs,
+    rr_sync,
+    torgi_hotjobs,
+    torgi_places,
+    torgi_sync,
+    torgi_zones,
+)
 from landcheck.web import db as dbmod
 from landcheck.web.app import render, require_user
 from landcheck.web.config import settings
@@ -38,6 +46,7 @@ from landcheck.web.db import (
     Check,
     TorgiDeal,
     TorgiLot,
+    TorgiMark,
     TorgiMarket,
     TorgiPick,
     TorgiSync,
@@ -493,7 +502,21 @@ def torgi_scan_page(request: Request, user: TorgiDep, page: int = 1):
 
 
 # --- горячие предложения (ТЗ v5, зум 18.11.2026) -------------------------------------------
-HOT_KEYS = ("annual", "cap", "days", "kind", "region", "top", "profit", "extra", "assign")
+HOT_KEYS = (
+    "annual",
+    "cap",
+    "days",
+    "kind",
+    "region",
+    "top",
+    "profit",
+    "extra",
+    "assign",
+    # утренняя сводка: включена, час отправки, пояс пользователя в часах от UTC
+    "dg",
+    "dh",
+    "dz",
+)
 HOT_CAPS = (1_000_000, 2_000_000, 3_000_000, 5_000_000)
 HOT_CHECK_ROWS = 50  # столько лотов показываем в списке «Проверить рынок руками»
 
@@ -530,11 +553,34 @@ def _hot_params(c: dict[str, str]) -> tuple[torgi_hot.HotParams, torgi_scan.Scan
     return hp, sp
 
 
+def _skip_reasons() -> dict[str, Any]:
+    """Почему лоты убирали из «Горячих» — по всем пользователям (видит администратор):
+    по этим причинам правятся критерии отбора."""
+    with session() as db:
+        rows = db.execute(
+            select(TorgiMark.reason, TorgiMark.created_at, User.name, TorgiLot.cad_num, TorgiLot.id)
+            .join(User, User.id == TorgiMark.user_id)
+            .join(TorgiLot, TorgiLot.id == TorgiMark.lot_id)
+            .where(TorgiMark.mark == "skip")
+            .order_by(TorgiMark.created_at.desc())
+        ).all()
+    counts = Counter(r[0] or "без причины" for r in rows)
+    return {
+        "total": len(rows),
+        "counts": counts.most_common(),
+        "recent": [
+            {"reason": r[0] or "без причины", "at": r[1], "user": r[2], "cad": r[3], "lot": r[4]}
+            for r in rows[:15]
+        ],
+    }
+
+
 @router.get("/tools/torgi-hot", response_class=HTMLResponse)
 def torgi_hot_page(request: Request, user: TorgiDep):
     """«Горячие предложения»: идущие лоты, которые проходят критерии «заходим», лучшие
     первыми, и отдельно — лоты, у которых цена рынка не прошла сверку."""
-    crit, fresh = _hot_criteria(request.query_params, user)
+    q = request.query_params
+    crit, fresh = _hot_criteria(q, user)
     if fresh and crit != (user.hot_criteria or {}):
         with session() as db:
             u = db.get(User, user.id)
@@ -545,23 +591,56 @@ def torgi_hot_page(request: Request, user: TorgiDep):
     region = _region_code(crit.get("region")) if not _is_all(crit.get("region")) else None
     result, names = _region_scan(region, sp) if region else _scan_all(sp)
     res = torgi_hot.select(result["rows"], sp, hp)
-    shown = res["hot"][: hp.top]
-    passed = len(res["hot"]) + len(res["weak"])
-    check = res["check"][:HOT_CHECK_ROWS]
-    # обременения — у всех, кто прошёл отбор: без них лот не поднимется в класс A
-    queued = torgi_zones.start_fill(
-        [i["row"]["id"] for i in res["hot"] + res["weak"] + check if i["zones"][0] == "unknown"]
+    # отметки пользователя: «не подходит» убирает лот из списков, «в работе» — отдельный блок
+    marks = torgi_hotjobs.marks_of(user.id)
+    show_skipped = q.get("skipped") == "1"
+
+    def kept(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        # лот «в работе» стоит в своём блоке, второй раз в предложениях его не показываем
+        hide = ("work",) if show_skipped else ("work", "skip")
+        return [i for i in items if marks.get(i["row"]["id"], ("", None))[0] not in hide]
+
+    hot, weak, check_all = kept(res["hot"]), kept(res["weak"]), kept(res["check"])
+    skipped = sum(
+        1
+        for k in ("hot", "weak", "check")
+        for i in res[k]
+        if marks.get(i["row"]["id"], ("", None))[0] == "skip"
     )
+    shown = hot[: hp.top]
+    check = check_all[:HOT_CHECK_ROWS]
+    by_id = {r["id"]: r for r in result["rows"]}
+    work_ids = [lot_id for lot_id, (mark, _) in marks.items() if mark == "work"]
+    work = [torgi_hot.item_of(by_id[i], sp, hp) for i in work_ids if i in by_id]
+    work.sort(key=lambda i: i["row"]["s"].get("days_left") or 0)
+    # обременения и карточки — у всех, кто прошёл отбор: без них лот не поднимется в класс A,
+    # а в сводке не будет задатка и шага
+    candidates = hot + weak + check + work
+    queued = torgi_zones.start_fill(
+        [i["row"]["id"] for i in candidates if i["zones"][0] == "unknown"]
+    )
+    torgi_hotjobs.start_cards([i["row"]["id"] for i in candidates if not i["row"].get("card")])
     lot_qs = urlencode(
         {k: v for k, v in (("extra", crit.get("extra")), ("assign", crit.get("assign"))) if v}
     )
+    digest_on, digest_hour, digest_tz = torgi_hotjobs.digest_settings(crit)
     return render(
         request,
         "torgi_hot.html",
         user=user,
         res=res,
+        hot_n=len(hot),
+        weak=weak,
         shown=shown,
         check=check,
+        check_n=len(check_all),
+        work=work,
+        work_elsewhere=len(work_ids) - len(work),
+        marks=marks,
+        skipped=skipped,
+        show_skipped=show_skipped,
+        skip_reasons=torgi_hotjobs.SKIP_REASONS,
+        skip_stats=_skip_reasons() if user.is_admin else None,
         hp=hp,
         sp=sp,
         crit=crit,
@@ -575,11 +654,56 @@ def torgi_hot_page(request: Request, user: TorgiDep):
         kinds=torgi_scan.KIND_RU,
         groups=torgi_scan.GROUPS,
         zones_queued=queued or torgi_zones.queued(),
+        cards_queued=torgi_hotjobs.cards_queued(),
         lot_qs=lot_qs,
         img_base=torgi.FILE_URL.format(file_id=""),
         check_ratio=torgi_hot.START_RATIO,
         # подсказка «при пороге ниже пройдёт N» — только там, где лотов станет больше
-        more_at=[(lvl, n) for lvl, n in res["relaxed"].items() if n > passed],
+        more_at=[
+            (lvl, n) for lvl, n in res["relaxed"].items() if n > len(res["hot"]) + len(res["weak"])
+        ],
+        digest_on=digest_on,
+        digest_hour=digest_hour,
+        digest_tz=digest_tz,
+        can_telegram=bool(settings.telegram_bot_token and user.telegram_chat_id),
+        can_email=bool(settings.smtp_url and user.email and user.notify_email),
+    )
+
+
+@router.post("/tools/torgi-mark/{lot_id}/{mark}")
+async def torgi_mark(request: Request, user: TorgiDep, lot_id: str, mark: str):
+    """Отметка на лоте: `work` — взял в работу, `skip` — не подходит (с причиной), `clear` —
+    снять отметку. Возврат — на страницу, с которой нажали."""
+    if mark not in ("work", "skip", "clear"):
+        raise HTTPException(404)
+    form = await request.form()
+    reason = str(form.get(f"reason-{lot_id}") or "").strip()[:200] or None
+    with session() as db:
+        if db.get(TorgiLot, lot_id) is None:
+            raise HTTPException(404)
+        row = db.scalar(
+            select(TorgiMark).where(TorgiMark.user_id == user.id, TorgiMark.lot_id == lot_id)
+        )
+        if mark == "clear":
+            if row is not None:
+                db.delete(row)
+        elif row is None:
+            db.add(
+                TorgiMark(
+                    user_id=user.id,
+                    lot_id=lot_id,
+                    mark=mark,
+                    reason=reason if mark == "skip" else None,
+                )
+            )
+        else:
+            row.mark, row.reason = mark, reason if mark == "skip" else None
+            row.created_at = datetime.now(UTC)
+        db.commit()
+    ref = urlparse(request.headers.get("referer") or "")
+    back = ref.path + (f"?{ref.query}" if ref.query else "")
+    return RedirectResponse(
+        back if ref.path.startswith("/tools/torgi") else "/tools/torgi-hot", status_code=303
     )
 
 
