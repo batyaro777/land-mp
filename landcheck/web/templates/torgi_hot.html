@@ -99,6 +99,7 @@
   {% if more_at %}Если понизить порог доходности: {% for level, n in more_at %}до {{ (level * 100)|round|int }} % — пройдёт {{ n }}{{ '; ' if not loop.last else '.' }}{% endfor %}{% endif %}</p>
 </details>
 {% if zones_queued %}<p class="small muted">Обременения проверяются: в очереди {{ zones_queued }} участк. Пока проверка не прошла, лот стоит в классе B — обновите страницу через несколько минут.</p>{% endif %}
+{% if nearby_queued %}<p class="small muted">Карта спрашивается: в очереди {{ nearby_queued }} лот. Доступность места (населённый пункт, дорога, город) появится в строке лота — запрос к карте идёт до минуты на участок.</p>{% endif %}
 {% if cards_queued %}<p class="small muted">Карточки лотов читаются: в очереди {{ cards_queued }}. Задаток, шаг аукциона и отметка о градплане появятся после чтения.</p>{% endif %}
 {% if skipped and not show_skipped %}<p class="small muted">Вы убрали из списков {{ skipped }} лот. — <a href="/tools/torgi-hot?skipped=1">показать</a>.</p>{% elif show_skipped %}<p class="small muted">Показаны и убранные вами лоты — <a href="/tools/torgi-hot">скрыть</a>.</p>{% endif %}
 
@@ -119,7 +120,7 @@
   {% for i in items %}{% set r = i.row %}{% set s = r.s %}{% set e = i.sc.expected %}
   <tr>
     <td class="nw"><input type="checkbox" name="lot" value="{{ r.id }}" aria-label="В подборку"> <span class="badge v-{{ {'A': 'ok', 'B': 'check'}.get(i.cls, '') }}">{{ i.cls }}</span></td>
-    <td class="cad">{{ lot_cell(r) }}</td>
+    <td class="cad">{{ lot_cell(r) }}{% if i.place %}<div class="small {{ {'good': 'ok-msg', 'weak': 'warn'}.get(i.place.level, 'muted') }}" title="По OpenStreetMap, расстояния по прямой от точки участка">Доступность {{ i.place.label }}: {{ i.place.why|join(', ') }}</div>{% endif %}</td>
     <td class="num">{{ r.price_start|money }}{% if s.start_sotka %}<div class="small muted nw">{{ s.start_sotka|money }}/сот.</div>{% endif %}<div class="small muted nw">{% if r.deposit %}задаток {{ r.deposit|money }}{% elif not r.card %}задаток: карточка читается{% else %}задаток не указан{% endif %}</div></td>
     <td class="num small">{% if r.bidd_end %}{{ r.bidd_end[8:10] }}.{{ r.bidd_end[5:7] }}{% endif %}<div class="{{ 'err' if s.days_left < 5 else 'muted' }}">{{ s.days_left }} дн.</div></td>
     <td class="num">{{ s.sale_sotka.mid|money }}<div class="small muted" title="{{ s.market.note or '' }}">{{ s.market.source_label }}</div>{% if s.sale_sotka.min and s.sale_sotka.max and s.sale_sotka.min != s.sale_sotka.max %}<div class="small muted nw">{{ s.sale_sotka.min|money }} – {{ s.sale_sotka.max|money }}</div>{% endif %}{% if s.turnover %}<div class="small nw {{ 'warn' if s.turnover.quarter_n == 0 else 'muted' }}" title="Сделки Росреестра с участками того же назначения и похожей площади за {{ s.turnover.span }}: в квартале {{ s.turnover.quarter_n }}, в районе {{ s.turnover.district_n }}">сделок в квартале: {{ s.turnover.quarter_n }}</div>{% endif %}</td>

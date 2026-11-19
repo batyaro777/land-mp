@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from landcheck import torgi_calc, torgi_scan
+from landcheck import nearby, torgi_calc, torgi_scan
 
 SOTKA = torgi_scan.SOTKA
 
@@ -208,6 +208,15 @@ def zones_of(row: dict[str, Any]) -> tuple[str, str]:
     return "zones", "; ".join(zones)
 
 
+def place_of(row: dict[str, Any]) -> dict[str, Any] | None:
+    """Доступность места по карте (ТЗ v5, п. 7): уровень, из чего он сложен, что портит место
+    и строки для сводки. None — карту по этому лоту ещё не спрашивали или она не ответила."""
+    facts = row.get("nearby")
+    if row.get("nearby_state") != "ok" or facts is None:
+        return None
+    return {**nearby.access(facts), "bad": nearby.nuisances(facts), "lines": nearby.lines(facts)}
+
+
 def klass(
     row: dict[str, Any],
     warn: list[str],
@@ -246,6 +255,12 @@ def klass(
         why.append("участок уже выставляли без результата")
     if row.get("appeals"):
         why.append("по торгам есть жалобы")
+    place = place_of(row)
+    remote = place is not None and place["level"] == "weak"
+    if remote:
+        why.append("до участка трудно добраться: " + ", ".join(place["why"]))
+    if place and place["bad"]:
+        why.append("рядом: " + ", ".join(place["bad"]))
     if fail:
         # цена рынка не прошла сверку — это гипотеза, какими бы ни были остальные признаки
         return "C", [*fail, *why]
@@ -256,7 +271,8 @@ def klass(
         or idx < scan_params.min_liquidity
         or bool(spread and spread >= torgi_scan.WIDE_SPREAD)
     )
-    return ("C" if weak else "B"), why
+    # участок, до которого по карте не доехать, — гипотеза, какой бы ни была цена
+    return ("C" if weak or remote else "B"), why
 
 
 def _passes(item: dict[str, Any], hp: HotParams, min_annual: float) -> str | None:
@@ -308,6 +324,7 @@ def item_of(
         "cls": cls,
         "cls_why": cls_why,
         "zones": zones_of(row),
+        "place": place_of(row),
         "cutoff": cutoff_price(
             row["s"]["sale"].get("mid"),
             sc["hold"],

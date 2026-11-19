@@ -418,6 +418,11 @@ class TorgiLot(Base):
     zones: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     zones_state: Mapped[str | None] = mapped_column(String(12), nullable=True)
     zones_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # что рядом с участком по OpenStreetMap (`landcheck.nearby`, `torgi_nearby`): nearby — факты
+    # с расстояниями, nearby_state — ok | error | nopoint (у лота нет точки на карте)
+    nearby: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    nearby_state: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    nearby_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     FIELDS = (
         "id region district quarter cad_num kind form bidd_type bidd_type_name status area_m2 "
@@ -436,6 +441,8 @@ class TorgiLot(Base):
         out["card"] = self.card_at is not None
         out["zones"] = self.zones
         out["zones_state"] = self.zones_state
+        out["nearby"] = self.nearby
+        out["nearby_state"] = self.nearby_state
         # время окончания приёма заявок и торгов по местному времени лота и подпись пояса
         out["bidd_end_hm"] = torgi_time.local_hm(self.bidd_end_at, self.tz_offset)
         out["auction_hm"] = torgi_time.local_hm(self.auction_at, self.tz_offset)
@@ -678,6 +685,9 @@ _NEW_COLUMNS: dict[str, dict[str, str]] = {
         "zones": "JSON",
         "zones_state": "VARCHAR(12)",
         "zones_at": "DATETIME",
+        "nearby": "JSON",
+        "nearby_state": "VARCHAR(12)",
+        "nearby_at": "DATETIME",
     },
     "users": {
         "email": "VARCHAR(200)",

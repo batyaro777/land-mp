@@ -139,6 +139,19 @@ window.addEventListener('load', function () {
 <p class="muted">Оборот сделок по этому месту не посчитать: сделки округа не загружены либо назначение участка не сопоставить с другими.</p>
 {% endif %}
 
+<p><strong>Место и доступность.</strong>
+{% if i.place %} Доступность <strong>{{ i.place.label }}</strong>: {{ i.place.why|join(', ') }}.{% if i.place.bad %} <span class="err">Портит место: {{ i.place.bad|join(', ') }}.</span>{% endif %}</p>
+<table class="results invest">
+  <tbody>
+    {% for name, value in i.place.lines %}<tr><th>{{ name }}</th><td>{{ value }}</td></tr>{% endfor %}
+  </tbody>
+</table>
+<p class="small muted">По данным OpenStreetMap, расстояния по прямой от точки участка. Карта неполна: если линии электропередачи или газопровода в списке нет, это не значит, что их нет на местности. План развития района машиной не читается — сверяйте с генпланом и правилами землепользования муниципалитета.</p>
+{% elif r.nearby_state == 'nopoint' %} У участка нет точки на карте — окружение не определить.</p>
+{% elif r.nearby_state == 'error' %} Серверы карты не ответили — повторим завтра.</p>
+{% else %} Карта по этому участку ещё не спрошена — обновите страницу через пару минут.</p>
+{% endif %}
+
 <h3>6. Конкуренция на торгах</h3>
 {% set q = s.liquidity %}
 {% if q.closed %}

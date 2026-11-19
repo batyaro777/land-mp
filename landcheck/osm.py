@@ -77,6 +77,12 @@ def fetch_osm(
     четырёх зеркал с таймаутами растягивал «Локацию» до 2–3 минут.
     """
     query = _QUERY.format(r=int(radius_m), ra=int(access_radius_m), lat=lat, lon=lon)
+    return run_query(query, timeout=timeout)
+
+
+def run_query(query: str, *, timeout: float | None = None) -> dict[str, Any]:
+    """Произвольный запрос Overpass по всем зеркалам разом: {"elements": [...]} либо
+    {"elements": [], "error": "..."}; исключений наружу нет."""
     timeout = timeout or default_timeout()
     failures: list[str] = []
     pool = ThreadPoolExecutor(max_workers=len(OVERPASS_URLS), thread_name_prefix="overpass")

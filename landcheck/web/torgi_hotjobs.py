@@ -144,6 +144,23 @@ def cards_queued() -> int:
 
 
 # --- прогрев расчёта ---------------------------------------------------------------------------
+WARM_CANDIDATES = 40  # по стольким лучшим лотам готовим карточку, обременения и карту заранее
+
+
+def warm_candidates() -> int:
+    """Лучшим лотам при критериях по умолчанию заранее читаем карточку, обременения и карту:
+    утренняя сводка уходит до того, как кто-то откроет страницу, а без этих данных класс
+    лота и строка сводки неполны. Возвращает, сколько лотов поставлено в очередь карты."""
+    from landcheck.web import torgi_nearby, torgi_views, torgi_zones
+
+    result, _names = torgi_views._scan_all(torgi_scan.ScanParams())
+    res = torgi_hot.select(result["rows"])
+    top = (res["hot"] + res["weak"])[:WARM_CANDIDATES]
+    torgi_zones.start_fill([i["row"]["id"] for i in top if i["zones"][0] == "unknown"])
+    start_cards([i["row"]["id"] for i in top if not i["row"].get("card")])
+    return torgi_nearby.start_fill([i["row"]["id"] for i in top if i["place"] is None])
+
+
 def start_warm_loop(*, first_delay_s: float = 20.0, period_s: float = 180.0):
     """Держим расчёт всех собранных регионов тёплым: страница берёт его из памяти, а
     пересчитывается только регион, в котором с прошлого раза что-то записано."""
@@ -161,6 +178,7 @@ def start_warm_loop(*, first_delay_s: float = 20.0, period_s: float = 180.0):
                 took = time.monotonic() - t0
                 # проверка на завершённых торгах: по ней же собирается «вернутся на торги»
                 torgi_views.backtest_start(torgi_views._synced_regions())
+                warm_candidates()
                 if took > 5:
                     log.info("горячие: расчёт всех регионов прогрет за %.1f с", took)
             except Exception as exc:  # noqa: BLE001 — прогрев не должен ронять сервер

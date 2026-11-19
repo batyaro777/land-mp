@@ -257,12 +257,15 @@ def lines(facts: dict[str, Any]) -> list[tuple[str, str]]:
         out.append(
             ("Ближайший населённый пункт", f"{place.get('kind', '')} {named(place)}".strip())
         )
+
+    def people(x: dict[str, Any]) -> str:
+        n = x.get("population")
+        return f" ({round(n / 1000)} тыс. жителей)" if n and n >= 1000 else ""
+
     if town and (not place or town.get("name") != place.get("name")):
-        out.append(("Ближайший город", named(town)))
+        out.append(("Ближайший город", named(town) + people(town)))
     if city and (not town or city.get("name") != town.get("name")):
-        people = city.get("population")
-        tail = f" ({round(people / 1000)} тыс. жителей)" if people else ""
-        out.append(("Крупный город", named(city) + tail))
+        out.append(("Крупный город", named(city) + people(city)))
     road = facts.get("road")
     if road:
         out.append(("Дорога с твёрдым покрытием", f"{road.get('kind', 'дорога')}, {km(road['m'])}"))

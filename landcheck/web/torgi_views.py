@@ -37,6 +37,7 @@ from landcheck.web import (
     notify,
     rr_sync,
     torgi_hotjobs,
+    torgi_nearby,
     torgi_places,
     torgi_sync,
     torgi_zones,
@@ -528,6 +529,7 @@ HOT_KEYS = (
 HOT_CAPS = (1_000_000, 2_000_000, 3_000_000, 5_000_000)
 HOT_CHECK_ROWS = 50  # столько лотов показываем в списке «Проверить рынок руками»
 RETURNING_ROWS = 30  # столько строк в списке «Вернутся на торги»
+HOT_NEARBY_ROWS = 25  # по стольким лотам класса C за раз спрашиваем карту
 
 
 def _hot_criteria(q, user: User) -> tuple[dict[str, str], bool]:
@@ -629,6 +631,10 @@ def torgi_hot_page(request: Request, user: TorgiDep):
         [i["row"]["id"] for i in candidates if i["zones"][0] == "unknown"]
     )
     torgi_hotjobs.start_cards([i["row"]["id"] for i in candidates if not i["row"].get("card")])
+    # карту спрашиваем только по тем, кого показываем: запрос идёт до минуты
+    torgi_nearby.start_fill(
+        [i["row"]["id"] for i in (*shown, *weak[:HOT_NEARBY_ROWS], *work) if i["place"] is None]
+    )
     lot_qs = urlencode(
         {k: v for k, v in (("extra", crit.get("extra")), ("assign", crit.get("assign"))) if v}
     )
@@ -668,6 +674,7 @@ def torgi_hot_page(request: Request, user: TorgiDep):
         groups=torgi_scan.GROUPS,
         zones_queued=queued or torgi_zones.queued(),
         cards_queued=torgi_hotjobs.cards_queued(),
+        nearby_queued=torgi_nearby.queued(),
         lot_qs=lot_qs,
         img_base=torgi.FILE_URL.format(file_id=""),
         check_ratio=torgi_hot.START_RATIO,
@@ -895,6 +902,8 @@ def torgi_invest_page(request: Request, user: TorgiDep, lot_id: str):
     item = _invest_item(lot_id, crit)
     if item["zones"][0] == "unknown":
         torgi_zones.start_fill([lot_id])
+    if item["place"] is None:
+        torgi_nearby.start_fill([lot_id])
     return render(
         request,
         "torgi_invest.html",

@@ -1364,6 +1364,91 @@ def test_digest_shows_one_line_per_auction(client):  # noqa: F811
     assert "Telegram не привязан" in page and 'href="/profile"' in page
 
 
+def test_map_facts_for_candidates_feed_class_and_investor_summary(client):  # noqa: F811
+    """ТЗ v5, п. 7: доступность места — населённый пункт, дорога с покрытием, город, что портит
+    место. Карту спрашиваем фоном только по показанным лотам; итог виден в списке и в сводке."""
+    from landcheck import nearby
+    from landcheck.web import torgi_nearby as tn
+    from landcheck.web.db import TorgiLot, session
+
+    _hot_ready(client)
+    with session() as db:
+        for lot_id, point in (("ACT_0", (54.5, 36.2)), ("ACT_1", (54.6, 36.3)), ("ACT_2", None)):
+            lot = db.get(TorgiLot, lot_id)
+            lot.lat, lot.lon = point or (None, None)
+        db.get(TorgiLot, "ACT_3").lat, db.get(TorgiLot, "ACT_3").lon = 54.7, 36.4
+        db.commit()
+    assert tn.missing(["ACT_0", "ACT_1", "ACT_2", "NOPE", None, "ACT_0"]) == [
+        "ACT_0",
+        "ACT_1",
+        "ACT_2",
+    ]
+
+    def node(lat, lon, dlat, **tags):
+        return {"type": "node", "lat": lat + dlat, "lon": lon, "tags": tags}
+
+    asked: list[str] = []
+
+    def fetch(query: str) -> dict:
+        asked.append(query)
+        if "54.5" in query:  # село в 300 м, дорога в 200 м, город в 10 км, кладбище в 300 м
+            return {
+                "elements": [
+                    node(54.5, 36.2, 0.003, place="village", name="Ерденево"),
+                    node(54.5, 36.2, 0.09, place="city", name="Калуга", population="330000"),
+                    {
+                        "type": "way",
+                        "tags": {"highway": "tertiary"},
+                        "geometry": [
+                            {"lat": 54.49, "lon": 36.203},
+                            {"lat": 54.51, "lon": 36.203},
+                        ],
+                    },
+                    node(54.5, 36.2, 0.0027, landuse="cemetery"),
+                ]
+            }
+        if "54.6" in query:  # вокруг ничего: ни дороги, ни села
+            return {"elements": []}
+        return {"elements": [], "error": "серверы OpenStreetMap не ответили"}
+
+    pauses: list[float] = []
+    assert tn.fill(["ACT_0", "ACT_1", "ACT_2", "ACT_3"], fetch=fetch, sleep=pauses.append) == 4
+    assert len(asked) == 3 and pauses == [tn.PAUSE_S] * 3  # лот без точки карту не спрашивал
+    with session() as db:
+        states = {i: db.get(TorgiLot, f"ACT_{i}").nearby_state for i in range(4)}
+        facts = db.get(TorgiLot, "ACT_0").nearby
+    assert states == {0: "ok", 1: "ok", 2: "nopoint", 3: "error"}
+    assert facts["settlement"]["name"] == "Ерденево" and facts["city"]["name"] == "Калуга"
+    assert nearby.access(facts)["level"] == "good"
+    # повторно не спрашиваем: ответ есть, а ошибку и лот без точки пробуем не раньше суток
+    assert tn.missing([f"ACT_{i}" for i in range(4)]) == []
+    later = datetime.now(UTC) + timedelta(days=2)
+    assert tn.missing([f"ACT_{i}" for i in range(4)], later) == ["ACT_2", "ACT_3"]
+    assert tn.start_fill(["ACT_5"]) == 0  # демо на фикстурах: фоновый поток не стартует
+    from landcheck.web import torgi_hotjobs as hj
+
+    assert hj.warm_candidates() == 0  # прогрев считает кандидатов, но в демо сеть не трогает
+
+    page = client.get("/tools/torgi-hot?annual=100&cap=2000000&days=3&top=25").text
+    assert "Доступность хорошая: село 350 м, дорога с покрытием 200 м, Калуга 10 км" in page
+    assert "рядом: кладбище 300 м" in page
+    # до участка не доехать — это гипотеза (класс C), причина названа
+    assert "до участка трудно добраться: на карте нет дороги с твёрдым покрытием в 3 км" in page
+    assert "Гипотезы — класс C: 1" in page or "класс C" in page
+    invest = client.get("/tools/torgi-lot/ACT_0/invest").text
+    assert "Место и доступность." in invest and "Доступность <strong>хорошая</strong>" in invest
+    assert "<th>Ближайший город</th><td>Калуга, 10 км (330 тыс. жителей)</td>" in invest
+    assert "Портит место: кладбище 300 м" in invest and "Карта неполна" in invest
+    # в сравнении подборки — оборот и доступность рядом
+    r = client.post("/tools/torgi-picks", data={"lot": ["ACT_0", "ACT_1"]}, follow_redirects=False)
+    pick = client.get(r.headers["location"]).text
+    assert "Доступность места" in pick and "хорошая" in pick and "слабая" in pick
+    assert "Сделок в квартале за год" in pick
+    assert "У участка нет точки на карте" in client.get("/tools/torgi-lot/ACT_2/invest").text
+    assert "Серверы карты не ответили" in client.get("/tools/torgi-lot/ACT_3/invest").text
+    assert "ещё не спрошена" in client.get("/tools/torgi-lot/ACT_5/invest").text
+
+
 def test_candidate_cards_are_read_out_of_turn(client):  # noqa: F811
     """Прод, 19.11.2026: у 994 из 1519 идущих продаж региона карточка не прочитана — нет
     задатка, шага, отметки о градплане. Кандидатам карточку читаем сразу."""
