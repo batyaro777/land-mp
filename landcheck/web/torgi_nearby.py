@@ -113,6 +113,10 @@ def fill(
                 lot.nearby, lot.nearby_state = facts, state
                 lot.nearby_at = now or datetime.now(UTC)
                 db.commit()
+        # счётчик очереди на странице убывает по мере работы, а не разом в конце пачки
+        # (приёмка 19.11.2026: «в очереди 44» стояло полчаса, хотя карта отвечала)
+        with _lock:
+            _queue.pop(lot_id, None)
         done += 1
     return done
 

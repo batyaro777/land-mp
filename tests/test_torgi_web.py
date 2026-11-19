@@ -1411,7 +1411,11 @@ def test_map_facts_for_candidates_feed_class_and_investor_summary(client):  # no
         return {"elements": [], "error": "серверы OpenStreetMap не ответили"}
 
     pauses: list[float] = []
+    tn._queue.update(dict.fromkeys(["ACT_0", "ACT_1", "ACT_2", "ACT_3", "ACT_9"]))
+    assert tn.queued() == 5
     assert tn.fill(["ACT_0", "ACT_1", "ACT_2", "ACT_3"], fetch=fetch, sleep=pauses.append) == 4
+    assert tn.queued() == 1  # обработанные лоты уходят из очереди сразу, не в конце пачки
+    tn._queue.clear()
     assert len(asked) == 3 and pauses == [tn.PAUSE_S] * 3  # лот без точки карту не спрашивал
     with session() as db:
         states = {i: db.get(TorgiLot, f"ACT_{i}").nearby_state for i in range(4)}
