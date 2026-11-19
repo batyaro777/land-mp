@@ -212,7 +212,19 @@ def digest_due(crit: dict[str, Any], state: dict[str, Any] | None, now: datetime
     return None if (state or {}).get("day") == day else day
 
 
-def _lot_line(n: int, item: dict[str, Any], names: dict[str, str], base: str) -> str:
+def auction_of(row: dict[str, Any]) -> str:
+    """Аукцион лота — номер извещения; нет номера — лот считается отдельным аукционом."""
+    return row.get("notice") or row["id"]
+
+
+def _count(n: int, one: str, few: str, many: str) -> str:
+    k = n % 100
+    if 11 <= k <= 14:
+        return f"{n} {many}"
+    return f"{n} {one if n % 10 == 1 else few if 2 <= n % 10 <= 4 else many}"
+
+
+def _lot_line(n: int, item: dict[str, Any], names: dict[str, str], base: str, more: int = 0) -> str:
     r = item["row"]
     e = item["sc"]["expected"]
     place = names.get(r.get("district") or "") or r.get("district") or ""
@@ -220,9 +232,13 @@ def _lot_line(n: int, item: dict[str, Any], names: dict[str, str], base: str) ->
     till = f"{r['bidd_end'][8:10]}.{r['bidd_end'][5:7]}" if r.get("bidd_end") else "—"
     head = ", ".join(x for x in (place, area, torgi_scan.GROUPS.get(r.get("vri_group") or "")) if x)
     cut = f", не выше {torgi_calc.rub(item['cutoff'])}" if item["cutoff"] else ""
+    also = (
+        f"\nв этом аукционе ещё {_count(more, 'лот', 'лота', 'лотов')} под критерии" if more else ""
+    )
     return (
         f"{n}. {head} — вход {torgi_calc.rub(e['entry'])}{cut}, "
-        f"{round((e['annual'] or 0) * 100)} % годовых, класс {item['cls']}, заявки до {till}\n"
+        f"{round((e['annual'] or 0) * 100)} % годовых, класс {item['cls']}, "
+        f"заявки до {till}{also}\n"
         f"{base}/tools/torgi-lot/{r['id']}/invest"
     )
 
@@ -242,11 +258,16 @@ def build_digest(
     marks = marks_of(user_id)
     seen = set((state or {}).get("seen") or [])
     hot_ids = [i["row"]["id"] for i in res["hot"]]
-    fresh = [
-        i
-        for i in res["hot"]
-        if i["row"]["id"] not in seen and i["row"]["id"] not in marks  # убранные и «в работе»
-    ][: min(hp.top, DIGEST_MAX)]
+    # Прод, 19.11.2026: все пять строк пробной сводки оказались лотами одного аукциона.
+    # Строка сводки — аукцион: лучший лот и число остальных, прошедших отбор.
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for i in res["hot"]:
+        lot_id = i["row"]["id"]
+        if lot_id not in seen and lot_id not in marks:  # убранные и «в работе» не новые
+            groups.setdefault(auction_of(i["row"]), []).append(i)
+    picked = list(groups.values())[: min(hp.top, DIGEST_MAX)]
+    fresh = [g[0] for g in picked]
+    fresh_ids = [i["row"]["id"] for g in picked for i in g]
     by_id = {r["id"]: r for r in result["rows"]}
     due = []
     for lot_id, (mark, _reason) in marks.items():
@@ -256,7 +277,7 @@ def build_digest(
             due.append((days, row))
     due.sort(key=lambda x: x[0])
     # показанными считаем то, что уже показывали и что ещё идёт, плюс сегодняшние
-    kept = [i for i in hot_ids if i in seen] + [i["row"]["id"] for i in fresh]
+    kept = [i for i in hot_ids if i in seen] + fresh_ids
     # участки, за которыми следили после торгов без заявок, снова выставлены
     watched = set((state or {}).get("returning") or [])
     back = [r for r in result["rows"] if r.get("cad_num") in watched]
@@ -271,8 +292,16 @@ def build_digest(
     base = settings.base_url or ""
     lines: list[str] = []
     if fresh:
-        lines.append(f"Новых лотов под ваши критерии: {len(fresh)} (всего проходит {len(hot_ids)})")
-        lines += [_lot_line(n, i, names, base) for n, i in enumerate(fresh, 1)]
+        where = (
+            f" в {_count(len(picked), 'аукционе', 'аукционах', 'аукционах')}"
+            if len(fresh_ids) > len(picked)
+            else ""
+        )
+        lines.append(
+            f"Новых лотов под ваши критерии: {len(fresh_ids)}{where} "
+            f"(всего проходит {len(hot_ids)})"
+        )
+        lines += [_lot_line(n, g[0], names, base, len(g) - 1) for n, g in enumerate(picked, 1)]
     if due:
         if lines:
             lines.append("")

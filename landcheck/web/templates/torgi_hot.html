@@ -81,7 +81,7 @@
         <select name="dz">{% for z in range(2, 13) %}<option value="{{ z }}"{% if digest_tz == z %} selected{% endif %}>UTC+{{ z }}{{ ' — Москва' if z == 3 else (' — Красноярск, Алтай' if z == 7 else '') }}</option>{% endfor %}</select>
       </label>
     </div>
-    <p class="small muted">Куда придёт: уведомления на сайте{% if can_telegram %}, Telegram{% endif %}{% if can_email %}, почта{% endif %}.{% if not can_telegram %} Telegram не привязан — привяжите бота в <a href="/profile">профиле</a>.{% endif %} Если новых лотов нет, сообщение не отправляется.</p>
+    <p class="small muted">Куда придёт: уведомления на сайте{% if can_telegram %}, Telegram{% endif %}{% if can_email %}, почта{% endif %}.{% if not can_telegram %} Telegram не привязан: {% if tg_link %}<a href="{{ tg_link }}" target="_blank" rel="noopener">подключить Telegram</a> — откроется бот, нажмите «Запустить»{% else %}привяжите бота в <a href="/profile">профиле</a>{% endif %}.{% endif %} Если новых лотов нет, сообщение не отправляется.</p>
   </details>
   <button class="sm">Показать</button>
 </form>

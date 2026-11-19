@@ -1324,6 +1324,40 @@ def test_morning_digest_sends_only_new_lots_once_a_day(client):  # noqa: F811
         assert db.get(User, uid).hot_digest["day"] == "2026-11-23"
 
 
+def test_digest_shows_one_line_per_auction(client):  # noqa: F811
+    """Прод, 19.11.2026: пробная сводка — пять строк, и все пять лоты одного аукциона.
+    Строка сводки — аукцион: лучший лот и сколько ещё лотов этого аукциона прошли отбор."""
+    from landcheck.web import torgi_hotjobs as hj
+    from landcheck.web.db import TorgiLot, User, session
+
+    _hot_ready(client)
+    with session() as db:
+        for i in range(12):  # лоты 0–6 — один аукцион, 7–8 — второй, у остальных номера нет
+            db.get(TorgiLot, f"ACT_{i}").notice = "N1" if i < 7 else ("N2" if i < 9 else None)
+        db.commit()
+        uid = db.scalars(select(User).where(User.is_admin)).first().id
+    crit = {"annual": "100", "cap": "2000000", "days": "3", "top": "3", "dg": "1"}
+    text, state = hj.build_digest(uid, crit, None)
+    assert text.startswith("Новых лотов под ваши критерии: 10 в 3 аукционах (всего проходит 12)")
+    assert "в этом аукционе ещё 6 лотов под критерии" in text
+    assert "в этом аукционе ещё 1 лот под критерии" in text
+    assert "3. " in text and "4. " not in text and text.count("/invest") == 3
+    # показанными считаются все лоты названных аукционов: завтра они не «новые»
+    assert len(state["seen"]) == 10
+    text, state = hj.build_digest(uid, crit, state)
+    assert text.startswith("Новых лотов под ваши критерии: 2 (всего проходит 12)")
+    assert "в этом аукционе" not in text and len(state["seen"]) == 12
+    assert hj.build_digest(uid, crit, state)[0] is None
+    # счёт слов
+    assert hj._count(1, "лот", "лота", "лотов") == "1 лот"
+    assert hj._count(3, "лот", "лота", "лотов") == "3 лота"
+    assert hj._count(12, "лот", "лота", "лотов") == "12 лотов"
+    assert hj._count(21, "аукционе", "аукционах", "аукционах") == "21 аукционе"
+    # привязка Telegram — ссылкой прямо со страницы «Горячие», когда бот настроен
+    page = client.get("/tools/torgi-hot?dg=1").text
+    assert "Telegram не привязан" in page and 'href="/profile"' in page
+
+
 def test_candidate_cards_are_read_out_of_turn(client):  # noqa: F811
     """Прод, 19.11.2026: у 994 из 1519 идущих продаж региона карточка не прочитана — нет
     задатка, шага, отметки о градплане. Кандидатам карточку читаем сразу."""

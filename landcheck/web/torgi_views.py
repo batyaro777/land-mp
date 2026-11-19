@@ -34,6 +34,7 @@ from landcheck.regions import CADASTRAL_REGIONS
 from landcheck.web import (
     ads_sync,
     jobs,
+    notify,
     rr_sync,
     torgi_hotjobs,
     torgi_places,
@@ -677,6 +678,8 @@ def torgi_hot_page(request: Request, user: TorgiDep):
         backtest_pending=backtest_pending(),
         can_telegram=bool(settings.telegram_bot_token and user.telegram_chat_id),
         can_email=bool(settings.smtp_url and user.email and user.notify_email),
+        # прод 19.11.2026: Telegram не привязан ни у кого — кнопка привязки прямо здесь
+        tg_link=None if user.telegram_chat_id else notify.link_url(user.id),
     )
 
 
