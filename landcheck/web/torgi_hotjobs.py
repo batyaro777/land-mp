@@ -224,10 +224,26 @@ def _count(n: int, one: str, few: str, many: str) -> str:
     return f"{n} {one if n % 10 == 1 else few if 2 <= n % 10 <= 4 else many}"
 
 
+def _place_fallback(row: dict[str, Any]) -> str:
+    """Место лота, когда у кадастрового района нет названия из адресов (прод, 19.11.2026: в
+    сводке вместо района стояло «18:26» — это город, слова «район» в его адресах нет): адрес
+    до населённого пункта, а без адреса — регион и код района."""
+    from landcheck.region import locality_from_address
+    from landcheck.regions import CADASTRAL_REGIONS
+
+    loc = locality_from_address(row.get("address"))
+    if loc:
+        return loc
+    region = CADASTRAL_REGIONS.get(row.get("region") or "", "")
+    return ", ".join(
+        x for x in (region, f"район {row['district']}" if row.get("district") else "") if x
+    )
+
+
 def _lot_line(n: int, item: dict[str, Any], names: dict[str, str], base: str, more: int = 0) -> str:
     r = item["row"]
     e = item["sc"]["expected"]
-    place = names.get(r.get("district") or "") or r.get("district") or ""
+    place = names.get(r.get("district") or "") or _place_fallback(r)
     area = f"{r['area_m2'] / 100:.1f} сот." if r.get("area_m2") else ""
     till = f"{r['bidd_end'][8:10]}.{r['bidd_end'][5:7]}" if r.get("bidd_end") else "—"
     head = ", ".join(x for x in (place, area, torgi_scan.GROUPS.get(r.get("vri_group") or "")) if x)

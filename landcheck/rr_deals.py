@@ -35,6 +35,7 @@
 
 from __future__ import annotations
 
+import bisect
 import csv
 import re
 from collections.abc import Iterable, Iterator
@@ -259,12 +260,29 @@ class DealIndex:
         self.by_district: dict[tuple[str, str], list[tuple]] = {}
         self.size = 0
         self.periods: set[str] = set()
+        self._areas: dict[tuple, tuple[list[float], list[int]]] = {}
         for district, q, group, area, price, n, period in rows:
             item = (area / n, price / area, n, period)
             self.by_quarter.setdefault((district, q, group), []).append(item)
             self.by_district.setdefault((district, group), []).append(item)
             self.size += 1
             self.periods.add(period)
+
+    def count(self, key: tuple, lo: float, hi: float) -> int:
+        """Сколько сделок с площадью участка от `lo` до `hi` в квартале (ключ из трёх частей)
+        или районе (из двух). Площади отсортированы один раз: счёт для тысяч лотов идёт
+        поиском по списку, а не перебором всех сделок района."""
+        hit = self._areas.get(key)
+        if hit is None:
+            table = self.by_quarter if len(key) == 3 else self.by_district
+            pairs = sorted((r[0], r[2]) for r in table.get(key, ()))
+            acc, total = [0], 0
+            for _, n in pairs:
+                total += n
+                acc.append(total)
+            hit = self._areas[key] = ([a for a, _ in pairs], acc)
+        areas, acc = hit
+        return acc[bisect.bisect_right(areas, hi)] - acc[bisect.bisect_left(areas, lo)]
 
 
 def _level_market(
@@ -357,54 +375,27 @@ def deals_market(lot: dict[str, Any], index: DealIndex | None) -> dict[str, Any]
         return wide
     own["district_mid_m2"] = wide["mid_m2"]
     return own
+
+
+def turnover(lot: dict[str, Any], index: DealIndex | None) -> dict[str, Any] | None:
+    """Оборот места лота: сколько сопоставимых сделок (та же группа назначения, площадь от
+    1/5 до 5 площадей лота) зарегистрировано в его квартале и районе за загруженные кварталы
+    года. Много сделок — участки здесь покупают, продать получится быстрее (зум 18.11.2026,
+    01:09: скорость продажи — «важный фактор»). None — сделки округа не загружены, квартал
+    не определён или назначение «прочее»."""
+    key = quarter_key(lot.get("quarter"))
+    area, group = lot.get("area_m2"), lot.get("vri_group")
+    if index is None or not index.size or key is None or not area or group in (None, "other"):
+        return None
     district = f"{key[0]}:{key[1]}"
     lo, hi = area / AREA_BAND, area * AREA_BAND
-    for level, rows, need in (
-        ("quarter", index.by_quarter.get((district, key[2], group), ()), MIN_QUARTER),
-        ("district", index.by_district.get((district, group), ()), MIN_DISTRICT),
-    ):
-        pool = [r for r in rows if lo <= r[0] <= hi]
-        if sum(r[2] for r in pool) < need:
-            continue
-        med = _wquantile([(r[1], r[2]) for r in pool], 0.5)
-        kept = [r for r in pool if med / TRIM <= r[1] <= med * TRIM]
-        n = sum(r[2] for r in kept)
-        if n < need:
-            continue
-        pairs = [(r[1], r[2]) for r in kept]
-        periods = sorted({r[3] for r in kept})
-        span = period_label(periods[0])
-        if len(periods) > 1:
-            span += " – " + period_label(periods[-1])
-        where = "квартал" if level == "quarter" else "район"
-        note = (
-            "та же группа назначения, площадь от 1/5 до 5 площадей лота; цена в договоре "
-            "бывает занижена, среди сделок есть льготный выкуп у муниципалитета — это скорее "
-            "нижняя граница рынка"
-        )
-        dropped = sum(r[2] for r in pool) - n
-        if dropped:
-            note += f"; не учтено сделок с ценой дальше медианы в пять раз: {dropped}"
-        return {
-            "min_m2": _wquantile(pairs, 0.25),
-            "mid_m2": _wquantile(pairs, 0.5),
-            "max_m2": _wquantile(pairs, 0.75),
-            "source": "rr",
-            "source_label": f"сделки Росреестра: {where}, {n} за {span}",
-            # квартал — свой микрорайон или село; район мешает сёла с райцентром
-            "confidence": 2 if level == "quarter" else 1,
-            "exposure_days": None,
-            "liquid": None,
-            "note": note,
-            "deals_n": n,
-            "deals_lo_m2": min(p for p, _ in pairs),
-            "deals_hi_m2": max(p for p, _ in pairs),
-            "deals_level": level,
-            "deals_span": span,
-            # для карточки лота: сами сделки, свежие первыми
-            "deals": [
-                {"period": period_label(r[3]), "area_m2": r[0], "pps": r[1] * 100, "n": r[2]}
-                for r in sorted(kept, key=lambda r: (r[3], r[1]), reverse=True)[:MAX_SHOWN]
-            ],
-        }
-    return None
+    periods = sorted(index.periods)
+    span = period_label(periods[0])
+    if len(periods) > 1:
+        span += " – " + period_label(periods[-1])
+    return {
+        "quarter_n": index.count((district, key[2], group), lo, hi),
+        "district_n": index.count((district, group), lo, hi),
+        "periods": len(periods),
+        "span": span,
+    }

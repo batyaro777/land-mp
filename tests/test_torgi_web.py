@@ -1132,7 +1132,7 @@ def test_hot_page_selects_checks_market_and_remembers_criteria(client):  # noqa:
     assert M(261_000) in page and M(209_358) in page
     assert "обременения ещё не проверены" in page and "задаток " + M(20_000) in page
     assert "Калужская обл., Малоярославецкий р-н" in page
-    assert "Проверить рынок руками" not in page
+    assert "Проверить руками:" not in page
     with session() as db:
         saved = db.scalars(select(User).where(User.is_admin)).first().hot_criteria
     assert saved == {"annual": "100", "cap": "2000000", "days": "3", "top": "5", "region": "all"}
@@ -1145,7 +1145,7 @@ def test_hot_page_selects_checks_market_and_remembers_criteria(client):  # noqa:
     # рынок вшестеро выше старта — не подарок, а повод проверить цену
     client.post("/tools/torgi-market", data={**market, "price_mid": "60000"})
     page = client.get("/tools/torgi-hot?annual=100&cap=2000000&days=3").text
-    assert "Проверить рынок руками: 12" in page and "в 6 раз выше старта" in page
+    assert "Проверить руками: 12" in page and "в 6 раз выше старта" in page
     assert "не попадает ни один лот" in page
     # один регион
     assert "не попадает ни один лот" in client.get("/tools/torgi-hot?region=10").text
@@ -1348,6 +1348,12 @@ def test_digest_shows_one_line_per_auction(client):  # noqa: F811
     assert text.startswith("Новых лотов под ваши критерии: 2 (всего проходит 12)")
     assert "в этом аукционе" not in text and len(state["seen"]) == 12
     assert hj.build_digest(uid, crit, state)[0] is None
+    # у района без названия в адресах (город) место берём из адреса, а не кодом «18:26»
+    row = {"id": "X_1", "region": "18", "district": "18:26"}
+    assert hj._place_fallback(
+        {**row, "address": "Удмуртская Республика, г. Ижевск, ул. Мира, 1"}
+    ) == ("Удмуртская Республика, г. Ижевск")
+    assert hj._place_fallback(row).endswith("район 18:26") and len(hj._place_fallback(row)) > 12
     # счёт слов
     assert hj._count(1, "лот", "лота", "лотов") == "1 лот"
     assert hj._count(3, "лот", "лота", "лотов") == "3 лота"

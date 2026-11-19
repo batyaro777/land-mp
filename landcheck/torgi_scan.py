@@ -226,6 +226,14 @@ BIDD_TYPE_SHORT = {
 MARKET_TYPES = (None, "", "ZK")
 
 
+# Срок продажи и оборот сделок Росреестра в квартале лота. Замер на проде 19.11.2026 (5 939
+# завершённых аукционов продажи, 15 регионов): где за год в квартале не было ни одной
+# сопоставимой сделки, без единой заявки прошли 44 % торгов; где сделок 3–29 — 15–17 %.
+DEFAULT_HOLD = 12  # мес. до продажи, когда о скорости продажи в этом месте ничего не известно
+QUIET_HOLD = 18  # мес.: в квартале за год ни одной сделки с такими участками
+LIVE_DEALS = 3  # столько сделок в квартале подтверждают оборот: срок короче года допустим
+
+
 def in_market(lot: dict[str, Any]) -> bool:
     return lot.get("bidd_type") in MARKET_TYPES
 
@@ -976,6 +984,14 @@ def score_lot(
     hold = p.hold_months
     if mk and mk.get("exposure_days"):
         hold = max(1, round(mk["exposure_days"] / 30) + 2)  # +2 мес.: договор и регистрация
+    # Скорость продажи по обороту сделок в квартале лота (ТЗ v5, п. 6; пороги — из замера).
+    turn = lot.get("turnover")
+    hold_why = None
+    if turn is not None:
+        if turn["quarter_n"] == 0 and hold < QUIET_HOLD:
+            hold, hold_why = QUIET_HOLD, "quiet"
+        elif hold < DEFAULT_HOLD and turn["quarter_n"] < LIVE_DEALS:
+            hold, hold_why = DEFAULT_HOLD, "unconfirmed"
     roi_start = _roi(base_sale, start, p.extra, p.tax) if start else None
     roi_expected = _roi(base_sale, expected, p.extra, p.tax) if expected else None
     src = (mk or {}).get("source")
@@ -1189,6 +1205,8 @@ def score_lot(
         "roi_expected": roi_expected,
         "annual_start": _annual(roi_start, hold),
         "hold_months": hold,
+        "hold_why": hold_why,
+        "turnover": turn,
         "market": mk,
         "market_based": src in MARKET_SOURCES,
         "sale_sotka": sale_sotka,

@@ -321,6 +321,14 @@ def market(lot: dict[str, Any]) -> dict[str, Any] | None:
     return rr_deals.deals_market(lot, index_of(key[0]))
 
 
+def turnover(lot: dict[str, Any]) -> dict[str, Any] | None:
+    """Оборот сопоставимых сделок в квартале и районе лота; None — посчитать не из чего."""
+    key = rr_deals.quarter_key(lot.get("quarter"))
+    if key is None:
+        return None
+    return rr_deals.turnover(lot, index_of(key[0]))
+
+
 def market_fn() -> Callable[[dict[str, Any]], dict[str, Any] | None] | None:
     """Функция оценки для списка лотов; None — сделки ещё не загружены."""
     return market if store_path().exists() and loaded() else None

@@ -301,6 +301,11 @@ def _local_fn(region: str, lots: list[dict[str, Any]]):
     вокруг (что из этого загружено). None — нет ни того, ни другого."""
     ads_fn = ads_sync.near_fn(region, lots)
     deals_fn = rr_sync.market_fn()
+    if deals_fn is not None:
+        # оборот сделок места — прямо в лот: по нему расчёт судит о сроке продажи
+        for lot in lots:
+            if "turnover" not in lot and not torgi_scan.is_notice(lot):
+                lot["turnover"] = rr_sync.turnover(lot)
     if ads_fn is None and deals_fn is None:
         return None
 
@@ -666,6 +671,7 @@ def torgi_hot_page(request: Request, user: TorgiDep):
         lot_qs=lot_qs,
         img_base=torgi.FILE_URL.format(file_id=""),
         check_ratio=torgi_hot.START_RATIO,
+        quiet_hold=torgi_scan.QUIET_HOLD,
         # подсказка «при пороге ниже пройдёт N» — только там, где лотов станет больше
         more_at=[
             (lvl, n) for lvl, n in res["relaxed"].items() if n > len(res["hot"]) + len(res["weak"])

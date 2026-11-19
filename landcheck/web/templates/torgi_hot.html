@@ -95,7 +95,7 @@
       {% for f in res.funnel %}<tr><td>{{ f.label }}</td><td class="num">{{ f.left }}</td></tr>{% endfor %}
     </tbody>
   </table>
-  <p>Из прошедших: класс A — {{ res.classes.A }}, класс B — {{ res.classes.B }}, класс C (гипотезы) — {{ res.classes.C }}. Не прошли сверку цены рынка — {{ res.check|length }}.
+  <p>Из прошедших: класс A — {{ res.classes.A }}, класс B — {{ res.classes.B }}, класс C (гипотезы) — {{ res.classes.C }}. В «Проверить руками» (цена рынка или спрос под вопросом) — {{ res.check|length }}.
   {% if more_at %}Если понизить порог доходности: {% for level, n in more_at %}до {{ (level * 100)|round|int }} % — пройдёт {{ n }}{{ '; ' if not loop.last else '.' }}{% endfor %}{% endif %}</p>
 </details>
 {% if zones_queued %}<p class="small muted">Обременения проверяются: в очереди {{ zones_queued }} участк. Пока проверка не прошла, лот стоит в классе B — обновите страницу через несколько минут.</p>{% endif %}
@@ -122,8 +122,8 @@
     <td class="cad">{{ lot_cell(r) }}</td>
     <td class="num">{{ r.price_start|money }}{% if s.start_sotka %}<div class="small muted nw">{{ s.start_sotka|money }}/сот.</div>{% endif %}<div class="small muted nw">{% if r.deposit %}задаток {{ r.deposit|money }}{% elif not r.card %}задаток: карточка читается{% else %}задаток не указан{% endif %}</div></td>
     <td class="num small">{% if r.bidd_end %}{{ r.bidd_end[8:10] }}.{{ r.bidd_end[5:7] }}{% endif %}<div class="{{ 'err' if s.days_left < 5 else 'muted' }}">{{ s.days_left }} дн.</div></td>
-    <td class="num">{{ s.sale_sotka.mid|money }}<div class="small muted" title="{{ s.market.note or '' }}">{{ s.market.source_label }}</div>{% if s.sale_sotka.min and s.sale_sotka.max and s.sale_sotka.min != s.sale_sotka.max %}<div class="small muted nw">{{ s.sale_sotka.min|money }} – {{ s.sale_sotka.max|money }}</div>{% endif %}</td>
-    <td class="num">{{ e.entry|money }}{% if e.entry != r.price_start %}<div class="small muted nw">старт × {{ (e.entry / r.price_start)|round(2) }}</div>{% endif %}<div class="small nw"><strong>до {{ i.cutoff|money if i.cutoff else '—' }}</strong></div>{% if i.comp %}<div class="small {{ 'ok-msg' if i.comp.level == 'calm' else 'muted' }}" title="{{ i.comp.detail }}">{{ i.comp.text }}</div>{% endif %}{% if s.repeats %}<div class="small warn" title="Участок уже выставляли без результата">повторные торги</div>{% endif %}</td>
+    <td class="num">{{ s.sale_sotka.mid|money }}<div class="small muted" title="{{ s.market.note or '' }}">{{ s.market.source_label }}</div>{% if s.sale_sotka.min and s.sale_sotka.max and s.sale_sotka.min != s.sale_sotka.max %}<div class="small muted nw">{{ s.sale_sotka.min|money }} – {{ s.sale_sotka.max|money }}</div>{% endif %}{% if s.turnover %}<div class="small nw {{ 'warn' if s.turnover.quarter_n == 0 else 'muted' }}" title="Сделки Росреестра с участками того же назначения и похожей площади за {{ s.turnover.span }}: в квартале {{ s.turnover.quarter_n }}, в районе {{ s.turnover.district_n }}">сделок в квартале: {{ s.turnover.quarter_n }}</div>{% endif %}</td>
+    <td class="num">{{ e.entry|money }}{% if e.entry != r.price_start %}<div class="small muted nw">старт × {{ (e.entry / r.price_start)|round(2) }}</div>{% endif %}<div class="small nw"><strong>до {{ i.cutoff|money if i.cutoff else '—' }}</strong></div>{% if i.comp %}<div class="small {{ {'calm': 'ok-msg', 'empty': 'warn'}.get(i.comp.level, 'muted') }}" title="{{ i.comp.detail }}">{{ i.comp.text }}</div>{% endif %}{% if s.repeats %}<div class="small warn" title="Участок уже выставляли без результата">повторные торги</div>{% endif %}</td>
     <td class="num"><strong>{{ pct(e.annual) }} годовых</strong><div class="small nw">{{ e.profit|money }} за {{ i.sc.hold }} мес.</div><div class="small muted nw">без борьбы {{ pct(i.sc.alone.annual) }}</div><div class="small muted nw">осторожно {{ pct(i.sc.cautious.annual) }}</div></td>
     <td class="reasons small"><ul>
       {% for t in i.cls_why %}<li><span class="dot check"></span>{{ t }}</li>{% endfor %}
@@ -193,13 +193,13 @@
 {% endif %}
 
 {% if check %}
-<h3>Проверить рынок руками: {{ check_n }}</h3>
-<p class="muted small">Эти лоты прошли бы отбор, но цене рынка по ним верить нельзя: она выше старта или кадастровой стоимости больше чем в {{ check_ratio|int }} раз. Обычно это несопоставимые сделки в выборке. Если по опыту цена верная — запишите её в слой рынка района, и лот перейдёт в основной список.{% if check_n > check|length %} Показаны первые {{ check|length }}.{% endif %}</p>
+<h3>Проверить руками: {{ check_n }}</h3>
+<p class="muted small">Эти лоты прошли бы отбор по цифрам, но расчёту по ним верить нельзя. Причин две. Цена рынка выше старта или кадастровой стоимости больше чем в {{ check_ratio|int }} раз — обычно это несопоставимые сделки в выборке; если по опыту цена верная, запишите её в слой рынка района, и лот перейдёт в основной список. Либо в этом месте половина торгов и больше проходит без единой заявки — участки здесь по таким ценам не берут: на истории такие лоты оставались без покупателя в 86 % случаев.{% if check_n > check|length %} Показаны первые {{ check|length }}.{% endif %}</p>
 <div class="table-wrap">
 <table class="results torgi">
   <thead><tr>
     <th>Участок · назначение · адрес</th><th class="num">Старт</th><th>Заявки до</th>
-    <th class="num">«Рынок» за сотку</th><th>Почему цене нельзя верить</th>
+    <th class="num">«Рынок» за сотку</th><th>Почему расчёту нельзя верить</th>
   </tr></thead>
   <tbody>
   {% for i in check %}{% set r = i.row %}{% set s = r.s %}
@@ -207,9 +207,9 @@
     <td class="cad">{{ lot_cell(r) }}</td>
     <td class="num">{{ r.price_start|money }}{% if s.start_sotka %}<div class="small muted">{{ s.start_sotka|money }}/сот.</div>{% endif %}</td>
     <td class="num small">{% if r.bidd_end %}{{ r.bidd_end[8:10] }}.{{ r.bidd_end[5:7] }}{% endif %}<div class="muted">{{ s.days_left }} дн.</div></td>
-    <td class="num">{{ s.sale_sotka.mid|money }}<div class="small muted">{{ s.market.source_label }}</div></td>
+    <td class="num">{{ s.sale_sotka.mid|money }}<div class="small muted">{{ s.market.source_label }}</div>{% if s.turnover %}<div class="small muted nw">сделок в квартале: {{ s.turnover.quarter_n }}</div>{% endif %}</td>
     <td class="reasons small"><ul>
-      {% for t in i.fail %}<li><span class="dot stop"></span>{{ t }}</li>{% endfor %}
+      {% for t in i.fail + i.nodemand %}<li><span class="dot stop"></span>{{ t }}</li>{% endfor %}
       {% for t in i.warn %}<li><span class="dot check"></span>{{ t }}</li>{% endfor %}
     </ul></td>
   </tr>
@@ -230,5 +230,5 @@
 </details>
 {% endif %}
 
-<p class="muted small">Как читать. «Годовых» — доходность после налога в пересчёте на год: срок до продажи принят {{ sp.hold_months }} мес., пока нет данных о скорости продажи в этом месте. «Цена отсечения» — выше неё на торгах идти не стоит: доходность упадёт ниже вашего порога. Лесные участки, имущество должников, изъятые участки и извещения по ст. 39.18 сюда не попадают. Число заявок у идущего лота площадка не публикует — конкуренция оценивается по истории торгов в этом месте. Как модель показала себя на завершённых торгах — на вкладке <a href="/tools/torgi-backtest">«Точность модели»</a>.</p>
+<p class="muted small">Как читать. «Годовых» — доходность после налога в пересчёте на год: срок до продажи принят {{ sp.hold_months }} мес.; где в квартале лота за год не зарегистрировано ни одной сделки с такими участками — {{ quiet_hold }} мес. «Цена отсечения» — выше неё на торгах идти не стоит: доходность упадёт ниже вашего порога. Лесные участки, имущество должников, изъятые участки и извещения по ст. 39.18 сюда не попадают. Число заявок у идущего лота площадка не публикует — конкуренция оценивается по истории торгов в этом месте. Как модель показала себя на завершённых торгах — на вкладке <a href="/tools/torgi-backtest">«Точность модели»</a>.</p>
 {% endblock %}

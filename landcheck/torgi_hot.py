@@ -110,6 +110,41 @@ def price_check(row: dict[str, Any]) -> tuple[list[str], list[str]]:
     return fail, warn
 
 
+# Спрос на торгах в месте лота. Замер на проде 19.11.2026: 269 лотов из 5 980 завершённых
+# аукционов продажи прошли бы в «горячие»; там, где без заявок прошла половина торгов места
+# и больше, без покупателя остались 18 из 21 (86 %), где 20–49 % — 33 %, где меньше — 14 %.
+NO_DEMAND_SHARE = 0.5
+THIN_DEMAND_SHARE = 0.2
+
+
+def demand_check(row: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """Есть ли спрос на такие участки в этом месте: (почему расчёту нельзя верить, что снижает
+    уверенность). Судим по двум вещам, которые видны до торгов: чем кончались торги в квартале
+    или районе лота и сколько сделок с такими участками зарегистрировал Росреестр."""
+    s = row["s"]
+    q = s["liquidity"]
+    fail: list[str] = []
+    warn: list[str] = []
+    closed, none = q.get("closed") or 0, q.get("none") or 0
+    where = "квартале" if q.get("where") == "квартал" else "районе"
+    if closed >= CALM_MIN:
+        share = none / closed
+        if share >= NO_DEMAND_SHARE:
+            fail.append(
+                f"в этом {where} {none} из {closed} торгов за год прошли без единой заявки: "
+                "по таким ценам участки здесь не берут, перепродажа под вопросом"
+            )
+        elif share >= THIN_DEMAND_SHARE:
+            warn.append(f"в этом {where} без заявок прошли {none} из {closed} торгов за год")
+    turn = s.get("turnover")
+    if turn and turn["quarter_n"] == 0:
+        warn.append(
+            "в квартале за год ни одной сделки с такими участками "
+            f"(в районе — {turn['district_n']}): срок продажи в расчёте увеличен"
+        )
+    return fail, warn
+
+
 def _one(
     entry: float | None, sale: float | None, months: float, extra: float, tax: float
 ) -> dict[str, Any] | None:
@@ -259,13 +294,16 @@ def item_of(
     """Всё, что «Горячие» знают об одном оценённом лоте: сценарии, цена отсечения, сверка
     цены рынка, класс, обременения и условие, на котором лот выбыл (`stop`; None — прошёл)."""
     fail, warn = price_check(row)
+    nodemand, thin = demand_check(row)
+    warn = warn + thin
     sc = scenarios(row, scan_params.extra, scan_params.tax)
-    cls, cls_why = klass(row, warn, scan_params, fail)
+    cls, cls_why = klass(row, warn, scan_params, fail + nodemand)
     item = {
         "row": row,
         "sc": sc,
         "extra": scan_params.extra,
         "fail": fail,
+        "nodemand": nodemand,
         "warn": warn,
         "cls": cls,
         "cls_why": cls_why,
@@ -279,7 +317,7 @@ def item_of(
         ),
     }
     stop = _passes(item, params, params.min_annual)
-    item["stop"] = stop or ("price" if fail else None)
+    item["stop"] = stop or ("price" if fail else "demand" if nodemand else None)
     item["comp"] = competition(row)
     return item
 
@@ -299,7 +337,9 @@ def competition(row: dict[str, Any]) -> dict[str, Any] | None:
         return None
     sold, single, none = q.get("sold") or 0, q.get("single") or 0, q.get("none") or 0
     quiet = (single + none) / closed
-    if quiet >= CALM_SHARE:
+    if none / closed >= NO_DEMAND_SHARE:
+        level, text = "empty", "заявок здесь обычно нет"
+    elif quiet >= CALM_SHARE:
         level, text = "calm", "скорее всего без борьбы"
     elif sold / closed >= CALM_SHARE:
         level, text = "fight", "обычно с борьбой"
@@ -327,6 +367,7 @@ STEP_RU = {
     "profit": "прибыль меньше заданной",
     "zones": "участок в ООПТ или лесопарке",
     "price": "цена рынка не прошла сверку",
+    "demand": "торги в этом месте проходят без заявок: спроса нет",
 }
 
 STEPS = (
@@ -340,6 +381,7 @@ STEPS = (
     ("profit", "прибыль не меньше заданной"),
     ("zones", "нет ООПТ и лесопарка"),
     ("price", "цена рынка прошла сверку"),
+    ("demand", "на торги в этом месте приходят покупатели"),
 )
 
 
@@ -362,7 +404,7 @@ def select(
     order = [key for key, _ in STEPS]
     for item in items:
         stop = item["stop"]
-        if stop == "price":
+        if stop in ("price", "demand"):
             check.append(item)
         upto = order.index(stop) if stop else len(order)
         for key in order[:upto]:
@@ -379,7 +421,9 @@ def select(
     for level in RELAXED:
         if level < hp.min_annual:
             relaxed[level] = sum(
-                1 for i in items if not i["fail"] and _passes(i, hp, level) is None
+                1
+                for i in items
+                if not i["fail"] and not i["nodemand"] and _passes(i, hp, level) is None
             )
     return {
         "total": len(items),
@@ -440,6 +484,8 @@ def backtest(
         "outcomes": {"sold": 0, "single": 0, "none": 0},
         "priced": 0,
         "check": 0,
+        "nodemand": 0,  # сняты: в месте лота торги проходят без заявок
+        "nodemand_outcomes": {"sold": 0, "single": 0, "none": 0},
         "hot": 0,
         "hot_outcomes": {"sold": 0, "single": 0, "none": 0},
         "hot_ratio": [],  # итоговая цена к ожидаемой у «горячих», которые кто-то купил
@@ -482,6 +528,9 @@ def backtest(
             raw["all_ratio"].append(round(actual / expected["entry"], 3))
         if item["stop"] == "price":
             raw["check"] += 1
+        elif item["stop"] == "demand":
+            raw["nodemand"] += 1
+            raw["nodemand_outcomes"][outcome] += 1
         if item["stop"] is not None:
             continue
         raw["hot"] += 1
@@ -576,6 +625,10 @@ def backtest_summary(raw: dict[str, Any], min_annual: float = 1.0) -> dict[str, 
         "outcomes": raw.get("outcomes", {}),
         "priced": raw.get("priced", 0),
         "check": raw.get("check", 0),
+        "nodemand": raw.get("nodemand", 0),
+        "nodemand_none_share": _share(
+            raw.get("nodemand_outcomes", {}).get("none", 0), raw.get("nodemand", 0)
+        ),
         "hot": hot,
         "hot_outcomes": ho,
         "hot_single_share": _share(ho.get("single", 0), hot),

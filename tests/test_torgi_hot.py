@@ -241,3 +241,73 @@ def test_backtest_relisting_and_returning_lot_already_back_on_auction():
     s = th.backtest_summary(th.merge_backtests([raw, raw]))
     assert s["relist_n"] == 2 and s["relist_median"] == 0.67 and s["relist_lower"] == 1.0
     assert s["lots"] == 4 and s["hot_ratio"]["median"] is None
+
+
+TURNOVER = {"quarter_n": 0, "district_n": 40, "periods": 4, "span": "4 кв. 2025 – 3 кв. 2026"}
+
+
+def test_place_where_auctions_get_no_bids_goes_to_manual_check():
+    """Замер на проде 19.11.2026: из 269 «горячих» на истории без покупателя остались 26 %, а
+    там, где без заявок прошла половина торгов места и больше, — 18 из 21. Такой лот не
+    предложение, а повод проверить спрос руками."""
+    rows = _rows(_active(), layer=LAYER)  # в квартале лота шесть торгов, все с борьбой
+    assert th.demand_check(rows[0]) == ([], [])
+    dead = ts.scan([*_district(sold=1, single=1, none=4), _active()], layer=LAYER, today=TODAY)
+    res = th.select(dead["rows"])
+    assert not res["hot"] and not res["weak"]
+    item = res["check"][0]
+    assert item["stop"] == "demand" and item["fail"] == [] and item["cls"] == "C"
+    assert item["nodemand"][0].startswith("в этом районе 4 из 6 торгов за год прошли без единой")
+    assert item["comp"]["level"] == "empty" and item["comp"]["text"] == "заявок здесь обычно нет"
+    left = {f["key"]: f["left"] for f in res["funnel"]}
+    assert left["price"] == 1 and left["demand"] == 0
+    # при пороге ниже такой лот тоже не «прошёл бы»
+    assert th.select(dead["rows"], params=th.HotParams(min_annual=2.0))["relaxed"][0.7] == 0
+    # треть торгов без заявок — лот остаётся в списке, но с оговоркой и не в классе A
+    thin = ts.scan([*_district(sold=1, single=3, none=2), _active()], layer=LAYER, today=TODAY)
+    item = th.select(thin["rows"])["hot"][0]
+    assert item["stop"] is None and item["cls"] == "B"
+    assert "в этом районе без заявок прошли 2 из 6 торгов за год" in item["cls_why"]
+
+
+def test_sale_period_follows_deal_turnover_in_the_quarter():
+    """ТЗ v5, п. 6: скорость продажи — по обороту сделок Росреестра. Замер 19.11.2026: где в
+    квартале за год нет ни одной сделки с такими участками, без заявок прошли 44 % торгов
+    против 15–17 % там, где сделки идут."""
+    quiet = _rows(_active(turnover=TURNOVER))[0]
+    assert quiet["s"]["hold_months"] == 18 and quiet["s"]["hold_why"] == "quiet"
+    item = th.item_of(quiet, ts.ScanParams(), th.HotParams())
+    # те же 145 % за сделку, но за полтора года — 82 % годовых: порог 100 % не пройден
+    assert item["sc"]["hold"] == 18 and item["sc"]["expected"]["annual"] == 0.817
+    assert item["sc"]["cautious"]["months"] == 27 and item["stop"] == "annual"
+    assert "в квартале за год ни одной сделки с такими участками (в районе — 40)" in item["warn"][0]
+    # сделки в квартале есть — срок прежний, оговорки нет
+    live = _rows(_active(turnover={**TURNOVER, "quarter_n": 4}))[0]
+    assert live["s"]["hold_months"] == 12 and live["s"]["hold_why"] is None
+    assert th.demand_check(live) == ([], [])
+    # слой рынка обещает продажу за два месяца: без подтверждённого оборота берём год
+    fast = [{**LAYER[0], "exposure_days": 60}]
+    rare = _rows(_active(turnover={**TURNOVER, "quarter_n": 1}), layer=fast)[0]
+    assert rare["s"]["hold_months"] == 12 and rare["s"]["hold_why"] == "unconfirmed"
+    proven = _rows(_active(turnover={**TURNOVER, "quarter_n": 5}), layer=fast)[0]
+    assert proven["s"]["hold_months"] == 4 and proven["s"]["hold_why"] is None
+    # оборот не посчитан (сделки округа не загружены) — расчёт как раньше
+    unknown = _rows(_active(), layer=fast)[0]
+    assert unknown["s"]["hold_months"] == 4 and unknown["s"]["turnover"] is None
+
+
+def test_backtest_counts_lots_removed_for_no_demand():
+    lots = [
+        _closed("H1", "40:13:120105:1", start=200_000, fin=None, status="FAILED", applied=0),
+        _closed("H2", "40:13:120105:2", start=200_000, fin=None, status="FAILED", applied=0),
+        _closed("H3", "40:13:120105:3", start=200_000, fin=None, status="FAILED", applied=0),
+        _closed("H4", "40:13:120105:4", start=200_000, fin=None, status="FAILED", applied=1),
+        _closed("H5", "40:13:120105:5", start=200_000, fin=260_000, status="SUCCEED"),
+    ]
+    raw = th.backtest(lots, layer=LAYER, today=TODAY)
+    # в квартале три из пяти торгов без заявок: все пять лотов сняты по спросу
+    assert raw["hot"] == 0 and raw["nodemand"] == 5 and raw["check"] == 0
+    assert raw["nodemand_outcomes"] == {"sold": 1, "single": 1, "none": 3}
+    assert raw["returning"] == []  # за участками из мест без спроса не следим
+    s = th.backtest_summary(th.merge_backtests([raw, raw]))
+    assert s["nodemand"] == 10 and s["nodemand_none_share"] == 0.6

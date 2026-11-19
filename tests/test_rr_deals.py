@@ -313,6 +313,17 @@ def test_store_sync_and_pages(client, monkeypatch):  # noqa: F811
     )
     assert "Сделки из выборки: 3 строк, всего сделок 4" in lot_page
     assert f'href="{rr_deals.SOURCE_URL}"' in lot_page and "нижней границей рынка" in lot_page
+    # оборот места (ТЗ v5, п. 6): счёт сделок попадает в лот, на «Горячие» и в сводку инвестору
+    assert rr_sync.turnover(lot)["quarter_n"] == 4 and rr_sync.turnover(lot)["district_n"] == 4
+    assert rr_sync.turnover({**lot, "quarter": None}) is None
+    hot = client.get("/tools/torgi-hot?annual=10&cap=9000000&days=3&top=50").text
+    # рынок здесь в 28 раз выше старта — лоты в списке «Проверить руками», оборот виден и там
+    assert "Проверить руками: 12" in hot and "сделок в квартале: 4" in hot
+    invest = client.get("/tools/torgi-lot/ACT_0/invest").text
+    assert (
+        "Оборот: за 2 кв. 2026 – 3 кв. 2026 Росреестр зарегистрировал <strong>4</strong>" in invest
+    )
+    assert "Сделки в квартале идут" in invest
     liq = client.get("/tools/torgi-liquidity?region=40").text
     assert (
         "Сделки Росреестра:</strong> загружены 3 кв. 2026 (3 сделок с участками в регионе)" in liq
@@ -480,3 +491,36 @@ def test_report_shows_zone_share_and_deals_in_quarter(client):  # noqa: F811
     assert "Сделки в кадастровом квартале: 4 за 3 кв. 2026" in page
     assert f'href="{rr_deals.SOURCE_URL}"' in page and "нижней границей рынка" in page
     assert "<td>3 кв. 2026</td>" in page
+
+
+def test_turnover_counts_comparable_deals_in_quarter_and_district():
+    """ТЗ v5, п. 6: оборот места — сколько сделок с участками того же назначения и похожей
+    площади (от 1/5 до 5 площадей лота) прошло в квартале и районе за загруженные кварталы."""
+    index = rr_deals.DealIndex(
+        [
+            ("40:13", 120101, "house", 1000.0, 400_000.0, 1, "2026-1"),
+            ("40:13", 120101, "house", 2400.0, 900_000.0, 2, "2026-2"),  # два участка по 12 сот.
+            ("40:13", 120101, "garden", 800.0, 100_000.0, 1, "2026-2"),  # другое назначение
+            ("40:13", 120102, "house", 900.0, 300_000.0, 1, "2026-2"),
+            ("40:13", 120102, "house", 90_000.0, 300_000.0, 1, "2026-2"),  # 9 га — не ровня
+        ]
+    )
+    lot = {"quarter": "40:13:0120101", "area_m2": 1000, "vri_group": "house"}
+    assert rr_deals.turnover(lot, index) == {
+        "quarter_n": 3,
+        "district_n": 4,
+        "periods": 2,
+        "span": "1 кв. 2026 – 2 кв. 2026",
+    }
+    # в соседнем квартале сделок не было, в районе — те же четыре
+    other = rr_deals.turnover({**lot, "quarter": "40:13:120109"}, index)
+    assert (other["quarter_n"], other["district_n"]) == (0, 4)
+    # счёт поиском по отсортированным площадям совпадает с перебором
+    assert index.count(("40:13", "house"), 200.0, 5000.0) == 4
+    assert index.count(("40:13", "house"), 1000.0, 1000.0) == 1
+    assert index.count(("40:13", 120101, "garden"), 0.0, 1e9) == 1
+    assert index.count(("40:99", "house"), 0.0, 1e9) == 0
+    # «прочее» и лот без квартала не оцениваем
+    assert rr_deals.turnover({**lot, "vri_group": "other"}, index) is None
+    assert rr_deals.turnover({**lot, "quarter": None}, index) is None
+    assert rr_deals.turnover(lot, None) is None
