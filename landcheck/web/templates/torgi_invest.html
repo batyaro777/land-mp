@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+{% block title %}Участок {{ i.row.cad_num or 'с торгов' }} — предложение{% endblock %}
+{% block head %}
+{% if i.row.lat is not none and i.row.lon is not none %}{% include "_leaflet.html" %}{% endif %}
+{% endblock %}
+{% block content %}
+{% set r = i.row %}{% set s = r.s %}{% set mk = s.market or {} %}{% set e = i.sc.expected %}
+{% macro pct(v) %}{% if v is none %}—{% elif v > 10 %}больше 1000 %{% else %}{{ (v * 100)|round|int }} %{% endif %}{% endmacro %}
+{% if not public %}
+{% set tab = 'hot' %}{% set region = r.region %}
+{% include "_torgi_nav.html" %}
+<div class="toolbar no-print">
+  <div class="small"><a href="/tools/torgi-hot">← к горячим</a> · <a href="/tools/torgi-lot/{{ r.id }}">разбор лота</a> · <a href="/tools/torgi-picks">мои подборки</a></div>
+  <div>
+    <form method="post" action="/tools/torgi-picks" class="inline"><input type="hidden" name="lot" value="{{ r.id }}"><button class="sm" title="Создаёт ссылку, по которой эта сводка открывается без входа">Ссылка для инвестора</button></form>
+    <button class="outline sm" onclick="window.print()" title="В окне печати выберите «Сохранить как PDF»">Печать / PDF</button>
+  </div>
+</div>
+{% else %}
+<div class="toolbar no-print">
+  <div class="small">{% if pick and pick.n > 1 %}<a href="/t/{{ pick.token }}">← ко всей подборке ({{ pick.n }})</a>{% endif %}</div>
+  <div><button class="outline sm" onclick="window.print()" title="В окне печати выберите «Сохранить как PDF»">Печать / PDF</button></div>
+</div>
+{% endif %}
+
+<h2>Участок {% if r.area_m2 %}{{ (r.area_m2 / 100)|round(1) }} сот.{% endif %} с торгов{% if i.region_name %} — {{ i.region_name }}{% endif %}</h2>
+<p class="muted">{{ r.vri or groups.get(r.vri_group, '') }}{% if r.address %} · {{ r.address|short_address }}{% endif %}</p>
+
+{% if not i.active %}
+<article class="warn"><strong>Торги по этому лоту уже не идут.</strong> Расчёт ниже — справочный.</article>
+{% elif i.stop %}
+<article class="warn"><strong>Под критерии отбора лот сейчас не проходит:</strong> {{ i.stop_text }}.{% if i.fail %} {{ i.fail|join('; ') }}.{% endif %}</article>
+{% endif %}
+
+{% if e %}
+<div class="invest-key">
+  <div><span class="muted small">Вход, ожидаемо</span><strong>{{ e.entry|money }}</strong><span class="small muted">старт {{ r.price_start|money }}</span></div>
+  <div><span class="muted small">Продажа, середина рынка</span><strong>{{ e.sale|money }}</strong><span class="small muted">{{ s.sale_sotka.mid|money }} за сотку</span></div>
+  <div><span class="muted small">Прибыль после налога</span><strong>{{ e.profit|money }}</strong><span class="small muted">за {{ i.sc.hold }} мес.</span></div>
+  <div><span class="muted small">Доходность</span><strong>{{ pct(e.annual) }} годовых</strong><span class="small muted">осторожно — {{ pct(i.sc.cautious.annual) }}</span></div>
+  <div><span class="muted small">Надёжность расчёта</span><strong>класс {{ i.cls }}</strong><span class="small muted">{{ 'всё доказано' if i.cls == 'A' else ('есть что проверить' if i.cls == 'B' else 'гипотеза') }}</span></div>
+</div>
+{% else %}
+<article class="warn">Цены перепродажи по этому участку нет — доходность не посчитать.</article>
+{% endif %}
+
+<h3>1. Что продаётся</h3>
+<table class="results invest">
+  <tbody>
+    <tr><th>Адрес</th><td>{{ (r.address or '—')|short_address }}{% if i.district_name and i.district_name not in (r.address or '') %} ({{ i.district_name }}){% endif %}</td></tr>
+    <tr><th>Кадастровый номер</th><td><code>{{ r.cad_num or '—' }}</code></td></tr>
+    <tr><th>Площадь</th><td>{% if r.area_m2 %}{{ (r.area_m2 / 100)|round(1) }} сот. ({{ r.area_m2|round|int }} м²){% else %}не указана{% endif %}</td></tr>
+    <tr><th>Назначение</th><td>{{ r.vri or groups.get(r.vri_group, '—') }}{% if r.category %} · {{ r.category }}{% endif %}</td></tr>
+    <tr><th>Что получает победитель</th><td>{{ 'право аренды участка' if r.kind == 'rent' else 'участок в собственность' }}{% if r.has_gpzu %} · к лоту приложен градостроительный план{% endif %}</td></tr>
+    {% if r.cad_cost %}<tr><th>Кадастровая стоимость</th><td>{{ r.cad_cost|money }}</td></tr>{% endif %}
+  </tbody>
+</table>
+{% if r.images %}
+<div class="lot-photos">{% for f in r.images[:4] %}<img src="{{ img_base }}{{ f }}" alt="Фото участка" loading="lazy" class="invest-photo" onerror="this.remove()">{% endfor %}</div>
+{% endif %}
+{% if r.lat is not none and r.lon is not none %}
+<div id="torgi-map" class="invest-map"></div>
+<script>
+window.addEventListener('load', function () {
+  const map = L.map('torgi-map', { scrollWheelZoom: false }).setView([{{ r.lat }}, {{ r.lon }}], 14);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+  L.circleMarker([{{ r.lat }}, {{ r.lon }}], { radius: 9, color: '#2E75B6', fillOpacity: 0.7 }).addTo(map);
+});
+</script>
+{% endif %}
+
+<h3>2. Сколько стоит вход</h3>
+<table class="results invest">
+  <tbody>
+    <tr><th>Начальная цена{{ ' (годовая плата)' if r.kind == 'rent' else '' }}</th><td>{{ r.price_start|money if r.price_start else '—' }}{% if s.start_sotka %} <span class="muted">· {{ s.start_sotka|money }} за сотку</span>{% endif %}</td></tr>
+    <tr><th>Задаток</th><td>{% if r.deposit %}{{ r.deposit|money }}{% else %}смотрите в извещении о торгах{% endif %}</td></tr>
+    {% if r.price_step %}<tr><th>Шаг аукциона</th><td>{{ r.price_step|money }}</td></tr>{% endif %}
+    {% if e %}<tr><th>Ожидаемая цена победителя</th><td><strong>{{ e.entry|money }}</strong>{% if e.entry != r.price_start and s.liquidity.growth %} <span class="muted">· старт × {{ (e.entry / r.price_start)|round(2) }}: на таких торгах здесь ({{ s.liquidity.growth_where }}) цена обычно растёт в {{ s.liquidity.growth|round(2) }} раза</span>{% elif e.entry == r.price_start %} <span class="muted">· ждём покупку по старту: борьбы на таких торгах здесь обычно нет</span>{% endif %}</td></tr>{% endif %}
+    {% if i.cutoff %}<tr><th>Цена отсечения</th><td><strong>{{ i.cutoff|money }}</strong> <span class="muted">· выше неё на торгах идти не стоит: доходность упадёт ниже {{ (hp.min_annual * 100)|round|int }} % годовых</span></td></tr>{% endif %}
+    <tr><th>Расходы на сделку</th><td>{{ sp.extra|money if sp.extra else 'не заложены' }}</td></tr>
+    <tr><th>Налог с прибыли</th><td>{{ (sp.tax * 100)|round|int }} %</td></tr>
+  </tbody>
+</table>
+
+<h3>3. За сколько продадим</h3>
+{% if mk and s.sale_sotka.mid %}
+<table class="results invest">
+  <thead><tr><th></th><th class="num">Низ рынка</th><th class="num">Середина</th><th class="num">Верх</th></tr></thead>
+  <tbody>
+    <tr><th>За сотку</th><td class="num">{{ s.sale_sotka.min|money if s.sale_sotka.min else '—' }}</td><td class="num"><strong>{{ s.sale_sotka.mid|money }}</strong></td><td class="num">{{ s.sale_sotka.max|money if s.sale_sotka.max else '—' }}</td></tr>
+    <tr><th>За участок</th><td class="num">{{ s.sale.min|money if s.sale.min else '—' }}</td><td class="num"><strong>{{ s.sale.mid|money }}</strong></td><td class="num">{{ s.sale.max|money if s.sale.max else '—' }}</td></tr>
+  </tbody>
+</table>
+<p class="small">Источник цены: <strong>{{ mk.source_label }}</strong>.{% if mk.note %} <span class="muted">{{ mk.note }}.</span>{% endif %}</p>
+{% if mk.deals %}
+<details open>
+  <summary class="small">Сделки, на которых стоит эта цена</summary>
+  <table class="results invest">
+    <thead><tr><th>Когда зарегистрирована</th><th class="num">Площадь участка</th><th class="num">Цена за сотку</th><th class="num">Сделок</th></tr></thead>
+    <tbody>
+      {% for d in mk.deals %}<tr><td>{{ d.period }}</td><td class="num">{{ (d.area_m2 / 100)|round(1) }} сот.</td><td class="num">{{ d.pps|money }}</td><td class="num">{{ d.n }}</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</details>
+{% endif %}
+{% if i.fail %}
+<p class="err small"><strong>Сверка цены не пройдена.</strong> {{ i.fail|join('; ') }}.</p>
+{% else %}
+<p class="small"><span class="ok-msg">Сверка цены пройдена:</span> рынок не выше старта и кадастровой стоимости больше чем в пять раз.{% if i.warn %} Что учесть: {{ i.warn|join('; ') }}.{% endif %}</p>
+{% endif %}
+{% else %}
+<p class="warn">Цены перепродажи с рынка по этому участку нет.</p>
+{% endif %}
+
+<h3>4. Сколько заработаем</h3>
+{% if e %}
+<table class="results invest">
+  <thead><tr><th>Сценарий</th><th class="num">Вход</th><th class="num">Продажа</th><th class="num">Срок</th><th class="num">Прибыль после налога</th><th class="num">Годовых</th></tr></thead>
+  <tbody>
+    {% for name, key, hint in [('Без конкуренции', 'alone', 'покупаем по начальной цене'), ('Ожидаемый', 'expected', 'покупаем по ожидаемой цене победителя, продаём по середине рынка'), ('Осторожный', 'cautious', 'продаём по низу рынка и в полтора раза дольше')] %}{% set x = i.sc[key] %}{% if x %}
+    <tr{% if key == 'expected' %} class="hl"{% endif %}><th>{{ name }}<div class="small muted">{{ hint }}</div></th><td class="num">{{ x.entry|money }}</td><td class="num">{{ x.sale|money }}</td><td class="num">{{ x.months }} мес.</td><td class="num{% if x.profit < 0 %} err{% endif %}">{{ x.profit|money }}</td><td class="num"><strong>{{ pct(x.annual) }}</strong></td></tr>
+    {% endif %}{% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">Без цены перепродажи расчёта нет.</p>
+{% endif %}
+
+<h3>5. Как быстро продадим</h3>
+<p>В расчёте срок от покупки до продажи — <strong>{{ i.sc.hold }} мес.</strong>{% if mk.exposure_days %} По записи в слое рынка участки здесь продаются около {{ mk.exposure_days }} дней, плюс время на договор и регистрацию.{% else %} Данных о сроке продажи именно в этом месте пока нет, поэтому принят год.{% endif %}
+{% if mk.deals_n %} За {{ mk.deals_span }} Росреестр зарегистрировал в этом {{ 'квартале' if mk.deals_level == 'quarter' else 'районе' }} {{ mk.deals_n }} сдел. с участками такого же назначения и похожей площади.{% endif %}</p>
+
+<h3>6. Конкуренция на торгах</h3>
+{% set q = s.liquidity %}
+{% if q.closed %}
+<p>За год в этом {{ 'квартале' if q.where == 'квартал' else 'районе' }} завершилось {{ q.closed }} земельных торгов: с борьбой — {{ q.sold or 0 }}, единственному участнику по начальной цене — {{ q.single or 0 }}, без единой заявки — {{ q.none or 0 }}.{% if q.growth %} Там, где была борьба, цена росла к старту в {{ q.growth|round(2) }} раза ({{ q.growth_where }}).{% endif %}{% if q.index is not none %} Индекс ликвидности места — {{ q.index }} из 100.{% endif %}</p>
+{% else %}
+<p class="muted">Завершённых торгов в этом месте мало — конкуренцию по истории не оценить.</p>
+{% endif %}
+<p class="small muted">Сколько заявок подано на этот лот, площадка до конца приёма не показывает.</p>
+
+<h3>7. Риски</h3>
+<ul>
+  <li><strong>Обременения:</strong> {% if i.zones[0] == 'clean' %}пересечений с охранными и иными зонами нет{% elif i.zones[0] == 'unknown' %}<span class="warn">{{ i.zones[1] }}</span>{% else %}<span class="{{ 'err' if i.zones[0] == 'block' else 'warn' }}">{{ i.zones[1] }}</span>{% endif %}.</li>
+  {% if s.repeats %}<li>Участок уже выставляли на торги без результата: {{ s.repeats }}.</li>{% endif %}
+  {% if r.appeals %}<li>По торгам есть жалобы.</li>{% endif %}
+  {% for t in i.cls_why %}{% if 'обременени' not in t and 'есть зоны' not in t %}<li>{{ t|capitalize }}.</li>{% endif %}{% endfor %}
+  {% if i.cls == 'A' and not s.repeats and not r.appeals %}<li>Других замечаний к расчёту нет: цена взята по кварталу, место ликвидное.</li>{% endif %}
+  <li class="muted">Цены сделок взяты из договоров: они бывают занижены. Расчёт не заменяет выезд на участок и проверку документов.</li>
+</ul>
+
+<h3>8. Что сделать до заявки</h3>
+<ul>
+  <li><strong>Приём заявок:</strong> {% if r.bidd_end %}до {{ r.bidd_end[8:10] }}.{{ r.bidd_end[5:7] }}.{{ r.bidd_end[:4] }}{% if r.bidd_end_hm %} {{ r.bidd_end_hm }} ({{ r.tz }}){% endif %}{% if s.days_left is not none and s.days_left >= 0 %} — осталось {{ s.days_left }} дн.{% endif %}{% else %}срок смотрите в извещении{% endif %}.{% if r.auction_date %} <strong>Торги:</strong> {{ r.auction_date[8:10] }}.{{ r.auction_date[5:7] }}.{{ r.auction_date[:4] }}.{% endif %}</li>
+  <li>Внести задаток{% if r.deposit %} — {{ r.deposit|money }}{% endif %} и подать заявку на площадке.</li>
+  <li>Съездить на участок или заказать фото: подъезд, рельеф, соседи, что рядом.</li>
+  <li>Прочитать извещение и проект договора: сроки оплаты, особые условия.</li>
+  <li>{{ 'Градостроительный план приложен к лоту — сверить, что можно строить' if r.has_gpzu else 'Узнать параметры застройки: градостроительного плана в лоте нет' }}.</li>
+  <li>Уточнить подключение электричества, воды и газа.</li>
+</ul>
+
+<h3>9. Источники</h3>
+<ul class="small">
+  <li>Лот на государственной площадке: <a href="{{ i.lot_url }}" target="_blank" rel="noopener">torgi.gov.ru, лот {{ r.id }}</a>.</li>
+  <li>Цена рынка: {{ mk.source_label or 'нет' }}.{% if mk.source == 'rr' %} Открытые данные Росреестра о зарегистрированных сделках.{% endif %}</li>
+  <li>Обременения и кадастровая стоимость: Национальная система пространственных данных (nspd.gov.ru).</li>
+  <li>История торгов и конкуренция: завершённые торги на torgi.gov.ru за 12 месяцев.</li>
+  <li>Сводка составлена {{ made.strftime('%d.%m.%Y') }}; цифры пересчитываются при каждом открытии.</li>
+</ul>
+<p class="muted small">Это расчёт по открытым данным, а не оферта и не отчёт об оценке. Решение о сделке и проверка участка на месте — за покупателем.</p>
+{% endblock %}

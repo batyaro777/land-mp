@@ -472,6 +472,25 @@ class TorgiPlace(Base):
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class TorgiPick(Base):
+    """Подборка лотов для инвестора (ТЗ v5, п. 4; зум 18.11.2026, 01:10: «вот пять предложений
+    на выбор, чтобы было ежу понятно»). Один лот — сводка по нему, несколько — сравнительная
+    таблица. Открывается по ссылке без входа; критерии расчёта запоминаются вместе с
+    подборкой, чтобы цифры у инвестора не менялись, когда автор меняет свои."""
+
+    __tablename__ = "torgi_picks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    token: Mapped[str] = mapped_column(
+        String(32), unique=True, default=lambda: secrets.token_urlsafe(12)
+    )
+    title: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    lot_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    criteria: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class TorgiMarket(Base):
     """Слой рынка: цена перепродажи за сотку по кварталу или району (как полигоны эксперта в
     Google My Maps: «240 — край по торгам, рынок 320–350») и срок экспозиции. Источник —

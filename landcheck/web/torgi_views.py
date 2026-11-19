@@ -39,6 +39,7 @@ from landcheck.web.db import (
     TorgiDeal,
     TorgiLot,
     TorgiMarket,
+    TorgiPick,
     TorgiSync,
     User,
     session,
@@ -580,6 +581,203 @@ def torgi_hot_page(request: Request, user: TorgiDep):
         # подсказка «при пороге ниже пройдёт N» — только там, где лотов станет больше
         more_at=[(lvl, n) for lvl, n in res["relaxed"].items() if n > passed],
     )
+
+
+# --- сводка для инвестора и подборка (ТЗ v5, п. 4) -----------------------------------------
+PICK_MAX = 12  # столько лотов помещается в сравнительную таблицу
+
+
+def _lot_row(lot_id: str, sp: torgi_scan.ScanParams) -> tuple[dict[str, Any], dict[str, str]]:
+    """Оценённый лот по номеру (как строка списка лотов) и подписи районов его региона.
+    Идущий аукцион берётся из готового расчёта региона; завершённый, лесной или извещение —
+    считается отдельно на той же статистике."""
+    with session() as db:
+        lot = db.get(TorgiLot, lot_id)
+        region = lot.region if lot is not None else None
+    if not region:
+        raise HTTPException(404)
+    result, names = _region_scan(region, sp)
+    for row in result["rows"]:
+        if row["id"] == lot_id:
+            return row, names
+    lots = torgi_sync.lots_of(region, months=settings.torgi_scan_months)
+    found = next((x for x in lots if x["id"] == lot_id), None)
+    if found is None:
+        raise HTTPException(404)
+    near_fn = _local_fn(region, lots)
+    s = torgi_scan.score_lot(
+        found,
+        result["stats"],
+        sp,
+        layer=_layer(region),
+        repeats=torgi_scan.repeats_of(lots),
+        near=near_fn(found) if near_fn else None,
+    )
+    return {**found, "s": s}, names
+
+
+def _invest_item(lot_id: str, crit: dict[str, str]) -> dict[str, Any]:
+    """Всё для сводки по одному лоту при данных критериях расчёта."""
+    hp, sp = _hot_params(crit)
+    row, names = _lot_row(lot_id, sp)
+    item = torgi_hot.item_of(row, sp, hp)
+    item["district_name"] = names.get(row.get("district") or "", "")
+    item["region_name"] = CADASTRAL_REGIONS.get(row.get("region") or "", "")
+    item["active"] = row.get("status") in torgi_scan.ACTIVE
+    item["lot_url"] = f"https://torgi.gov.ru/new/public/lots/lot/{row['id']}"
+    item["stop_text"] = torgi_hot.STEP_RU.get(item["stop"] or "")
+    return item
+
+
+def _invest_ctx(crit: dict[str, str]) -> dict[str, Any]:
+    hp, sp = _hot_params(crit)
+    return {
+        "hp": hp,
+        "sp": sp,
+        "kinds": torgi_scan.KIND_RU,
+        "groups": torgi_scan.GROUPS,
+        "img_base": torgi.FILE_URL.format(file_id=""),
+        "made": datetime.now(UTC).date(),
+        "zone_unknown": torgi_hot.ZONES_UNKNOWN,
+    }
+
+
+def _crit_of(user: User) -> dict[str, str]:
+    return {k: str(v) for k, v in (user.hot_criteria or {}).items() if k in HOT_KEYS}
+
+
+@router.get("/tools/torgi-lot/{lot_id}/invest", response_class=HTMLResponse)
+def torgi_invest_page(request: Request, user: TorgiDep, lot_id: str):
+    """Сводка по лоту для инвестора — так, как её увидит человек по ссылке без входа."""
+    crit = _crit_of(user)
+    item = _invest_item(lot_id, crit)
+    if item["zones"][0] == "unknown":
+        torgi_zones.start_fill([lot_id])
+    return render(
+        request,
+        "torgi_invest.html",
+        user=user,
+        i=item,
+        public=False,
+        pick=None,
+        **_invest_ctx(crit),
+    )
+
+
+@router.post("/tools/torgi-picks")
+def torgi_pick_create(
+    user: TorgiDep,
+    lot: Annotated[list[str] | None, Form()] = None,
+    title: Annotated[str, Form()] = "",
+):
+    """Подборка из отмеченных лотов: критерии расчёта берём те, с которыми автор смотрит
+    «Горячие», и запоминаем вместе с подборкой."""
+    ids = list(dict.fromkeys(i for i in (lot or []) if i))[:PICK_MAX]
+    with session() as db:
+        ids = [i for i in ids if db.get(TorgiLot, i) is not None]
+        if not ids:
+            return RedirectResponse("/tools/torgi-hot?nopick=1", status_code=303)
+        pick = TorgiPick(
+            user_id=user.id, title=title.strip()[:160] or None, lot_ids=ids, criteria=_crit_of(user)
+        )
+        db.add(pick)
+        db.commit()
+        pick_id = pick.id
+    return RedirectResponse(f"/tools/torgi-picks/{pick_id}", status_code=303)
+
+
+def _own_pick(db: Session, user: User, pick_id: int) -> TorgiPick:
+    pick = db.get(TorgiPick, pick_id)
+    if pick is None or (pick.user_id != user.id and not user.is_admin):
+        raise HTTPException(404)
+    return pick
+
+
+def _pick_view(pick: TorgiPick) -> dict[str, Any]:
+    crit = {k: str(v) for k, v in (pick.criteria or {}).items() if k in HOT_KEYS}
+    items = []
+    for lot_id in pick.lot_ids or []:
+        try:
+            items.append(_invest_item(lot_id, crit))
+        except HTTPException:  # лот исчез из базы (старше года) — подборка остаётся
+            continue
+    return {
+        "pick": {
+            "id": pick.id,
+            "token": pick.token,
+            "title": pick.title,
+            "created": pick.created_at,
+            "url": f"{settings.base_url}/t/{pick.token}",
+            "n": len(pick.lot_ids or []),
+        },
+        "items": items,
+        **_invest_ctx(crit),
+    }
+
+
+@router.get("/tools/torgi-picks", response_class=HTMLResponse)
+def torgi_picks_page(request: Request, user: TorgiDep):
+    with session() as db:
+        q = select(TorgiPick).where(TorgiPick.user_id == user.id).order_by(TorgiPick.id.desc())
+        picks = [
+            {
+                "id": p.id,
+                "title": p.title,
+                "n": len(p.lot_ids or []),
+                "created": p.created_at,
+                "url": f"{settings.base_url}/t/{p.token}",
+            }
+            for p in db.scalars(q)
+        ]
+    return render(request, "torgi_picks.html", user=user, picks=picks)
+
+
+@router.get("/tools/torgi-picks/{pick_id}", response_class=HTMLResponse)
+def torgi_pick_page(request: Request, user: TorgiDep, pick_id: int):
+    with session() as db:
+        view = _pick_view(_own_pick(db, user, pick_id))
+    torgi_zones.start_fill([i["row"]["id"] for i in view["items"] if i["zones"][0] == "unknown"])
+    return render(request, "torgi_pick.html", user=user, public=False, **view)
+
+
+@router.post("/tools/torgi-picks/{pick_id}/delete")
+def torgi_pick_delete(user: TorgiDep, pick_id: int):
+    with session() as db:
+        db.delete(_own_pick(db, user, pick_id))
+        db.commit()
+    return RedirectResponse("/tools/torgi-picks", status_code=303)
+
+
+def _public_pick(db: Session, token: str) -> TorgiPick:
+    pick = db.scalar(select(TorgiPick).where(TorgiPick.token == token))
+    if pick is None:
+        raise HTTPException(404)
+    return pick
+
+
+@router.get("/t/{token}", response_class=HTMLResponse)
+def torgi_pick_public(request: Request, token: str):
+    """Подборка по ссылке без входа: один лот — сразу сводка, несколько — сравнение."""
+    with session() as db:
+        view = _pick_view(_public_pick(db, token))
+    if len(view["items"]) == 1:
+        return render(
+            request, "torgi_invest.html", user=None, public=True, i=view["items"][0], **view
+        )
+    return render(request, "torgi_pick.html", user=None, public=True, **view)
+
+
+@router.get("/t/{token}/{lot_id}", response_class=HTMLResponse)
+def torgi_invest_public(request: Request, token: str, lot_id: str):
+    with session() as db:
+        pick = _public_pick(db, token)
+        if lot_id not in (pick.lot_ids or []):
+            raise HTTPException(404)
+        view = _pick_view(pick)
+    item = next((i for i in view["items"] if i["row"]["id"] == lot_id), None)
+    if item is None:
+        raise HTTPException(404)
+    return render(request, "torgi_invest.html", user=None, public=True, i=item, **view)
 
 
 @router.get("/tools/torgi-scan/status", response_class=HTMLResponse)

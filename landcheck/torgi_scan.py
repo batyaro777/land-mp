@@ -1203,6 +1203,12 @@ def score_lot(
             "growth_where": growth_where,
             "applied": liq.get("applied_median"),
             "closed": liq.get("closed"),
+            # чем кончились торги в этом месте: с борьбой, единственному участнику, без заявок
+            # (зум 18.11.2026, 01:01 — «есть участки, которые забирают без конкуренции»)
+            "sold": liq.get("sold"),
+            "single": liq.get("single"),
+            "none": liq.get("none"),
+            "where": "квартал" if liq is q_stats else "район",
         },
         "start_m2": round(start / area, 1) if start and area else None,
         "start_sotka": round(start / area * SOTKA) if start and area else None,

@@ -61,6 +61,9 @@ def test_implausible_market_goes_to_manual_check_not_to_the_top():
     assert set(check) == {"A2", "A33"}
     assert "в 8 раз выше старта" in check["A2"][0] and "несопоставимых" in check["A2"][0]
     assert "в 8 раз выше кадастровой стоимости" in check["A33"][0]
+    # пока цена не подтверждена, это гипотеза: класс C, причина — первой
+    assert {i["cls"] for i in res["check"]} == {"C"}
+    assert all(i["cls_why"][0] == i["fail"][0] for i in res["check"])
     left = {f["key"]: f["left"] for f in res["funnel"]}
     assert left["zones"] == 3 and left["price"] == 1
 

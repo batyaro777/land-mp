@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}{{ pick.title or 'Подборка участков с торгов' }}{% endblock %}
+{% block content %}
+{% macro pct(v) %}{% if v is none %}—{% elif v > 10 %}больше 1000 %{% else %}{{ (v * 100)|round|int }} %{% endif %}{% endmacro %}
+{% macro lot_href(i) %}{% if public %}/t/{{ pick.token }}/{{ i.row.id }}{% else %}/tools/torgi-lot/{{ i.row.id }}/invest{% endif %}{% endmacro %}
+{% if not public %}
+{% set tab = 'hot' %}
+{% include "_torgi_nav.html" %}
+{% include "_copy_js.html" %}
+<div class="toolbar no-print">
+  <div class="small"><a href="/tools/torgi-hot">← к горячим</a> · <a href="/tools/torgi-picks">мои подборки</a></div>
+  <div>
+    <button class="outline sm" onclick="window.print()" title="В окне печати выберите «Сохранить как PDF»">Печать / PDF</button>
+    <form method="post" action="/tools/torgi-picks/{{ pick.id }}/delete" class="inline" onsubmit="return confirm('Удалить подборку? Ссылка перестанет открываться.')"><button class="outline secondary sm">Удалить</button></form>
+  </div>
+</div>
+<article class="no-print">
+  <strong>Ссылка для инвестора</strong> — открывается без входа:
+  <code>{{ pick.url }}</code><button type="button" class="copy" data-copy="{{ pick.url }}" title="Скопировать ссылку" aria-label="Скопировать ссылку">⧉</button>
+  <div class="small muted">Цифры считаются по критериям, которые были у вас в «Горячих» в момент создания подборки, и пересчитываются по свежим данным при каждом открытии.</div>
+</article>
+{% else %}
+<div class="toolbar no-print"><div></div><div><button class="outline sm" onclick="window.print()" title="В окне печати выберите «Сохранить как PDF»">Печать / PDF</button></div></div>
+{% endif %}
+
+<h2>{{ pick.title or 'Участки с торгов: предложения на выбор' }}</h2>
+<p class="muted small">{{ items|length }} участк. Доходность считается при покупке по ожидаемой цене победителя и продаже по середине рынка, после налога. По каждому участку есть подробная сводка с доказательствами цены — ссылка в первой строке. Составлено {{ made.strftime('%d.%m.%Y') }}.</p>
+
+{% if items %}
+<div class="table-wrap">
+<table class="results invest compare">
+  <thead><tr><th></th>{% for i in items %}<th>{{ loop.index }}. <a href="{{ lot_href(i) }}">{{ i.row.cad_num or 'лот' }}</a></th>{% endfor %}</tr></thead>
+  <tbody>
+    <tr><th>Где</th>{% for i in items %}<td class="small">{{ i.region_name }}{% if i.district_name %} · {{ i.district_name }}{% endif %}<div class="muted">{{ (i.row.address or '')|short_address }}</div></td>{% endfor %}</tr>
+    <tr><th>Площадь, назначение</th>{% for i in items %}<td>{% if i.row.area_m2 %}{{ (i.row.area_m2 / 100)|round(1) }} сот.{% endif %}<div class="small muted">{{ i.row.vri or groups.get(i.row.vri_group, '') }}</div></td>{% endfor %}</tr>
+    <tr><th>Сделка</th>{% for i in items %}<td>{{ 'право аренды' if i.row.kind == 'rent' else 'собственность' }}</td>{% endfor %}</tr>
+    <tr><th>Начальная цена</th>{% for i in items %}<td>{{ i.row.price_start|money if i.row.price_start else '—' }}{% if i.row.deposit %}<div class="small muted">задаток {{ i.row.deposit|money }}</div>{% endif %}</td>{% endfor %}</tr>
+    <tr><th>Заявки до</th>{% for i in items %}<td>{% if not i.active %}<span class="warn">торги не идут</span>{% elif i.row.bidd_end %}{{ i.row.bidd_end[8:10] }}.{{ i.row.bidd_end[5:7] }}{% if i.row.s.days_left is not none %} <span class="small muted">· {{ i.row.s.days_left }} дн.</span>{% endif %}{% else %}—{% endif %}</td>{% endfor %}</tr>
+    <tr><th>Рынок за сотку</th>{% for i in items %}<td>{% if i.row.s.sale_sotka.mid %}{{ i.row.s.sale_sotka.mid|money }}<div class="small muted">{{ (i.row.s.market or {}).source_label }}</div>{% else %}—{% endif %}</td>{% endfor %}</tr>
+    <tr><th>Вход, ожидаемо</th>{% for i in items %}<td>{% if i.sc.expected %}<strong>{{ i.sc.expected.entry|money }}</strong>{% else %}—{% endif %}</td>{% endfor %}</tr>
+    <tr><th>Цена отсечения</th>{% for i in items %}<td>{{ i.cutoff|money if i.cutoff else '—' }}</td>{% endfor %}</tr>
+    <tr><th>Продажа</th>{% for i in items %}<td>{% if i.sc.expected %}{{ i.sc.expected.sale|money }}{% else %}—{% endif %}</td>{% endfor %}</tr>
+    <tr class="hl"><th>Прибыль после налога</th>{% for i in items %}<td>{% if i.sc.expected %}<strong>{{ i.sc.expected.profit|money }}</strong><div class="small muted">за {{ i.sc.hold }} мес.</div>{% else %}—{% endif %}</td>{% endfor %}</tr>
+    <tr class="hl"><th>Доходность, годовых</th>{% for i in items %}<td>{% if i.sc.expected %}<strong>{{ pct(i.sc.expected.annual) }}</strong><div class="small muted">без конкуренции {{ pct(i.sc.alone.annual) }} · осторожно {{ pct(i.sc.cautious.annual) }}</div>{% else %}—{% endif %}</td>{% endfor %}</tr>
+    <tr><th>Надёжность расчёта</th>{% for i in items %}<td><span class="badge v-{{ {'A': 'ok', 'B': 'check'}.get(i.cls, '') }}">{{ i.cls }}</span>{% if i.stop %}<div class="small warn">сейчас не проходит отбор: {{ i.stop_text }}</div>{% endif %}</td>{% endfor %}</tr>
+    <tr><th>Конкуренция в этом месте</th>{% for i in items %}{% set q = i.row.s.liquidity %}<td class="small">{% if q.closed %}из {{ q.closed }} торгов: с борьбой {{ q.sold or 0 }}, одному участнику {{ q.single or 0 }}, без заявок {{ q.none or 0 }}{% else %}мало данных{% endif %}</td>{% endfor %}</tr>
+    <tr><th>Обременения</th>{% for i in items %}<td class="small">{% if i.zones[0] == 'clean' %}нет{% else %}<span class="{{ 'err' if i.zones[0] == 'block' else 'warn' }}">{{ i.zones[1] }}</span>{% endif %}</td>{% endfor %}</tr>
+    <tr><th>Что проверить</th>{% for i in items %}<td class="small">{% if i.cls_why %}{{ i.cls_why|join('; ') }}{% else %}замечаний к расчёту нет{% endif %}</td>{% endfor %}</tr>
+    <tr class="no-print"><th></th>{% for i in items %}<td><a href="{{ lot_href(i) }}">Подробная сводка →</a></td>{% endfor %}</tr>
+  </tbody>
+</table>
+</div>
+{% else %}
+<article>Лотов из этой подборки в базе уже нет.</article>
+{% endif %}
+<p class="muted small">Это расчёт по открытым данным, а не оферта и не отчёт об оценке. Решение о сделке и проверка участка на месте — за покупателем.</p>
+{% endblock %}

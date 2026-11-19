@@ -10,7 +10,7 @@
   <span class="badge mini">{{ kinds.get(r.kind, r.kind) }}</span>{% if r.area_m2 %} <strong class="small nw">{{ (r.area_m2 / 100)|round(1) }} сот.</strong>{% endif %}{% if r.has_gpzu %} <span class="badge mini v-ok" title="К лоту приложен ГПЗУ">ГПЗУ</span>{% endif %}
   <div class="small">{{ r.vri or groups.get(r.vri_group, '') }}</div>
   <div class="small muted"><strong>{{ region_names.get(r.region, r.region) }}</strong>{% set dn = names.get(r.district, '') %}{% if dn and dn not in (r.address or '') %} · {{ dn }}{% endif %}{% if r.address %} · {{ r.address }}{% endif %}</div>
-  <a href="https://torgi.gov.ru/new/public/lots/lot/{{ r.id }}" target="_blank" rel="noopener" class="small muted">лот на torgi.gov.ru</a>
+  <a href="/tools/torgi-lot/{{ r.id }}/invest" class="small">сводка для инвестора</a> <span class="muted small">·</span> <a href="https://torgi.gov.ru/new/public/lots/lot/{{ r.id }}" target="_blank" rel="noopener" class="small muted">лот на torgi.gov.ru</a>
 {% endmacro %}
 <h2>Горячие предложения <span class="badge mini">внутренний режим</span></h2>
 {% include "_torgi_nav.html" %}
@@ -96,7 +96,7 @@
   <tbody>
   {% for i in items %}{% set r = i.row %}{% set s = r.s %}{% set e = i.sc.expected %}
   <tr>
-    <td><span class="badge v-{{ {'A': 'ok', 'B': 'check'}.get(i.cls, '') }}">{{ i.cls }}</span></td>
+    <td class="nw"><input type="checkbox" name="lot" value="{{ r.id }}" aria-label="В подборку"> <span class="badge v-{{ {'A': 'ok', 'B': 'check'}.get(i.cls, '') }}">{{ i.cls }}</span></td>
     <td class="cad">{{ lot_cell(r) }}</td>
     <td class="num">{{ r.price_start|money }}{% if s.start_sotka %}<div class="small muted nw">{{ s.start_sotka|money }}/сот.</div>{% endif %}<div class="small muted nw">задаток {% if r.deposit %}{{ r.deposit|money }}{% else %}не указан{% endif %}</div></td>
     <td class="num small">{% if r.bidd_end %}{{ r.bidd_end[8:10] }}.{{ r.bidd_end[5:7] }}{% endif %}<div class="{{ 'err' if s.days_left < 5 else 'muted' }}">{{ s.days_left }} дн.</div></td>
@@ -114,6 +114,8 @@
 </div>
 {% endmacro %}
 
+{% if request.query_params.get('nopick') %}<p class="warn small">Отметьте хотя бы один лот — тогда соберётся подборка.</p>{% endif %}
+<form method="post" action="/tools/torgi-picks" id="hot-pick">
 {% if shown %}
 <p class="small">Показано {{ shown|length }} из {{ res.hot|length }}: сначала класс A, затем B, внутри класса — по ожидаемой годовой доходности.</p>
 {{ hot_table(shown) }}
@@ -127,6 +129,16 @@
   {{ hot_table(res.weak[:hp.top]) }}
 </details>
 {% endif %}
+{% if shown or res.weak %}
+<div class="toolbar no-print">
+  <div>
+    <input name="title" placeholder="Название подборки — необязательно" maxlength="160" style="max-width: 22rem; display: inline-block; margin: 0 0.5rem 0 0">
+    <button class="sm" title="Отмеченные лоты — одной сравнительной таблицей со ссылкой, которая открывается без входа">В подборку для инвестора</button>
+  </div>
+  <div class="small"><a href="/tools/torgi-picks">Мои подборки</a></div>
+</div>
+{% endif %}
+</form>
 
 {% if check %}
 <h3>Проверить рынок руками: {{ res.check|length }}</h3>

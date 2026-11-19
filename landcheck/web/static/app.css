@@ -159,6 +159,19 @@ table.hot .reasons { min-width: 200px; max-width: 320px; }
 .nw { white-space: nowrap; }
 details.hot-funnel { margin-top: 0.8rem; }
 details.hot-funnel table { max-width: 46rem; }
+/* сводка для инвестора и подборка (ТЗ v5, п. 4) */
+.invest-key { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.6rem; margin: 0.6rem 0 1.2rem; }
+.invest-key > div { border: 1px solid var(--pico-muted-border-color); border-radius: 8px; padding: 0.6rem 0.8rem; display: flex; flex-direction: column; gap: 0.15rem; }
+.invest-key strong { font-size: 1.15rem; }
+table.invest { max-width: 62rem; }
+table.invest tbody th { font-weight: 600; width: 16rem; vertical-align: top; }
+table.invest tr.hl td, table.invest tr.hl th { background: rgba(46, 117, 182, 0.10); }
+table.compare { max-width: none; }
+table.compare td, table.compare thead th { min-width: 11rem; vertical-align: top; }
+table.compare tbody th { width: 11rem; }
+img.invest-photo { height: 150px; border-radius: 6px; }
+#torgi-map.invest-map { height: 300px; max-width: 62rem; }
+@media print { .invest-key > div { break-inside: avoid; } table.invest { break-inside: avoid; } }
 table.torgi .reasons li, ul.checklist li:has(.dot) { list-style: none; }
 table.results.econ { max-width: 760px; }
 table.results.econ td, table.results.econ th { padding: 0.35em 0.6em; }

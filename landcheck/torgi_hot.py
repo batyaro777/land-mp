@@ -171,11 +171,15 @@ def zones_of(row: dict[str, Any]) -> tuple[str, str]:
 
 
 def klass(
-    row: dict[str, Any], warn: list[str], scan_params: torgi_scan.ScanParams
+    row: dict[str, Any],
+    warn: list[str],
+    scan_params: torgi_scan.ScanParams,
+    fail: list[str] | None = None,
 ) -> tuple[str, list[str]]:
     """Класс надёжности и чего не хватило до A. A — всё доказано: цена по кварталу или точнее,
     сделок достаточно, район ликвидный, обременений нет. C — цена только по району и район
-    при этом не ликвидный либо цены расходятся вдвое: это гипотеза, а не предложение."""
+    при этом не ликвидный либо цены расходятся вдвое, либо цена рынка не прошла сверку
+    (`fail`): это гипотеза, а не предложение."""
     s = row["s"]
     mk = s.get("market") or {}
     why: list[str] = []
@@ -204,6 +208,9 @@ def klass(
         why.append("участок уже выставляли без результата")
     if row.get("appeals"):
         why.append("по торгам есть жалобы")
+    if fail:
+        # цена рынка не прошла сверку — это гипотеза, какими бы ни были остальные признаки
+        return "C", [*fail, *why]
     if not why:
         return "A", why
     weak = conf < 2 and (
@@ -243,6 +250,49 @@ def _passes(item: dict[str, Any], hp: HotParams, min_annual: float) -> str | Non
     return None
 
 
+def item_of(
+    row: dict[str, Any], scan_params: torgi_scan.ScanParams, params: HotParams
+) -> dict[str, Any]:
+    """Всё, что «Горячие» знают об одном оценённом лоте: сценарии, цена отсечения, сверка
+    цены рынка, класс, обременения и условие, на котором лот выбыл (`stop`; None — прошёл)."""
+    fail, warn = price_check(row)
+    sc = scenarios(row, scan_params.extra, scan_params.tax)
+    cls, cls_why = klass(row, warn, scan_params, fail)
+    item = {
+        "row": row,
+        "sc": sc,
+        "extra": scan_params.extra,
+        "fail": fail,
+        "warn": warn,
+        "cls": cls,
+        "cls_why": cls_why,
+        "zones": zones_of(row),
+        "cutoff": cutoff_price(
+            row["s"]["sale"].get("mid"),
+            sc["hold"],
+            params.min_annual,
+            scan_params.extra,
+            scan_params.tax,
+        ),
+    }
+    stop = _passes(item, params, params.min_annual)
+    item["stop"] = stop or ("price" if fail else None)
+    return item
+
+
+STEP_RU = {
+    "type": "это не обычный земельный аукцион",
+    "time": "торги закончились, остановлены или до конца приёма заявок слишком мало времени",
+    "kind": "сделка не та, что выбрана в критериях",
+    "market": "цены перепродажи с рынка нет",
+    "annual": "доходность при ожидаемой цене победителя ниже порога",
+    "cautious": "в осторожном сценарии сделка уходит в минус",
+    "cap": "ожидаемая цена входа выше лимита",
+    "profit": "прибыль меньше заданной",
+    "zones": "участок в ООПТ или лесопарке",
+    "price": "цена рынка не прошла сверку",
+}
+
 STEPS = (
     ("type", "обычный земельный аукцион (не лес, не должники, не изъятые)"),
     ("time", "торги идут, времени на заявку хватает"),
@@ -269,34 +319,14 @@ def select(
     осталось после каждого условия; `relaxed` — сколько лотов было бы при пороге ниже."""
     sp = scan_params or torgi_scan.ScanParams()
     hp = params or HotParams()
-    items = []
-    for row in rows:
-        fail, warn = price_check(row)
-        sc = scenarios(row, sp.extra, sp.tax)
-        cls, cls_why = klass(row, warn, sp)
-        items.append(
-            {
-                "row": row,
-                "sc": sc,
-                "extra": sp.extra,
-                "fail": fail,
-                "warn": warn,
-                "cls": cls,
-                "cls_why": cls_why,
-                "zones": zones_of(row),
-                "cutoff": cutoff_price(
-                    row["s"]["sale"].get("mid"), sc["hold"], hp.min_annual, sp.extra, sp.tax
-                ),
-            }
-        )
+    items = [item_of(row, sp, hp) for row in rows]
     left = {key: 0 for key, _ in STEPS}
     passed: list[dict[str, Any]] = []
     check: list[dict[str, Any]] = []
     order = [key for key, _ in STEPS]
     for item in items:
-        stop = _passes(item, hp, hp.min_annual)
-        if stop is None and item["fail"]:
-            stop = "price"
+        stop = item["stop"]
+        if stop == "price":
             check.append(item)
         upto = order.index(stop) if stop else len(order)
         for key in order[:upto]:

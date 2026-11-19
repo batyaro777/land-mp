@@ -1151,6 +1151,66 @@ def test_hot_page_selects_checks_market_and_remembers_criteria(client):  # noqa:
     assert "не попадает ни один лот" in client.get("/tools/torgi-hot?region=10").text
 
 
+def test_invest_summary_pick_and_public_link(client):  # noqa: F811
+    """ТЗ v5, п. 4 (зум 18.11.2026, 01:10): сводка по лоту для инвестора и подборка «пять
+    предложений на выбор» — по ссылке без входа, с теми же цифрами, что видел автор."""
+    from landcheck.web.db import TorgiPick, session
+
+    fake = _seed(client)
+    _sync(fake, provider=FakeNspd())
+    _admin(client)
+    market = {"scope": "40:13", "kind": "sale", "vri_group": "any", "price_mid": "45000"}
+    client.post("/tools/torgi-market", data=market)
+    hot = client.get("/tools/torgi-hot?annual=100&cap=2000000&days=3&top=5").text
+    assert 'name="lot" value="ACT_0"' in hot and "В подборку для инвестора" in hot
+    assert 'href="/tools/torgi-lot/ACT_0/invest"' in hot
+    # без отмеченных лотов подборка не создаётся
+    r = client.post("/tools/torgi-picks", data={}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/tools/torgi-hot?nopick=1"
+
+    page = client.get("/tools/torgi-lot/ACT_0/invest").text
+    for block in ("1. Что продаётся", "4. Сколько заработаем", "7. Риски", "9. Источники"):
+        assert block in page
+    assert M(150_000) in page and M(209_358) in page and M(261_000) in page
+    assert "Сверка цены пройдена" in page and "174 % годовых" in page
+    assert "с борьбой — 15" in page and "без единой заявки — 3" in page
+    assert "Ссылка для инвестора" in page and "torgi.gov.ru, лот ACT_0" in page
+    assert "/tools/torgi-lot/ACT_0/invest" in client.get("/tools/torgi-lot/ACT_0").text
+
+    r = client.post(
+        "/tools/torgi-picks",
+        data={"lot": ["ACT_0", "ACT_1", "ACT_0", "нет такого"], "title": "Калуга, ноябрь"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    own = client.get(r.headers["location"]).text
+    with session() as db:
+        pick = db.scalars(select(TorgiPick)).one()
+        token, pick_id = pick.token, pick.id
+        assert pick.lot_ids == ["ACT_0", "ACT_1"] and pick.criteria["annual"] == "100"
+    assert "Калуга, ноябрь" in own and f"/t/{token}" in own and "Удалить" in own
+    assert "Калуга, ноябрь" in client.get("/tools/torgi-picks").text
+
+    # автор меняет свои критерии — цифры в подборке остаются прежними
+    client.get("/tools/torgi-hot?annual=300&cap=2000000&days=3&extra=50000")
+    client.post("/logout")
+    public = client.get(f"/t/{token}").text
+    assert "Калуга, ноябрь" in public and "40:13:120101:100" in public
+    assert M(261_000) in public and "174 %" in public and f"/t/{token}/ACT_1" in public
+    # наружу не уходит ничего внутреннего
+    assert (
+        "Удалить" not in public and "/tools/" not in public and "Ликвидность и рынок" not in public
+    )
+    one = client.get(f"/t/{token}/ACT_1").text
+    assert "1. Что продаётся" in one and M(209_358) in one and "ко всей подборке (2)" in one
+    assert "/tools/" not in one and "Ссылка для инвестора" not in one
+    assert client.get(f"/t/{token}/ACT_5").status_code == 404
+    assert client.get("/t/nosuchtoken").status_code == 404
+    # без входа внутренние страницы закрыты
+    assert client.get(f"/tools/torgi-picks/{pick_id}", follow_redirects=False).status_code != 200
+    assert client.get("/tools/torgi-lot/ACT_0/invest", follow_redirects=False).status_code != 200
+
+
 def test_resume_after_restart_rotates_the_queue(client, monkeypatch):  # noqa: F811
     """Прод, 18.11.2026: выкладки шли чаще, чем длится проход большого региона, очередь каждый
     раз поднималась с него же, и три региона за ним простояли весь день. После рестарта первым
