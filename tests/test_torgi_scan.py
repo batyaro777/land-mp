@@ -711,6 +711,7 @@ def test_scan_counts_after_place_filter_and_explains_what_other_filters_hid():
         "group": 0,
         "area": 0,
         "price": 0,
+        "forest": 0,
     }
 
 

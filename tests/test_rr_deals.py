@@ -174,6 +174,30 @@ def test_deals_market_uses_own_quarter_then_district():
     assert rr_deals.deals_market(LOT, None) is None and rr_deals.deals_market(LOT, _idx()) is None
 
 
+def test_quarter_far_above_district_is_not_taken_as_market():
+    """Прод, 19.11.2026: старт лота 87 тыс. ₽ за сотку, «рынок» по пяти сделкам квартала —
+    3,49 млн; такие лоты стояли первыми по доходности. Квартал дороже района больше чем втрое —
+    берём район, квартал остаётся справкой."""
+    index = _idx(
+        *[_deal(120101, "housing", 1000, 3_000_000 + i * 100_000) for i in range(5)],
+        *[_deal(340516, "housing", 1500, 150_000 + i * 15_000) for i in range(20)],
+    )
+    mk = rr_deals.deals_market(LOT, index)
+    assert mk["deals_level"] == "district" and mk["confidence"] == 1
+    assert mk["mid_m2"] < 400
+    assert mk["quarter_ref"]["n"] == 5 and mk["quarter_ref"]["mid_m2"] == 3200
+    assert mk["quarter_ref"]["ratio"] > 3
+    assert "взят район" in mk["note"]
+    # квартал дороже района, но в пределах трёх раз — остаётся кварталом, район рядом для сверки
+    near = _idx(
+        *[_deal(120101, "housing", 1000, 400_000) for _ in range(4)],
+        *[_deal(340516, "housing", 1500, 300_000) for _ in range(20)],
+    )
+    ok = rr_deals.deals_market(LOT, near)
+    assert ok["deals_level"] == "quarter" and ok["district_mid_m2"] == 200
+    assert "quarter_ref" not in ok
+
+
 def test_weighted_quantiles_count_every_deal():
     # одна строка на 8 сделок по 200 ₽/м² и две одиночные по 600: медиана — 200, не 600
     index = _idx(

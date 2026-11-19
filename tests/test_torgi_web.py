@@ -1110,6 +1110,47 @@ def test_points_are_read_by_their_own_loop_across_regions(client, monkeypatch): 
     assert _sync(fake)["stats"]["nspd"] == 0 and asked == ["40"]
 
 
+def test_hot_page_selects_checks_market_and_remembers_criteria(client):  # noqa: F811
+    """ТЗ v5 (зум 18.11.2026): «Горячие» — отбор по ожидаемой цене победителя, сверка цены
+    рынка, критерии запоминаются."""
+    from landcheck.web.db import User, session
+
+    fake = _seed(client)
+    _sync(fake, provider=FakeNspd())
+    _admin(client)
+    # цены рынка нет — под критерии не попадает никто, страница объясняет, что отсеяло
+    page = client.get("/tools/torgi-hot").text
+    assert "Горячие предложения" in page and "не попадает ни один лот" in page
+    assert "цена перепродажи взята с рынка" in page and ">Горячие</a>" in page
+    # рынок 45 тыс. за сотку: вход по ожидаемой цене 150 тыс. (старт × 1,5), продажа 450 тыс.
+    market = {"scope": "40:13", "kind": "sale", "vri_group": "any", "price_mid": "45000"}
+    assert client.post("/tools/torgi-market", data=market).status_code == 303
+    page = client.get("/tools/torgi-hot?annual=100&cap=2000000&days=3&top=5&region=all").text
+    assert "Показано 5 из 12" in page and "из 12 идущих аукционов прошло 12" in page
+    assert M(150_000) in page and "старт × 1.5" in page
+    # (450 − 150) × 0,87 = 261 тыс.; цена отсечения 450 × 0,87 / 1,87 = 209 358
+    assert M(261_000) in page and M(209_358) in page
+    assert "обременения ещё не проверены" in page and "задаток " + M(20_000) in page
+    assert "Калужская обл., Малоярославецкий р-н" in page
+    assert "Проверить рынок руками" not in page
+    with session() as db:
+        saved = db.scalars(select(User).where(User.is_admin)).first().hot_criteria
+    assert saved == {"annual": "100", "cap": "2000000", "days": "3", "top": "5", "region": "all"}
+    # без параметров — те же критерии, что в прошлый раз
+    again = client.get("/tools/torgi-hot").text
+    assert "Показано 5 из 12" in again and '<option value="5" selected>' in again
+    # лимит ниже ожидаемой цены входа — пусто, и видно, какое условие сняло лоты
+    capped = client.get("/tools/torgi-hot?annual=100&cap=140000&days=3").text
+    assert "не попадает ни один лот" in capped
+    # рынок вшестеро выше старта — не подарок, а повод проверить цену
+    client.post("/tools/torgi-market", data={**market, "price_mid": "60000"})
+    page = client.get("/tools/torgi-hot?annual=100&cap=2000000&days=3").text
+    assert "Проверить рынок руками: 12" in page and "в 6 раз выше старта" in page
+    assert "не попадает ни один лот" in page
+    # один регион
+    assert "не попадает ни один лот" in client.get("/tools/torgi-hot?region=10").text
+
+
 def test_resume_after_restart_rotates_the_queue(client, monkeypatch):  # noqa: F811
     """Прод, 18.11.2026: выкладки шли чаще, чем длится проход большого региона, очередь каждый
     раз поднималась с него же, и три региона за ним простояли весь день. После рестарта первым

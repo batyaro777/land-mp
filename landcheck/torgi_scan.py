@@ -230,6 +230,21 @@ def in_market(lot: dict[str, Any]) -> bool:
     return lot.get("bidd_type") in MARKET_TYPES
 
 
+# Лесные участки и лесные насаждения (200-ФЗ) — не земля под перепродажу: в лоте право рубки
+# или аренда леса. Цена соседних участков к ним не относится (прод, 19.11.2026: «лесные
+# насаждения» 21 га за 125 тыс. ₽ давали 58 730 % годовых; зум 18.11, 01:12 — 2 382 % у
+# лесничества). Доходность по ним не считаем, в списке лотов они скрыты, пока не попросят.
+FOREST_TYPE = "200FZ"
+FOREST_TEXT = (
+    "лесной участок или лесные насаждения (200-ФЗ): это право рубки или аренда леса, а не земля "
+    "под перепродажу — доходность не считаем"
+)
+
+
+def is_forest(lot: dict[str, Any]) -> bool:
+    return lot.get("bidd_type") == FOREST_TYPE
+
+
 def bidd_label(lot: dict[str, Any]) -> str:
     """Короткая подпись вида торгов для таблицы: пусто у обычного земельного аукциона."""
     if is_notice(lot):
@@ -648,6 +663,7 @@ class ScanParams:
     kinds: tuple[str, ...] = ()
     groups: tuple[str, ...] = ()
     forms: str = "auction"  # что показывать: auction — торги, notice — извещения 39.18, all
+    forest: bool = False  # показывать лесные лоты (200-ФЗ); по умолчанию скрыты
     place: str | None = None  # район `40:13` или квартал `40:13:120101` (см. `place_of`)
     # начальная цена «от – до», как в реестре torgi.gov.ru (зум 13.11, 10:20)
     price_min: float | None = None
@@ -936,7 +952,12 @@ def score_lot(
     if start and growth and growth > 1 and fought:
         expected = round(start * (1 + (growth - 1) * min(fought * 1.5, 1.0)))
 
-    mk = market_for(lot, stats, layer, p.market_markup, p.assign_ratio, near=near)
+    forest = is_forest(lot)
+    mk = (
+        None
+        if forest
+        else market_for(lot, stats, layer, p.market_markup, p.assign_ratio, near=near)
+    )
     sale = {"min": None, "mid": None, "max": None}
     if mk and area:
         for key in ("min", "mid", "max"):
@@ -1056,7 +1077,9 @@ def score_lot(
         reasons.append(NOTICE_TEXT)
     elif limit is None or not start:
         verdict = "unknown"
-        if not start:
+        if forest:
+            text = FOREST_TEXT
+        elif not start:
             text = "начальная цена не указана"
         elif lot.get("kind") == "rent":
             text = (
@@ -1204,11 +1227,14 @@ def scan(
     forms = {"auction": 0, "notice": 0}
     # что в выбранном месте отсеяли остальные фильтры — чтобы пустой список объяснял себя
     # (зум 13.11, 07:06–09:50: в квартале 11–13 лотов, а у нас «лотов нет»)
-    hidden = {"form": 0, "kind": 0, "group": 0, "area": 0, "price": 0}
+    hidden = {"form": 0, "kind": 0, "group": 0, "area": 0, "price": 0, "forest": 0}
     for lot in lots:
         if lot.get("status") not in ACTIVE:
             continue
         if p.place and not in_place(lot, p.place):
+            continue
+        if is_forest(lot) and not p.forest:
+            hidden["forest"] += 1
             continue
         form = "notice" if is_notice(lot) else "auction"
         forms[form] += 1

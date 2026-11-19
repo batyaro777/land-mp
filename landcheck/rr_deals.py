@@ -54,6 +54,8 @@ MIN_QUARTER = 3  # столько сделок в квартале хватае�
 MIN_DISTRICT = 10  # в целом районе участки разнороднее — сделок нужно больше
 TRIM = 5.0  # цена за м² дальше медианы в пять раз — в расчёт не идёт
 MAX_SHOWN = 15
+# квартал дороже района во столько раз — выборка квартала несопоставима, берём район
+QUARTER_OVER_DISTRICT = 3.0
 # Версия разбора: файл, отклонённый этой версией, заново не качаем, пока она не сменится.
 PARSER_REV = 2
 
@@ -265,6 +267,56 @@ class DealIndex:
             self.periods.add(period)
 
 
+def _level_market(
+    level: str, rows: Iterable[tuple], need: int, lo: float, hi: float
+) -> dict[str, Any] | None:
+    """Оценка по сделкам одного уровня (квартал или район): три сценария за м² и подпись."""
+    pool = [r for r in rows if lo <= r[0] <= hi]
+    if sum(r[2] for r in pool) < need:
+        return None
+    med = _wquantile([(r[1], r[2]) for r in pool], 0.5)
+    kept = [r for r in pool if med / TRIM <= r[1] <= med * TRIM]
+    n = sum(r[2] for r in kept)
+    if n < need:
+        return None
+    pairs = [(r[1], r[2]) for r in kept]
+    periods = sorted({r[3] for r in kept})
+    span = period_label(periods[0])
+    if len(periods) > 1:
+        span += " – " + period_label(periods[-1])
+    where = "квартал" if level == "quarter" else "район"
+    note = (
+        "та же группа назначения, площадь от 1/5 до 5 площадей лота; цена в договоре "
+        "бывает занижена, среди сделок есть льготный выкуп у муниципалитета — это скорее "
+        "нижняя граница рынка"
+    )
+    dropped = sum(r[2] for r in pool) - n
+    if dropped:
+        note += f"; не учтено сделок с ценой дальше медианы в пять раз: {dropped}"
+    return {
+        "min_m2": _wquantile(pairs, 0.25),
+        "mid_m2": _wquantile(pairs, 0.5),
+        "max_m2": _wquantile(pairs, 0.75),
+        "source": "rr",
+        "source_label": f"сделки Росреестра: {where}, {n} за {span}",
+        # квартал — свой микрорайон или село; район мешает сёла с райцентром
+        "confidence": 2 if level == "quarter" else 1,
+        "exposure_days": None,
+        "liquid": None,
+        "note": note,
+        "deals_n": n,
+        "deals_lo_m2": min(p for p, _ in pairs),
+        "deals_hi_m2": max(p for p, _ in pairs),
+        "deals_level": level,
+        "deals_span": span,
+        # для карточки лота: сами сделки, свежие первыми
+        "deals": [
+            {"period": period_label(r[3]), "area_m2": r[0], "pps": r[1] * 100, "n": r[2]}
+            for r in sorted(kept, key=lambda r: (r[3], r[1]), reverse=True)[:MAX_SHOWN]
+        ],
+    }
+
+
 def deals_market(lot: dict[str, Any], index: DealIndex | None) -> dict[str, Any] | None:
     """Цена перепродажи лота по зарегистрированным сделкам — в том виде, какой ждёт
     `torgi_scan.market_for`: три сценария за м² (25 %, медиана, 75 % по сделкам) и подпись.
@@ -272,11 +324,39 @@ def deals_market(lot: dict[str, Any], index: DealIndex | None) -> dict[str, Any]
     Сопоставимые сделки: та же группа назначения, площадь участка от 1/5 до 5 площадей лота.
     Сначала свой кадастровый квартал (не меньше `MIN_QUARTER` сделок), потом район (не меньше
     `MIN_DISTRICT`). Цены дальше медианы в пять раз отбрасываются: это описки и символические
-    суммы. Лот с назначением «прочее» не оцениваем — в этой группе участки несравнимы."""
+    суммы. Лот с назначением «прочее» не оцениваем — в этой группе участки несравнимы.
+
+    Квартал, где сделки дороже района больше чем в `QUARTER_OVER_DISTRICT` раз, за рынок не
+    берём (прод, 19.11.2026: старт лота 87 тыс. ₽ за сотку, «рынок» по пяти сделкам квартала —
+    3,49 млн; такие лоты занимали весь верх списка по доходности). Берём район, квартал
+    остаётся рядом как справка (`quarter_ref`)."""
     key = quarter_key(lot.get("quarter"))
     area, group = lot.get("area_m2"), lot.get("vri_group")
     if index is None or not index.size or key is None or not area or group in (None, "other"):
         return None
+    district = f"{key[0]}:{key[1]}"
+    lo, hi = area / AREA_BAND, area * AREA_BAND
+    own = _level_market(
+        "quarter", index.by_quarter.get((district, key[2], group), ()), MIN_QUARTER, lo, hi
+    )
+    wide = _level_market(
+        "district", index.by_district.get((district, group), ()), MIN_DISTRICT, lo, hi
+    )
+    if own is None:
+        return wide
+    if wide is None:
+        return own
+    ratio = own["mid_m2"] / wide["mid_m2"] if wide["mid_m2"] else None
+    if ratio is not None and ratio > QUARTER_OVER_DISTRICT:
+        ref = {"mid_m2": own["mid_m2"], "n": own["deals_n"], "ratio": round(ratio, 1)}
+        wide["quarter_ref"] = ref
+        wide["note"] += (
+            f"; в самом квартале {own['deals_n']} сдел. по цене в {ratio:.1f} раза выше района — "
+            "такой разрыв чаще говорит о несопоставимых участках, поэтому взят район"
+        )
+        return wide
+    own["district_mid_m2"] = wide["mid_m2"]
+    return own
     district = f"{key[0]}:{key[1]}"
     lo, hi = area / AREA_BAND, area * AREA_BAND
     for level, rows, need in (

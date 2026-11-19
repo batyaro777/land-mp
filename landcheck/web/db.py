@@ -105,6 +105,9 @@ class User(Base):
     # Инструменты торгов (анализатор, калькулятор, ликвидность) — команде без прав
     # администратора: включает админ на странице пользователей (решение зума 09.11).
     pro_tools: Mapped[bool] = mapped_column(default=False, server_default="0")
+    # «Горячие предложения»: критерии отбора, с которыми пользователь смотрел список в прошлый
+    # раз (ТЗ v5, зум 18.11.2026) — по ним же пойдёт утренняя сводка.
+    hot_criteria: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     # Физлицо или юрлицо/ИП (зум 09.11, Влад: «сначала кто ты, потом роль»): у организации —
     # вид деятельности и ИНН (необязательный).
     entity: Mapped[str] = mapped_column(String(8), default="person", server_default="person")
@@ -650,6 +653,7 @@ _NEW_COLUMNS: dict[str, dict[str, str]] = {
         "test_mode": "BOOLEAN NOT NULL DEFAULT 0",
         "region": "VARCHAR(120)",
         "pro_tools": "BOOLEAN NOT NULL DEFAULT 0",
+        "hot_criteria": "JSON",
         "entity": "VARCHAR(8) NOT NULL DEFAULT 'person'",
         "org_kind": "VARCHAR(16)",
         "inn": "VARCHAR(12)",

@@ -153,6 +153,12 @@ table.torgi td.num div.small { white-space: normal; max-width: 9.5rem; margin-le
 table.torgi td, table.torgi th { padding-left: 0.45rem; padding-right: 0.45rem; }
 table.torgi .reasons { min-width: 200px; max-width: 340px; }
 table.torgi tr.hl td { background: rgba(46, 117, 182, 0.12); }
+table.hot td.cad { min-width: 240px; max-width: 330px; }
+table.hot td.num div.nw { white-space: nowrap; max-width: none; }
+table.hot .reasons { min-width: 200px; max-width: 320px; }
+.nw { white-space: nowrap; }
+details.hot-funnel { margin-top: 0.8rem; }
+details.hot-funnel table { max-width: 46rem; }
 table.torgi .reasons li, ul.checklist li:has(.dot) { list-style: none; }
 table.results.econ { max-width: 760px; }
 table.results.econ td, table.results.econ th { padding: 0.35em 0.6em; }

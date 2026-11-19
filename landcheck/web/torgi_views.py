@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Resp
 from sqlalchemy import event, select
 from sqlalchemy.orm import Session
 
-from landcheck import ads_api, rr_deals, ruproxy, torgi, torgi_calc, torgi_scan
+from landcheck import ads_api, rr_deals, ruproxy, torgi, torgi_calc, torgi_hot, torgi_scan
 from landcheck.models import Purpose
 from landcheck.models import Request as CheckRequest
 from landcheck.regions import CADASTRAL_REGIONS
@@ -171,6 +171,7 @@ def _scan_params(q) -> torgi_scan.ScanParams:
     p.groups = tuple(groups)
     if q.get("form") in ("notice", "all"):
         p.forms = q.get("form")
+    p.forest = q.get("forest") == "1"
     p.place, _ = torgi_scan.place_of(q.get("d"))
     if q.get("assign") not in (None, ""):
         ratio = torgi_calc._pct(q.get("assign"), 0.0)
@@ -483,9 +484,101 @@ def torgi_scan_page(request: Request, user: TorgiDep, page: int = 1):
         qs=_query(q, region=region),
         qs_nosort=_query(q, region=region, sort=None),
         qs_form=_query(q, region=region, form=None),
+        qs_noforest=_query(q, region=region, forest=None),
         bidd_short=torgi_scan.BIDD_TYPE_SHORT,
         today=datetime.now(UTC).date().isoformat(),
         **ctx,
+    )
+
+
+# --- горячие предложения (ТЗ v5, зум 18.11.2026) -------------------------------------------
+HOT_KEYS = ("annual", "cap", "days", "kind", "region", "top", "profit", "extra", "assign")
+HOT_CAPS = (1_000_000, 2_000_000, 3_000_000, 5_000_000)
+HOT_CHECK_ROWS = 50  # столько лотов показываем в списке «Проверить рынок руками»
+
+
+def _hot_criteria(q, user: User) -> tuple[dict[str, str], bool]:
+    """Критерии «горячих» и признак, что их только что задали. Из адреса страницы, а если
+    там их нет — те, с которыми пользователь смотрел список в прошлый раз."""
+    if any(k in q for k in HOT_KEYS):
+        return {k: (q.get(k) or "").strip() for k in HOT_KEYS if (q.get(k) or "").strip()}, True
+    return {k: str(v) for k, v in (user.hot_criteria or {}).items() if k in HOT_KEYS}, False
+
+
+def _hot_params(c: dict[str, str]) -> tuple[torgi_hot.HotParams, torgi_scan.ScanParams]:
+    hp, sp = torgi_hot.HotParams(), torgi_scan.ScanParams()
+    annual = _num(c.get("annual"))
+    if annual is not None:
+        hp.min_annual = min(annual, 10_000.0) / 100
+    cap = _num(c.get("cap"))
+    if cap is not None:
+        hp.price_cap = _rub(cap)  # 0 — без лимита
+    days = _num(c.get("days"))
+    if days is not None:
+        hp.min_days = int(min(days, 90))
+    if c.get("kind") in torgi_scan.KIND_RU:
+        hp.kinds = (c["kind"],)
+    top = _num(c.get("top"))
+    if top is not None and int(top) in torgi_hot.TOPS:
+        hp.top = int(top)
+    hp.min_profit = _rub(_num(c.get("profit")))
+    sp.extra = _num(c.get("extra")) or 0.0
+    if c.get("assign"):
+        ratio = torgi_calc._pct(c.get("assign"), 0.0)
+        sp.assign_ratio = min(ratio, 2.0) if ratio > 0 else None
+    return hp, sp
+
+
+@router.get("/tools/torgi-hot", response_class=HTMLResponse)
+def torgi_hot_page(request: Request, user: TorgiDep):
+    """«Горячие предложения»: идущие лоты, которые проходят критерии «заходим», лучшие
+    первыми, и отдельно — лоты, у которых цена рынка не прошла сверку."""
+    crit, fresh = _hot_criteria(request.query_params, user)
+    if fresh and crit != (user.hot_criteria or {}):
+        with session() as db:
+            u = db.get(User, user.id)
+            if u is not None:
+                u.hot_criteria = crit
+                db.commit()
+    hp, sp = _hot_params(crit)
+    region = _region_code(crit.get("region")) if not _is_all(crit.get("region")) else None
+    result, names = _region_scan(region, sp) if region else _scan_all(sp)
+    res = torgi_hot.select(result["rows"], sp, hp)
+    shown = res["hot"][: hp.top]
+    passed = len(res["hot"]) + len(res["weak"])
+    check = res["check"][:HOT_CHECK_ROWS]
+    # обременения — у всех, кто прошёл отбор: без них лот не поднимется в класс A
+    queued = torgi_zones.start_fill(
+        [i["row"]["id"] for i in res["hot"] + res["weak"] + check if i["zones"][0] == "unknown"]
+    )
+    lot_qs = urlencode(
+        {k: v for k, v in (("extra", crit.get("extra")), ("assign", crit.get("assign"))) if v}
+    )
+    return render(
+        request,
+        "torgi_hot.html",
+        user=user,
+        res=res,
+        shown=shown,
+        check=check,
+        hp=hp,
+        sp=sp,
+        crit=crit,
+        caps=HOT_CAPS,
+        tops=torgi_hot.TOPS,
+        region=region or ALL_REGIONS,
+        region_label=CADASTRAL_REGIONS.get(region or "", ALL_REGIONS_LABEL),
+        synced=_synced_regions(),
+        region_names=CADASTRAL_REGIONS,
+        names=names,
+        kinds=torgi_scan.KIND_RU,
+        groups=torgi_scan.GROUPS,
+        zones_queued=queued or torgi_zones.queued(),
+        lot_qs=lot_qs,
+        img_base=torgi.FILE_URL.format(file_id=""),
+        check_ratio=torgi_hot.START_RATIO,
+        # подсказка «при пороге ниже пройдёт N» — только там, где лотов станет больше
+        more_at=[(lvl, n) for lvl, n in res["relaxed"].items() if n > passed],
     )
 
 

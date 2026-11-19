@@ -1,5 +1,6 @@
 {# Навигация раздела «Торги» и выбор региона #}
 <nav class="torgi-nav no-print">
+  <a href="/tools/torgi-hot" class="{{ 'active' if tab == 'hot' else '' }}">Горячие</a>
   <a href="/tools/torgi-scan{% if region %}?region={{ region }}{% endif %}" class="{{ 'active' if tab == 'scan' else '' }}">Лоты</a>
   <a href="/tools/torgi-liquidity{% if region and region != 'all' %}?region={{ region }}{% endif %}" class="{{ 'active' if tab == 'liquidity' else '' }}">Ликвидность и рынок</a>
   <a href="/tools/torgi-history{% if region and region != 'all' %}?region={{ region }}{% endif %}" class="{{ 'active' if tab == 'history' else '' }}">Завершённые</a>
