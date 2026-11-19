@@ -159,6 +159,8 @@ def start_warm_loop(*, first_delay_s: float = 20.0, period_s: float = 180.0):
                 t0 = time.monotonic()
                 torgi_views._scan_all(torgi_scan.ScanParams())
                 took = time.monotonic() - t0
+                # проверка на завершённых торгах: по ней же собирается «вернутся на торги»
+                torgi_views.backtest_start(torgi_views._synced_regions())
                 if took > 5:
                     log.info("горячие: расчёт всех регионов прогрет за %.1f с", took)
             except Exception as exc:  # noqa: BLE001 — прогрев не должен ронять сервер
@@ -227,9 +229,10 @@ def _lot_line(n: int, item: dict[str, Any], names: dict[str, str], base: str) ->
 
 def build_digest(
     user_id: int, crit: dict[str, Any], state: dict[str, Any] | None
-) -> tuple[str | None, list[str]]:
-    """Текст сводки и лоты, которые теперь считаются показанными. Текста нет (None), когда
-    нет ни новых лотов, ни лотов «в работе» с близким сроком."""
+) -> tuple[str | None, dict[str, Any]]:
+    """Текст сводки и новое состояние: какие лоты теперь считаются показанными (`seen`) и за
+    какими участками без заявок следим (`returning`). Текста нет (None), когда нет ни новых
+    лотов, ни лотов «в работе» с близким сроком, ни участков, вернувшихся на торги."""
     from landcheck.web import torgi_views as tv
 
     hp, sp = tv._hot_params(crit)
@@ -254,8 +257,17 @@ def build_digest(
     due.sort(key=lambda x: x[0])
     # показанными считаем то, что уже показывали и что ещё идёт, плюс сегодняшние
     kept = [i for i in hot_ids if i in seen] + [i["row"]["id"] for i in fresh]
-    if not fresh and not due:
-        return None, kept
+    # участки, за которыми следили после торгов без заявок, снова выставлены
+    watched = set((state or {}).get("returning") or [])
+    back = [r for r in result["rows"] if r.get("cad_num") in watched]
+    ready = tv.backtest_ready([region] if region else None)
+    now_watch = sorted(
+        {x["cad_num"] for raw in ready.values() for x in raw.get("returning", [])}
+        | (watched - {r["cad_num"] for r in back} if not ready else set())
+    )
+    new_state = {"seen": kept[-500:], "returning": now_watch[:1000]}
+    if not fresh and not due and not back:
+        return None, new_state
     base = settings.base_url or ""
     lines: list[str] = []
     if fresh:
@@ -271,7 +283,17 @@ def build_digest(
                 f"• {row.get('cad_num') or row['id']} — до "
                 f"{row['bidd_end'][8:10]}.{row['bidd_end'][5:7]}, {left}"
             )
-    return "\n".join(lines), kept
+    if back:
+        if lines:
+            lines.append("")
+        lines.append("Снова на торгах — участки, на которые раньше не было заявок:")
+        for row in back[:DIGEST_MAX]:
+            till = f"{row['bidd_end'][8:10]}.{row['bidd_end'][5:7]}" if row.get("bidd_end") else "—"
+            lines.append(
+                f"• {row['cad_num']} — старт {torgi_calc.rub(row.get('price_start') or 0)}, "
+                f"заявки до {till}\n{base}/tools/torgi-lot/{row['id']}/invest"
+            )
+    return "\n".join(lines), new_state
 
 
 def run_digests(now: datetime | None = None) -> int:
@@ -288,7 +310,7 @@ def run_digests(now: datetime | None = None) -> int:
         if day is None:
             continue
         try:
-            text, kept = build_digest(user_id, crit, state)
+            text, new_state = build_digest(user_id, crit, state)
         except Exception as exc:  # noqa: BLE001 — сбой одного пользователя не мешает остальным
             log.warning("torgi hot digest for user %s: %s", user_id, exc)
             continue
@@ -296,7 +318,7 @@ def run_digests(now: datetime | None = None) -> int:
             user = db.get(User, user_id)
             if user is None:
                 continue
-            user.hot_digest = {"day": day, "seen": kept[-500:]}
+            user.hot_digest = {"day": day, **new_state}
             if text:
                 notify.notify(db, user_id, "hot", text, "/tools/torgi-hot")
                 sent += 1

@@ -1353,6 +1353,56 @@ def test_candidate_cards_are_read_out_of_turn(client):  # noqa: F811
     assert hj.start_digest_loop() is None
 
 
+def test_backtest_page_returning_list_and_lot_back_on_auction(client):  # noqa: F811
+    """ТЗ v5, п. 8 и п. 5: проверка модели на завершённых торгах, список участков без заявок,
+    которые вернутся на торги, и сообщение, когда такой участок выставили снова."""
+    from landcheck.web import torgi_hotjobs as hj
+    from landcheck.web.db import Notification, TorgiLot, User, session
+
+    _hot_ready(client)
+    recent = (datetime.now(UTC).date() - timedelta(days=10)).isoformat()
+    with session() as db:
+        for lot in db.scalars(select(TorgiLot).where(TorgiLot.status == "FAILED")):
+            lot.auction_date = recent
+        db.commit()
+    page = client.get("/tools/torgi-backtest").text
+    assert "Насколько точна модель" in page and "Все посчитанные регионы: 1 из 1" in page
+    # 15 состоявшихся и 6 не состоявшихся (три — одному участнику, три — без заявок)
+    assert "21: с борьбой 15, одному участнику 3, без заявок 3" in page
+    assert "Прошли бы в «горячие» — <strong>21</strong>" in page
+    assert "без единой заявки 3 (14 %)" in page
+    # ждали вход по 150 тыс.: с борьбой купили ровно за столько, без борьбы — по старту
+    assert "×1,00" in page and "100 %" in page and ">Точность модели</a>" in page
+    hot = client.get("/tools/torgi-hot?annual=100&cap=2000000&days=3&top=5&dg=1&dh=9&dz=7").text
+    assert "Вернутся на торги: 3 участк." in hot and "скорее всего без борьбы" not in hot
+    assert "обычно с борьбой" in hot
+    # сводка запоминает, за какими участками следим
+    morning = datetime(2026, 11, 20, 2, 30, tzinfo=UTC)
+    assert hj.run_digests(morning) == 1
+    with session() as db:
+        user = db.scalars(select(User).where(User.is_admin)).first()
+        watched = user.hot_digest["returning"]
+        uid = user.id
+        assert len(watched) == 3
+        # один из них выставили снова
+        db.get(TorgiLot, "ACT_11").cad_num = watched[0]
+        db.commit()
+    client.post("/tools/torgi-market", data={"scope": "40:13", "price_mid": "45001"})  # сброс кэша
+    assert hj.run_digests(morning + timedelta(days=1)) == 1
+    with session() as db:
+        text = (
+            db.scalars(
+                select(Notification)
+                .where(Notification.user_id == uid)
+                .order_by(Notification.id.desc())
+            )
+            .first()
+            .text
+        )
+    assert "Снова на торгах — участки, на которые раньше не было заявок:" in text
+    assert watched[0] in text and "/tools/torgi-lot/ACT_11/invest" in text
+
+
 def test_resume_after_restart_rotates_the_queue(client, monkeypatch):  # noqa: F811
     """Прод, 18.11.2026: выкладки шли чаще, чем длится проход большого региона, очередь каждый
     раз поднималась с него же, и три региона за ним простояли весь день. После рестарта первым

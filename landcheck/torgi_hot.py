@@ -15,7 +15,10 @@
 
 from __future__ import annotations
 
+import statistics
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from landcheck import torgi_calc, torgi_scan
@@ -277,7 +280,40 @@ def item_of(
     }
     stop = _passes(item, params, params.min_annual)
     item["stop"] = stop or ("price" if fail else None)
+    item["comp"] = competition(row)
     return item
+
+
+CALM_SHARE = 0.6  # доля торгов места без борьбы, с которой ждём покупку по старту
+CALM_MIN = 5  # меньше завершённых торгов в месте — о конкуренции не судим
+
+
+def competition(row: dict[str, Any]) -> dict[str, Any] | None:
+    """Чем кончались торги в месте лота (квартал, а если там мало торгов — район) и что из
+    этого следует. Числа заявок у идущего лота площадка не публикует (проверено на проде
+    19.11.2026), поэтому конкуренцию оцениваем по истории (Антон, зум 18.11, 01:01: «есть
+    участки, которые забирают без конкуренции»)."""
+    q = row["s"]["liquidity"]
+    closed = q.get("closed") or 0
+    if closed < CALM_MIN:
+        return None
+    sold, single, none = q.get("sold") or 0, q.get("single") or 0, q.get("none") or 0
+    quiet = (single + none) / closed
+    if quiet >= CALM_SHARE:
+        level, text = "calm", "скорее всего без борьбы"
+    elif sold / closed >= CALM_SHARE:
+        level, text = "fight", "обычно с борьбой"
+    else:
+        level, text = "mixed", "бывает по-разному"
+    where = "квартале" if q.get("where") == "квартал" else "районе"
+    return {
+        "level": level,
+        "text": text,
+        "detail": (
+            f"в этом {where} {closed} торгов за год: с борьбой {sold}, одному участнику "
+            f"{single}, без заявок {none}"
+        ),
+    }
 
 
 STEP_RU = {
@@ -357,4 +393,203 @@ def select(
         ],
         "relaxed": relaxed,
         "classes": {c: sum(1 for i in passed if i["cls"] == c) for c in "ABC"},
+    }
+
+
+# --- проверка модели на завершённых торгах (ТЗ v5, п. 8) ---------------------------------------
+RETURN_DAYS = 183  # «вернутся на торги»: участки без заявок за последние полгода
+RETURN_MAX = 60  # столько строк списка храним на регион
+ACCURACY_BAND = 0.3  # ожидаемая цена «попала», если отличается от итоговой не больше чем на 30 %
+
+
+def _lot_day(lot: dict[str, Any]) -> str:
+    return lot.get("auction_date") or lot.get("bidd_end") or lot.get("published") or ""
+
+
+def backtest(
+    lots: list[dict[str, Any]],
+    scan_params: torgi_scan.ScanParams | None = None,
+    params: HotParams | None = None,
+    *,
+    layer: list[dict[str, Any]] | None = None,
+    near_fn: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
+    today: date | None = None,
+) -> dict[str, Any]:
+    """Проверка модели на завершённых земельных аукционах продажи: каждый лот оцениваем так,
+    как если бы он шёл сейчас, и сравниваем с тем, чем торги кончились.
+
+    Что проверяется: прошёл бы лот в «горячие», как ожидаемая цена победителя соотносится с
+    итоговой, сколько таких лотов ушло одному участнику и осталось без заявок, какой вышла
+    бы доходность при фактической цене входа. Чего проверить нельзя: цену, по которой
+    победитель потом продал участок, — сторона продажи остаётся расчётной. Оценка слегка
+    оптимистична: итог самого лота входит в статистику роста цены его места.
+
+    Возвращает сырые счётчики и выборки (их складывают по регионам, см. `merge_backtests`):
+    `relist` — во сколько раз менялся старт, когда участок выставляли снова после торгов без
+    результата; `returning` — участки без заявок за последние полгода, которые сейчас не на
+    торгах и прошли бы отбор."""
+    sp = scan_params or torgi_scan.ScanParams()
+    hp = params or HotParams()
+    today = today or datetime.now(UTC).date()
+    stats = torgi_scan.index_by(lots)
+    virtual_end = (today + timedelta(days=30)).isoformat()
+    recent = (today - timedelta(days=RETURN_DAYS)).isoformat()
+    active_cads = {lot.get("cad_num") for lot in lots if lot.get("status") in torgi_scan.ACTIVE}
+    raw: dict[str, Any] = {
+        "lots": 0,
+        "outcomes": {"sold": 0, "single": 0, "none": 0},
+        "priced": 0,
+        "check": 0,
+        "hot": 0,
+        "hot_outcomes": {"sold": 0, "single": 0, "none": 0},
+        "hot_ratio": [],  # итоговая цена к ожидаемой у «горячих», которые кто-то купил
+        "hot_within_cutoff": 0,  # из них: итоговая цена не выше цены отсечения
+        "hot_annual": [],  # годовых при фактической цене входа
+        "all_ratio": [],  # итоговая цена к ожидаемой у всех торгов с борьбой и ценой рынка
+        "relist": [],
+        "returning": [],
+    }
+    by_cad: dict[str, list[dict[str, Any]]] = {}
+    for lot in lots:
+        if (
+            torgi_scan.is_notice(lot)
+            or not torgi_scan.in_market(lot)
+            or lot.get("kind") != "sale"
+            or not lot.get("price_start")
+            or not lot.get("area_m2")
+        ):
+            continue
+        if lot.get("cad_num"):
+            by_cad.setdefault(lot["cad_num"], []).append(lot)
+        outcome = torgi_scan._outcome(lot)
+        if outcome not in raw["outcomes"]:
+            continue
+        raw["lots"] += 1
+        raw["outcomes"][outcome] += 1
+        virt = {**lot, "status": "APPLICATIONS_SUBMISSION", "bidd_end": virtual_end}
+        s = torgi_scan.score_lot(
+            virt, stats, sp, layer=layer, today=today, near=near_fn(virt) if near_fn else None
+        )
+        if not s.get("market_based"):
+            continue
+        raw["priced"] += 1
+        item = item_of({**virt, "s": s}, sp, hp)
+        expected = item["sc"]["expected"]
+        start, fin = lot["price_start"], lot.get("price_fin")
+        # единственный участник по закону покупает по начальной цене
+        actual = (fin or None) if outcome == "sold" else start if outcome == "single" else None
+        if outcome == "sold" and actual and expected:
+            raw["all_ratio"].append(round(actual / expected["entry"], 3))
+        if item["stop"] == "price":
+            raw["check"] += 1
+        if item["stop"] is not None:
+            continue
+        raw["hot"] += 1
+        raw["hot_outcomes"][outcome] += 1
+        if actual and expected:
+            raw["hot_ratio"].append(round(actual / expected["entry"], 3))
+            if item["cutoff"] and actual <= item["cutoff"]:
+                raw["hot_within_cutoff"] += 1
+            real = _one(actual, expected["sale"], item["sc"]["hold"], sp.extra, sp.tax)
+            if real and real["annual"] is not None:
+                raw["hot_annual"].append(real["annual"])
+        if (
+            outcome == "none"
+            and _lot_day(lot) >= recent
+            and lot.get("cad_num")
+            and lot["cad_num"] not in active_cads
+        ):
+            raw["returning"].append(
+                {
+                    "id": lot["id"],
+                    "cad_num": lot["cad_num"],
+                    "region": lot.get("region"),
+                    "district": lot.get("district"),
+                    "address": lot.get("address"),
+                    "area_m2": lot["area_m2"],
+                    "vri_group": lot.get("vri_group"),
+                    "day": _lot_day(lot),
+                    "price_start": start,
+                    "sale_sotka": s["sale_sotka"].get("mid"),
+                    "source": (s.get("market") or {}).get("source_label"),
+                    "annual": item["sc"]["alone"]["annual"] if item["sc"]["alone"] else None,
+                    "cls": item["cls"],
+                }
+            )
+    for attempts in by_cad.values():
+        if len(attempts) < 2:
+            continue
+        attempts.sort(key=_lot_day)
+        for prev, nxt in zip(attempts, attempts[1:], strict=False):
+            if torgi_scan._outcome(prev) in ("none", "failed", "canceled") and _lot_day(nxt) > (
+                _lot_day(prev)
+            ):
+                raw["relist"].append(round(nxt["price_start"] / prev["price_start"], 3))
+    raw["returning"].sort(key=lambda x: -(x["annual"] or 0))
+    raw["returning"] = raw["returning"][:RETURN_MAX]
+    return raw
+
+
+def merge_backtests(raws: list[dict[str, Any]]) -> dict[str, Any]:
+    """Сложить сырые итоги нескольких регионов в один."""
+    out: dict[str, Any] = {}
+    for raw in raws:
+        for key, value in raw.items():
+            if isinstance(value, dict):
+                box = out.setdefault(key, {})
+                for k, v in value.items():
+                    box[k] = box.get(k, 0) + v
+            elif isinstance(value, list):
+                out.setdefault(key, []).extend(value)
+            else:
+                out[key] = out.get(key, 0) + value
+    if out.get("returning"):
+        out["returning"] = sorted(out["returning"], key=lambda x: -(x["annual"] or 0))
+    return out
+
+
+def _share(part: int, whole: int) -> float | None:
+    return round(part / whole, 3) if whole else None
+
+
+def backtest_summary(raw: dict[str, Any], min_annual: float = 1.0) -> dict[str, Any]:
+    """Цифры для страницы «Насколько точна модель» из сырых итогов `backtest`."""
+
+    def spread(values: list[float]) -> dict[str, Any]:
+        if not values:
+            return {"n": 0, "median": None, "within": None, "low": None, "high": None}
+        ordered = sorted(values)
+        return {
+            "n": len(ordered),
+            "median": round(statistics.median(ordered), 2),
+            "low": round(ordered[len(ordered) // 4], 2),
+            "high": round(ordered[(len(ordered) * 3) // 4], 2),
+            "within": _share(sum(1 for v in ordered if abs(v - 1) <= ACCURACY_BAND), len(ordered)),
+        }
+
+    hot, ho = raw.get("hot", 0), raw.get("hot_outcomes", {})
+    bought = ho.get("sold", 0) + ho.get("single", 0)
+    annual = raw.get("hot_annual", [])
+    relist = raw.get("relist", [])
+    return {
+        "lots": raw.get("lots", 0),
+        "outcomes": raw.get("outcomes", {}),
+        "priced": raw.get("priced", 0),
+        "check": raw.get("check", 0),
+        "hot": hot,
+        "hot_outcomes": ho,
+        "hot_single_share": _share(ho.get("single", 0), hot),
+        "hot_none_share": _share(ho.get("none", 0), hot),
+        "hot_sold_share": _share(ho.get("sold", 0), hot),
+        "hot_bought": bought,
+        "hot_ratio": spread(raw.get("hot_ratio", [])),
+        "hot_within_cutoff": _share(raw.get("hot_within_cutoff", 0), bought),
+        "hot_annual_median": round(statistics.median(annual), 2) if annual else None,
+        "hot_annual_ok": _share(sum(1 for v in annual if v >= min_annual), len(annual)),
+        "all_ratio": spread(raw.get("all_ratio", [])),
+        "relist_n": len(relist),
+        "relist_median": round(statistics.median(relist), 2) if relist else None,
+        "relist_lower": _share(sum(1 for v in relist if v < 0.99), len(relist)),
+        "relist_same": _share(sum(1 for v in relist if 0.99 <= v <= 1.01), len(relist)),
+        "returning": len(raw.get("returning", [])),
     }

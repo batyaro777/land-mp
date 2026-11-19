@@ -123,7 +123,7 @@
     <td class="num">{{ r.price_start|money }}{% if s.start_sotka %}<div class="small muted nw">{{ s.start_sotka|money }}/сот.</div>{% endif %}<div class="small muted nw">{% if r.deposit %}задаток {{ r.deposit|money }}{% elif not r.card %}задаток: карточка читается{% else %}задаток не указан{% endif %}</div></td>
     <td class="num small">{% if r.bidd_end %}{{ r.bidd_end[8:10] }}.{{ r.bidd_end[5:7] }}{% endif %}<div class="{{ 'err' if s.days_left < 5 else 'muted' }}">{{ s.days_left }} дн.</div></td>
     <td class="num">{{ s.sale_sotka.mid|money }}<div class="small muted" title="{{ s.market.note or '' }}">{{ s.market.source_label }}</div>{% if s.sale_sotka.min and s.sale_sotka.max and s.sale_sotka.min != s.sale_sotka.max %}<div class="small muted nw">{{ s.sale_sotka.min|money }} – {{ s.sale_sotka.max|money }}</div>{% endif %}</td>
-    <td class="num">{{ e.entry|money }}{% if e.entry != r.price_start %}<div class="small muted nw">старт × {{ (e.entry / r.price_start)|round(2) }}</div>{% endif %}<div class="small nw"><strong>до {{ i.cutoff|money if i.cutoff else '—' }}</strong></div></td>
+    <td class="num">{{ e.entry|money }}{% if e.entry != r.price_start %}<div class="small muted nw">старт × {{ (e.entry / r.price_start)|round(2) }}</div>{% endif %}<div class="small nw"><strong>до {{ i.cutoff|money if i.cutoff else '—' }}</strong></div>{% if i.comp %}<div class="small {{ 'ok-msg' if i.comp.level == 'calm' else 'muted' }}" title="{{ i.comp.detail }}">{{ i.comp.text }}</div>{% endif %}{% if s.repeats %}<div class="small warn" title="Участок уже выставляли без результата">повторные торги</div>{% endif %}</td>
     <td class="num"><strong>{{ pct(e.annual) }} годовых</strong><div class="small nw">{{ e.profit|money }} за {{ i.sc.hold }} мес.</div><div class="small muted nw">без борьбы {{ pct(i.sc.alone.annual) }}</div><div class="small muted nw">осторожно {{ pct(i.sc.cautious.annual) }}</div></td>
     <td class="reasons small"><ul>
       {% for t in i.cls_why %}<li><span class="dot check"></span>{{ t }}</li>{% endfor %}
@@ -168,6 +168,30 @@
 {% endif %}
 </form>
 
+{% if returning %}
+<details class="small">
+  <summary>Вернутся на торги: {{ returning_n }} участк. — на них не подали заявок, а по цене они прошли бы отбор</summary>
+  <p class="muted">Торги по этим участкам не состоялись за последние полгода, сейчас они не выставлены. Если участок выставят снова, он появится в утренней сводке. Доходность — при покупке по прежней начальной цене.{% if returning_n > returning|length %} Показаны первые {{ returning|length }}.{% endif %}</p>
+  <table class="results torgi">
+    <thead><tr><th>Участок · адрес</th><th class="num">Площадь</th><th>Торги были</th><th class="num">Старт</th><th class="num">Рынок за сотку</th><th class="num">Годовых по старту</th></tr></thead>
+    <tbody>
+    {% for x in returning %}
+    <tr>
+      <td class="cad"><a href="/tools/torgi-lot/{{ x.id }}"><code>{{ x.cad_num }}</code></a><div class="small muted"><strong>{{ region_names.get(x.region, x.region) }}</strong>{% if x.address %} · {{ x.address|short_address }}{% endif %}</div></td>
+      <td class="num">{{ (x.area_m2 / 100)|round(1) }} сот.</td>
+      <td class="small">{{ x.day[8:10] }}.{{ x.day[5:7] }}.{{ x.day[:4] }}</td>
+      <td class="num">{{ x.price_start|money }}</td>
+      <td class="num">{{ x.sale_sotka|money if x.sale_sotka else '—' }}<div class="small muted">{{ x.source or '' }}</div></td>
+      <td class="num">{{ pct(x.annual) }} <span class="badge mini">{{ x.cls }}</span></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</details>
+{% elif backtest_pending %}
+<p class="small muted">Список «Вернутся на торги» собирается: считается история {{ backtest_pending }} регион. — обновите страницу через пару минут.</p>
+{% endif %}
+
 {% if check %}
 <h3>Проверить рынок руками: {{ check_n }}</h3>
 <p class="muted small">Эти лоты прошли бы отбор, но цене рынка по ним верить нельзя: она выше старта или кадастровой стоимости больше чем в {{ check_ratio|int }} раз. Обычно это несопоставимые сделки в выборке. Если по опыту цена верная — запишите её в слой рынка района, и лот перейдёт в основной список.{% if check_n > check|length %} Показаны первые {{ check|length }}.{% endif %}</p>
@@ -206,5 +230,5 @@
 </details>
 {% endif %}
 
-<p class="muted small">Как читать. «Годовых» — доходность после налога в пересчёте на год: срок до продажи принят {{ sp.hold_months }} мес., пока нет данных о скорости продажи в этом месте. «Цена отсечения» — выше неё на торгах идти не стоит: доходность упадёт ниже вашего порога. Лесные участки, имущество должников, изъятые участки и извещения по ст. 39.18 сюда не попадают. Число заявок у идущего лота площадка не публикует — конкуренция оценивается по истории торгов в этом месте.</p>
+<p class="muted small">Как читать. «Годовых» — доходность после налога в пересчёте на год: срок до продажи принят {{ sp.hold_months }} мес., пока нет данных о скорости продажи в этом месте. «Цена отсечения» — выше неё на торгах идти не стоит: доходность упадёт ниже вашего порога. Лесные участки, имущество должников, изъятые участки и извещения по ст. 39.18 сюда не попадают. Число заявок у идущего лота площадка не публикует — конкуренция оценивается по истории торгов в этом месте. Как модель показала себя на завершённых торгах — на вкладке <a href="/tools/torgi-backtest">«Точность модели»</a>.</p>
 {% endblock %}

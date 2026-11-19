@@ -133,7 +133,7 @@ window.addEventListener('load', function () {
 <h3>6. Конкуренция на торгах</h3>
 {% set q = s.liquidity %}
 {% if q.closed %}
-<p>За год в этом {{ 'квартале' if q.where == 'квартал' else 'районе' }} завершилось {{ q.closed }} земельных торгов: с борьбой — {{ q.sold or 0 }}, единственному участнику по начальной цене — {{ q.single or 0 }}, без единой заявки — {{ q.none or 0 }}.{% if q.growth %} Там, где была борьба, цена росла к старту в {{ q.growth|round(2) }} раза ({{ q.growth_where }}).{% endif %}{% if q.index is not none %} Индекс ликвидности места — {{ q.index }} из 100.{% endif %}</p>
+<p>За год в этом {{ 'квартале' if q.where == 'квартал' else 'районе' }} завершилось {{ q.closed }} земельных торгов: с борьбой — {{ q.sold or 0 }}, единственному участнику по начальной цене — {{ q.single or 0 }}, без единой заявки — {{ q.none or 0 }}.{% if q.growth %} Там, где была борьба, цена росла к старту в {{ q.growth|round(2) }} раза ({{ q.growth_where }}).{% endif %}{% if q.index is not none %} Индекс ликвидности места — {{ q.index }} из 100.{% endif %}{% if i.comp %} Вывод: <strong>{{ i.comp.text }}</strong>.{% endif %}</p>
 {% else %}
 <p class="muted">Завершённых торгов в этом месте мало — конкуренцию по истории не оценить.</p>
 {% endif %}

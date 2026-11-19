@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import statistics
 import tempfile
@@ -55,6 +56,7 @@ from landcheck.web.db import (
 )
 from landcheck.web.serialize import request_to_dict
 
+log = logging.getLogger(__name__)
 router = APIRouter()
 PAGE_ROWS = 150
 MAX_CHECK_LOTS = 30
@@ -519,6 +521,7 @@ HOT_KEYS = (
 )
 HOT_CAPS = (1_000_000, 2_000_000, 3_000_000, 5_000_000)
 HOT_CHECK_ROWS = 50  # столько лотов показываем в списке «Проверить рынок руками»
+RETURNING_ROWS = 30  # столько строк в списке «Вернутся на торги»
 
 
 def _hot_criteria(q, user: User) -> tuple[dict[str, str], bool]:
@@ -624,6 +627,10 @@ def torgi_hot_page(request: Request, user: TorgiDep):
         {k: v for k, v in (("extra", crit.get("extra")), ("assign", crit.get("assign"))) if v}
     )
     digest_on, digest_hour, digest_tz = torgi_hotjobs.digest_settings(crit)
+    # участки без заявок, которые прошли бы отбор и сейчас не на торгах: ждём повторных торгов
+    scope = [region] if region else _synced_regions()
+    backtest_start(scope)
+    returning = torgi_hot.merge_backtests(list(backtest_ready(scope).values())).get("returning", [])
     return render(
         request,
         "torgi_hot.html",
@@ -665,6 +672,9 @@ def torgi_hot_page(request: Request, user: TorgiDep):
         digest_on=digest_on,
         digest_hour=digest_hour,
         digest_tz=digest_tz,
+        returning=returning[:RETURNING_ROWS],
+        returning_n=len(returning),
+        backtest_pending=backtest_pending(),
         can_telegram=bool(settings.telegram_bot_token and user.telegram_chat_id),
         can_email=bool(settings.smtp_url and user.email and user.notify_email),
     )
@@ -704,6 +714,105 @@ async def torgi_mark(request: Request, user: TorgiDep, lot_id: str, mark: str):
     back = ref.path + (f"?{ref.query}" if ref.query else "")
     return RedirectResponse(
         back if ref.path.startswith("/tools/torgi") else "/tools/torgi-hot", status_code=303
+    )
+
+
+# --- проверка модели на завершённых торгах (ТЗ v5, п. 8) -----------------------------------
+BACKTEST_TTL_S = 6 * 3600  # история меняется медленно: пересчёт региона не чаще раза в 6 часов
+# (база, регион) → (когда посчитан, итоги); со сменой базы прежние итоги не годятся
+_backtest: dict[tuple[int, str], tuple[float, dict[str, Any]]] = {}
+_backtest_lock = threading.Lock()
+_backtest_running: list[str] = []  # регионы в очереди на расчёт, первый — считается сейчас
+
+
+def _backtest_region(region: str) -> dict[str, Any]:
+    """Сырые итоги проверки по региону при критериях по умолчанию (100 % годовых, 2 млн)."""
+    lots = torgi_sync.lots_of(region, months=settings.torgi_scan_months)
+    return torgi_hot.backtest(lots, layer=_layer(region), near_fn=_local_fn(region, lots))
+
+
+def backtest_start(regions: list[str]) -> int:
+    """Поставить в расчёт регионы, по которым проверки нет или она устарела. На боевом
+    сервере считает фоновый поток (регион — до десятков секунд), в демо и тестах — сразу.
+    Возвращает, сколько регионов поставлено."""
+    now = time.monotonic()
+    with _backtest_lock:
+        stale = [
+            r
+            for r in regions
+            if r not in _backtest_running
+            and (
+                (dbmod.generation, r) not in _backtest
+                or now - _backtest[(dbmod.generation, r)][0] >= BACKTEST_TTL_S
+            )
+        ]
+        if not stale:
+            return 0
+        idle = not _backtest_running
+        _backtest_running.extend(stale)
+
+    def job() -> None:
+        while True:
+            with _backtest_lock:
+                if not _backtest_running:
+                    return
+                region = _backtest_running[0]
+            try:
+                raw = _backtest_region(region)
+                with _backtest_lock:
+                    _backtest[(dbmod.generation, region)] = (time.monotonic(), raw)
+            except Exception as exc:  # noqa: BLE001 — расчёт региона не должен ронять сервер
+                log.warning("torgi backtest %s: %s", region, exc)
+            finally:
+                with _backtest_lock:
+                    if _backtest_running and _backtest_running[0] == region:
+                        _backtest_running.pop(0)
+
+    if settings.fixtures is not None or not ruproxy.enabled():
+        job()
+    elif idle:
+        threading.Thread(target=job, name="torgi-backtest", daemon=True).start()
+    return len(stale)
+
+
+def backtest_ready(regions: list[str] | None = None) -> dict[str, dict[str, Any]]:
+    """Готовые итоги проверки по регионам (все посчитанные либо только названные)."""
+    with _backtest_lock:
+        return {
+            r: raw
+            for (gen, r), (_, raw) in _backtest.items()
+            if gen == dbmod.generation and (regions is None or r in regions)
+        }
+
+
+def backtest_pending() -> int:
+    with _backtest_lock:
+        return len(_backtest_running)
+
+
+@router.get("/tools/torgi-backtest", response_class=HTMLResponse)
+def torgi_backtest_page(request: Request, user: TorgiDep):
+    """«Насколько точна модель»: завершённые аукционы продажи оценены так, как если бы они
+    шли сейчас, и сравнены с тем, чем торги кончились."""
+    regions = _synced_regions()
+    backtest_start(regions)
+    ready = backtest_ready(regions)
+    rows = [
+        {"code": r, "name": CADASTRAL_REGIONS.get(r, r), **torgi_hot.backtest_summary(raw)}
+        for r, raw in sorted(ready.items())
+    ]
+    rows.sort(key=lambda x: -x["hot"])
+    total = torgi_hot.backtest_summary(torgi_hot.merge_backtests(list(ready.values())))
+    return render(
+        request,
+        "torgi_backtest.html",
+        user=user,
+        total=total,
+        rows=rows,
+        regions_n=len(regions),
+        pending=backtest_pending(),
+        band=int(torgi_hot.ACCURACY_BAND * 100),
+        region="all",
     )
 
 
