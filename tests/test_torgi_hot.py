@@ -344,3 +344,42 @@ def test_unread_outcomes_keep_the_lot_out_of_class_a():
     assert (q["where"], q["closed"], q["unknown"]) == ("район", 7, 2)
     fail, warn = th.demand_check(known)
     assert fail == [] and warn == ["в этом районе без заявок прошли 2 из 5 торгов за год"]
+
+
+def test_summary_is_a_deal_case_with_range_terms_and_arguments():
+    """Зум 20.11.2026, первый просмотр практиком: «не очевидно, по какой цене я его могу
+    продать», «ROI при продаже за 2,5 и за 3,5», «продали за три месяца — доходность такая,
+    за шесть — такая; больше двенадцати не берём», «аргументы за, против и риски»."""
+    sp, hp = ts.ScanParams(), th.HotParams()
+    item = th.select(_rows(_active(deposit=200_000, has_gpzu=True)))["hot"][0]
+    # цена продажи диапазоном: вход один и тот же — ожидаемая цена победителя
+    rng = {x["key"]: x for x in th.sale_range(item, sp)}
+    assert list(rng) == ["min", "mid", "max"] and {x["entry"] for x in rng.values()} == {300_000}
+    assert rng["min"]["sale"] == 680_000 and rng["mid"]["sale"] == 800_000
+    assert rng["mid"]["profit"] == 435_000 and rng["mid"]["roi"] == 1.45
+    assert rng["min"]["roi"] < rng["mid"]["roi"] < rng["max"]["roi"]
+    # сроки: ROI от срока не зависит, годовая доходность растёт, когда продали быстрее
+    terms = th.by_term(item, sp)
+    assert [t["months"] for t in terms] == [3, 6, 9, 12] and th.TERMS[-1] == 12
+    assert {t["mid"]["roi"] for t in terms} == {1.45}
+    annual = [t["mid"]["annual"] for t in terms]
+    assert annual == sorted(annual, reverse=True) and annual[-1] == 1.45
+    assert all(t["low"]["roi"] < t["mid"]["roi"] for t in terms)  # со скидкой до низа рынка
+    # доводы: каждый с числом, взят из данных лота
+    case = th.case_of(item, sp, hp)
+    pro = " | ".join(case["pro"])
+    assert "середина рынка выше ожидаемой цены входа в 2.7 раза" in pro
+    assert "даже при продаже по низу рынка сделка в плюсе" in pro
+    assert "запас на торгах: от старта" in pro and "обременений и охранных зон" in pro
+    assert "градостроительный план" in pro and "район ликвидный: индекс" in pro
+    assert case["con"] == []  # класс A — замечаний к расчёту нет
+    assert any("задаток" in t and "100 % начальной цены" in t for t in case["risk"])
+    # лот, не прошедший сверку цены: причина — первой строкой «против», довода о цене нет
+    bad = th.select(_rows(_active("A2", start=100_000)))["check"][0]
+    case = th.case_of(bad, sp, hp)
+    assert case["con"][0] == bad["fail"][0] and len(case["con"]) == len(set(case["con"]))
+    # без цены рынка считать нечего: таблицы пустые, сводка не падает
+    blind = th.item_of(_rows(_active("A4"), layer=[])[0], sp, hp)
+    if not blind["sc"]["expected"]:
+        assert th.sale_range(blind, sp) == [] and th.by_term(blind, sp) == []
+    assert isinstance(th.case_of(blind, sp, hp)["pro"], list)

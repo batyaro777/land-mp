@@ -1454,6 +1454,38 @@ def test_map_facts_for_candidates_feed_class_and_investor_summary(client):  # no
     assert "ещё не спрошена" in client.get("/tools/torgi-lot/ACT_5/invest").text
 
 
+def test_hot_row_opens_summary_that_defends_the_deal(client):  # noqa: F811
+    """Зум 20.11.2026, первый просмотр практиком. Щелчок по участку в «Горячих» открывал
+    разбор лота со сплошным текстом, а сводка для инвестора была мелкой ссылкой под ним —
+    практик её не увидел. Теперь название участка ведёт в сводку, а в ней — доводы за и
+    против, цена продажи диапазоном с ROI и таблица сроков."""
+    from landcheck.web import torgi_views as tv
+    from landcheck.web.db import User, session
+
+    _hot_ready(client)
+    hot = client.get("/tools/torgi-hot?annual=100&cap=2000000&days=3&top=5").text
+    assert '<a href="/tools/torgi-lot/ACT_0/invest" title="Сводка для инвестора' in hot
+    assert 'class="small muted">подробный разбор</a>' in hot
+    # заголовок таблицы закреплён, столбцы сортируются щелчком
+    assert 'class="table-wrap sticky"' in hot and "table.sortable" in hot
+    assert 'data-key="annual"' in hot and 'data-key="region"' in hot and 'data-annual="' in hot
+    page = client.get("/tools/torgi-lot/ACT_0/invest").text
+    assert "За сделку" in page and "Против и что проверить" in page and "<h4>Риски</h4>" in page
+    assert "середина рынка выше ожидаемой цены входа" in page
+    assert "от цены покупки, не от старта" in page and "ROI за сделку" in page
+    assert "Если продать за 3, 6, 9 и 12 месяцев" in page and "<th>12 мес.</th>" in page
+    assert "Дольше года участок не держим" in page
+    # порядок «сначала Московская область»: регион 50 первым, остальные — по лучшему лоту
+    items = [{"row": {"id": n, "region": r}} for n, r in enumerate(["66", "50", "59", "50", "66"])]
+    assert [i["row"]["id"] for i in tv._hot_order(items, "mo")] == [1, 3, 0, 4, 2]
+    assert tv._hot_order(items, "") is items and tv._hot_order(items, None) is items
+    ordered = client.get("/tools/torgi-hot?annual=100&cap=2000000&days=3&top=5&order=mo").text
+    assert "сначала Московская область, затем остальные регионы" in ordered
+    assert '<option value="mo" selected>' in ordered
+    with session() as db:
+        assert db.scalars(select(User).where(User.is_admin)).first().hot_criteria["order"] == "mo"
+
+
 def test_background_writes_do_not_drop_the_scan_cache(client, monkeypatch):  # noqa: F811
     """Прод, 20.11.2026: пока фоновые потоки читали итоги торгов, расчёт устаревал быстрее,
     чем считался, и «Горячие» отвечали 8–15 с. Фоновая запись расчёт не сбрасывает — его
@@ -1498,9 +1530,12 @@ def test_background_writes_do_not_drop_the_scan_cache(client, monkeypatch):  # n
     calls: list[tuple[float, float]] = []
     real = nearby.far_places
     monkeypatch.setattr(nearby, "far_places", lambda a, b: calls.append((a, b)) or real(a, b))
-    assert client.get("/tools/torgi-hot").status_code == 200 and not calls
+    # страница считает города только для показанных строк (их десятки), отбор — ни для одной
+    assert client.get("/tools/torgi-hot").status_code == 200 and len(calls) <= 12
+    calls.clear()
     res = torgi_hot.select(tv._scan_all(sp)[0]["rows"])
     assert res["hot"] and "towns" not in res["hot"][0] and not calls
+    assert client.get("/tools/torgi-hot").status_code == 200 and not calls  # второй раз — из строки
     with session() as db:
         lot = db.get(TorgiLot, "ACT_3")
         lot.lat, lot.lon = 54.60, 36.30

@@ -226,3 +226,16 @@ dialog.lot-gallery img { max-width: 100%; max-height: 78vh; display: block; marg
 dialog.lot-gallery .nav { display: flex; justify-content: center; align-items: center; gap: 1rem; margin-top: 0.4rem; }
 dialog.lot-gallery button { width: auto; margin: 0; padding: 0.2rem 0.8rem; }
 dialog.lot-gallery .close { float: right; }
+
+/* Сводка как защита сделки и таблица «Горячих» (зум 20.11.2026) */
+.invest-case { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0.8rem; margin: 0 0 1.2rem; max-width: 62rem; }
+.invest-case > div { border: 1px solid var(--pico-muted-border-color); border-radius: 8px; padding: 0.6rem 0.8rem; }
+.invest-case h4 { margin: 0 0 0.4rem; font-size: 1rem; }
+.invest-case ul { margin: 0; padding: 0; }
+.invest-case li { list-style: none; font-size: 0.9em; margin-bottom: 0.35rem; }
+.table-wrap.sticky { max-height: 82vh; overflow: auto; }
+.table-wrap.sticky thead th { position: sticky; top: 0; z-index: 2; background: var(--pico-background-color); box-shadow: 0 1px 0 var(--pico-muted-border-color); }
+.sort-head { cursor: pointer; }
+th.sort-head[data-dir="asc"]::after { content: " ▲"; font-size: 0.75em; }
+th.sort-head[data-dir="desc"]::after { content: " ▼"; font-size: 0.75em; }
+@media print { .invest-case > div { break-inside: avoid; } .table-wrap.sticky { max-height: none; overflow: visible; } }

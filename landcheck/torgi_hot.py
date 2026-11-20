@@ -197,6 +197,156 @@ def scenarios(row: dict[str, Any], extra: float, tax: float) -> dict[str, Any]:
     }
 
 
+# --- сводка как защита сделки (зум 20.11.2026) --------------------------------------------------
+# Практик на первом просмотре: «не очевидно, по какой цене я его могу продать», «доходность от
+# какой цены — от начальной или от цены отсечения?», «ROI при продаже за 2,5 и за 3,5», «по
+# три месяца: продали за три — такая доходность, за шесть — такая; больше двенадцати не берём,
+# будем сбрасывать цену», «аргументы за, аргументы против и риски».
+TERMS = (3, 6, 9, 12)  # за сколько месяцев продали — строки таблицы сроков
+RANGE = (("min", "низ рынка"), ("mid", "середина рынка"), ("max", "верх рынка"))
+PRO_RATIO = 1.3  # рынок выше цены входа во столько раз — это довод «за»
+BIG_DEPOSIT = 0.5  # задаток от начальной цены, с которого о нём предупреждаем
+SOON_DAYS = 7  # до конца приёма заявок меньше — предупреждаем
+
+
+def sale_range(item: dict[str, Any], scan_params: torgi_scan.ScanParams) -> list[dict[str, Any]]:
+    """Что даёт сделка при покупке по ожидаемой цене победителя и продаже по низу, середине и
+    верху рынка: цена продажи, прибыль после налога, ROI и годовая доходность за срок расчёта."""
+    e = item["sc"]["expected"]
+    if not e:
+        return []
+    s = item["row"]["s"]
+    out = []
+    for key, label in RANGE:
+        one = _one(
+            e["entry"], s["sale"].get(key), item["sc"]["hold"], scan_params.extra, scan_params.tax
+        )
+        if one:
+            out.append({"key": key, "label": label, "sotka": s["sale_sotka"].get(key), **one})
+    return out
+
+
+def by_term(item: dict[str, Any], scan_params: torgi_scan.ScanParams) -> list[dict[str, Any]]:
+    """Доходность, если продать за 3, 6, 9 и 12 месяцев: по середине рынка и со скидкой до его
+    низа (продать быстрее можно, уступив в цене). Вход — ожидаемая цена победителя."""
+    e = item["sc"]["expected"]
+    if not e:
+        return []
+    sale = item["row"]["s"]["sale"]
+    mid, low = sale.get("mid"), sale.get("min")
+    rows = []
+    for months in TERMS:
+        rows.append(
+            {
+                "months": months,
+                "mid": _one(e["entry"], mid, months, scan_params.extra, scan_params.tax),
+                "low": (
+                    _one(e["entry"], low, months, scan_params.extra, scan_params.tax)
+                    if low and low != mid
+                    else None
+                ),
+            }
+        )
+    return rows
+
+
+def _pct(v: float | None) -> str:
+    if v is None:
+        return "—"
+    return "больше 1000 %" if v > 10 else f"{round(v * 100)} %"
+
+
+def case_of(
+    item: dict[str, Any], scan_params: torgi_scan.ScanParams, params: HotParams
+) -> dict[str, list[str]]:
+    """Доводы по сделке: `pro` — что говорит за неё, `con` — что против и чего не хватает,
+    `risk` — что может пойти не так даже при верном расчёте. Только то, что видно из данных
+    лота: каждый довод с числом."""
+    row, sc = item["row"], item["sc"]
+    s = row["s"]
+    e = sc["expected"]
+    mk = s.get("market") or {}
+    pro: list[str] = []
+    con: list[str] = [*item["fail"], *item["nodemand"]]
+    risk: list[str] = []
+    if e:
+        mid, low = s["sale"].get("mid"), s["sale"].get("min")
+        if mid and mid / e["entry"] >= PRO_RATIO:
+            pro.append(
+                f"середина рынка выше ожидаемой цены входа в {mid / e['entry']:.1f} раза: "
+                f"вход {torgi_calc.rub(e['entry'])}, продажа {torgi_calc.rub(mid)}"
+            )
+        at_low = _one(e["entry"], low, sc["hold"], scan_params.extra, scan_params.tax)
+        if at_low and low != mid:
+            if at_low["profit"] > 0:
+                pro.append(
+                    "даже при продаже по низу рынка сделка в плюсе: "
+                    f"{torgi_calc.rub(at_low['profit'])} после налога, ROI {_pct(at_low['roi'])}"
+                )
+            else:
+                risk.append(
+                    "при продаже по низу рынка сделка уходит в минус: "
+                    f"{torgi_calc.rub(at_low['profit'])}"
+                )
+        start = row.get("price_start")
+        if item["cutoff"] and start and item["cutoff"] > start:
+            pro.append(
+                f"запас на торгах: от старта {torgi_calc.rub(start)} до цены отсечения "
+                f"{torgi_calc.rub(item['cutoff'])} — в {item['cutoff'] / start:.1f} раза"
+            )
+        cautious = sc["cautious"]
+        if cautious and (cautious["annual"] is None or cautious["annual"] < params.min_annual):
+            risk.append(
+                f"в осторожном сценарии (низ рынка, продажа за {cautious['months']} мес.) "
+                f"доходность {_pct(cautious['annual'])} годовых — ниже порога "
+                f"{round(params.min_annual * 100)} %"
+            )
+    comp = item.get("comp")
+    if comp and comp["level"] == "calm":
+        pro.append(f"{comp['text']}: {comp['detail']}")
+    elif comp and comp["level"] == "fight":
+        risk.append(f"на торгах {comp['text']}: {comp['detail']}")
+    if mk.get("deals_level") == "quarter":
+        n = mk.get("deals_n")
+        pro.append(
+            "цена взята по сделкам Росреестра в самом кадастровом квартале"
+            + (f" ({n} сдел.)" if n else "")
+            + ", а не по району"
+        )
+    turn = s.get("turnover")
+    if turn and turn["quarter_n"] >= torgi_scan.LIVE_DEALS:
+        pro.append(
+            f"место продаётся: в квартале за год {turn['quarter_n']} сдел. с такими участками"
+        )
+    idx = s["liquidity"].get("index")
+    if idx is not None and idx >= LIQUID_INDEX:
+        pro.append(f"район ликвидный: индекс {idx} из 100")
+    if item["zones"][0] == "clean":
+        pro.append("обременений и охранных зон на участке нет")
+    place = item.get("place")
+    if place and place["level"] == "good":
+        pro.append("доступность хорошая: " + ", ".join(place["why"]))
+    if row.get("has_gpzu"):
+        pro.append("к лоту приложен градостроительный план")
+    seen = set(con)
+    con += [t for t in item["cls_why"] if t not in seen]
+    if sc["hold"] > TERMS[-1]:
+        risk.append(
+            f"срок продажи в расчёте — {sc['hold']} мес.: сделок с такими участками в квартале "
+            "за год не было"
+        )
+    deposit, start = row.get("deposit"), row.get("price_start")
+    if deposit and start and deposit / start >= BIG_DEPOSIT:
+        risk.append(
+            f"задаток {torgi_calc.rub(deposit)} — {round(deposit / start * 100)} % начальной "
+            "цены, вносится до торгов"
+        )
+    days = s.get("days_left")
+    if days is not None and 0 <= days < SOON_DAYS:
+        risk.append(f"до конца приёма заявок {days} дн.: на выезд и проверку времени мало")
+    return {"pro": pro, "con": con, "risk": risk}
+
+
 def cutoff_price(
     sale: float | None, hold: float, min_annual: float, extra: float, tax: float
 ) -> int | None:

@@ -574,7 +574,10 @@ HOT_KEYS = (
     "dg",
     "dh",
     "dz",
+    # порядок строк на странице: "" — самые доказанные первыми, "mo" — Московская область первой
+    "order",
 )
+HOME_REGION = "50"  # Московская область: практики знают этот рынок и начинают проверку с него
 HOT_CAPS = (1_000_000, 2_000_000, 3_000_000, 5_000_000)
 HOT_CHECK_ROWS = 50  # столько лотов показываем в списке «Проверить рынок руками»
 RETURNING_ROWS = 30  # столько строк в списке «Вернутся на торги»
@@ -611,6 +614,22 @@ def _hot_params(c: dict[str, str]) -> tuple[torgi_hot.HotParams, torgi_scan.Scan
         ratio = torgi_calc._pct(c.get("assign"), 0.0)
         sp.assign_ratio = min(ratio, 2.0) if ratio > 0 else None
     return hp, sp
+
+
+def _hot_order(items: list[dict[str, Any]], order: str | None) -> list[dict[str, Any]]:
+    """Порядок строк «Горячих». По умолчанию — как отобрано: самые доказанные и доходные
+    первыми. `mo` (зум 20.11.2026: «сначала Московская, потом все остальные области») —
+    Московская область первой, затем регионы по месту их лучшего лота; внутри региона порядок
+    прежний."""
+    if order != "mo":
+        return items
+    best: dict[str | None, int] = {}
+    for n, item in enumerate(items):
+        best.setdefault(item["row"].get("region"), n)
+    return sorted(
+        items,
+        key=lambda i: (i["row"].get("region") != HOME_REGION, best[i["row"].get("region")]),
+    )
 
 
 def _skip_reasons() -> dict[str, Any]:
@@ -661,6 +680,7 @@ def torgi_hot_page(request: Request, user: TorgiDep):
         return [i for i in items if marks.get(i["row"]["id"], ("", None))[0] not in hide]
 
     hot, weak, check_all = kept(res["hot"]), kept(res["weak"]), kept(res["check"])
+    hot, weak = _hot_order(hot, crit.get("order")), _hot_order(weak, crit.get("order"))
     skipped = sum(
         1
         for k in ("hot", "weak", "check")
@@ -673,6 +693,10 @@ def torgi_hot_page(request: Request, user: TorgiDep):
     work_ids = [lot_id for lot_id, (mark, _) in marks.items() if mark == "work"]
     work = [torgi_hot.item_of(by_id[i], sp, hp) for i in work_ids if i in by_id]
     work.sort(key=lambda i: i["row"]["s"].get("days_left") or 0)
+    # города рядом — только у показанных строк: поиск по справочнику на всех лотах дорог
+    for item in (*shown, *weak[: hp.top], *work):
+        if "towns" not in item["row"]:
+            item["row"]["towns"] = torgi_hot.towns_of(item["row"])
     # обременения и карточки — у всех, кто прошёл отбор: без них лот не поднимется в класс A,
     # а в сводке не будет задатка и шага
     candidates = hot + weak + check + work
@@ -926,6 +950,10 @@ def _invest_item(lot_id: str, crit: dict[str, str]) -> dict[str, Any]:
     row, names = _lot_row(lot_id, sp)
     item = torgi_hot.item_of(row, sp, hp)
     item["towns"] = torgi_hot.towns_of(row)
+    # защита сделки (зум 20.11.2026): цена продажи диапазоном с ROI, сроки, доводы за и против
+    item["range"] = torgi_hot.sale_range(item, sp)
+    item["terms"] = torgi_hot.by_term(item, sp)
+    item["case"] = torgi_hot.case_of(item, sp, hp)
     item["district_name"] = names.get(row.get("district") or "", "")
     item["region_name"] = CADASTRAL_REGIONS.get(row.get("region") or "", "")
     item["active"] = row.get("status") in torgi_scan.ACTIVE

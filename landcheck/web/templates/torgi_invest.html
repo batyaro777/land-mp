@@ -34,20 +34,30 @@
 
 {% if e %}
 <div class="invest-key">
-  <div><span class="muted small">Вход, ожидаемо</span><strong>{{ e.entry|money }}</strong><span class="small muted">старт {{ r.price_start|money }}</span></div>
-  <div><span class="muted small">Продажа, середина рынка</span><strong>{{ e.sale|money }}</strong><span class="small muted">{{ s.sale_sotka.mid|money }} за сотку</span></div>
-  <div><span class="muted small">Прибыль после налога</span><strong>{{ e.profit|money }}</strong><span class="small muted">за {{ i.sc.hold }} мес.</span></div>
-  <div><span class="muted small">Доходность</span><strong>{{ pct(e.annual) }} годовых</strong><span class="small muted">осторожно — {{ pct(i.sc.cautious.annual) }}</span></div>
+  <div><span class="muted small">Купим за (ожидаемая цена победителя)</span><strong>{{ e.entry|money }}</strong><span class="small muted">старт {{ r.price_start|money }}{% if i.cutoff %} · не выше {{ i.cutoff|money }}{% endif %}</span></div>
+  <div><span class="muted small">Продадим за (середина рынка)</span><strong>{{ e.sale|money }}</strong><span class="small muted">{% if s.sale.min and s.sale.max and s.sale.min != s.sale.max %}рынок {{ s.sale.min|money }} – {{ s.sale.max|money }}{% else %}{{ s.sale_sotka.mid|money }} за сотку{% endif %}</span></div>
+  <div><span class="muted small">Прибыль после налога</span><strong>{{ e.profit|money }}</strong><span class="small muted">ROI {{ pct(e.roi) }} за {{ i.sc.hold }} мес.</span></div>
+  <div><span class="muted small">Доходность</span><strong>{{ pct(e.annual) }} годовых</strong><span class="small muted">от цены покупки, не от старта · осторожно — {{ pct(i.sc.cautious.annual) }}</span></div>
   <div><span class="muted small">Надёжность расчёта</span><strong>класс {{ i.cls }}</strong><span class="small muted">{{ 'всё доказано' if i.cls == 'A' else ('есть что проверить' if i.cls == 'B' else 'гипотеза') }}</span></div>
 </div>
 {% else %}
 <article class="warn">Цены перепродажи по этому участку нет — доходность не посчитать.</article>
 {% endif %}
 
+{% if i.case and (i.case.pro or i.case.con or i.case.risk) %}
+<div class="invest-case">
+  <div><h4>За сделку</h4>{% if i.case.pro %}<ul>{% for t in i.case.pro %}<li><span class="dot ok"></span>{{ t }}</li>{% endfor %}</ul>{% else %}<p class="muted small">Доводов «за», подтверждённых данными, нет.</p>{% endif %}</div>
+  <div><h4>Против и что проверить</h4>{% if i.case.con %}<ul>{% for t in i.case.con %}<li><span class="dot check"></span>{{ t }}</li>{% endfor %}</ul>{% else %}<p class="muted small">Замечаний к расчёту нет.</p>{% endif %}</div>
+  <div><h4>Риски</h4>{% if i.case.risk %}<ul>{% for t in i.case.risk %}<li><span class="dot stop"></span>{{ t }}</li>{% endfor %}</ul>{% else %}<p class="muted small">Особых рисков по цифрам не видно. Общие — в разделе 7.</p>{% endif %}</div>
+</div>
+{% endif %}
+
 <h3>1. Что продаётся</h3>
 <table class="results invest">
   <tbody>
     <tr><th>Адрес</th><td>{{ (r.address or '—')|short_address }}{% if i.district_name and i.district_name not in (r.address or '') %} ({{ i.district_name }}){% endif %}</td></tr>
+    {% set where = i.place.lines if i.place else i.towns %}
+    {% if where %}<tr><th>Где это</th><td>{% for name, value in where if name in ('Ближайший населённый пункт', 'Ближайший город', 'Крупный город') %}{{ name|lower }} — {{ value }}{{ '; ' if not loop.last else '' }}{% endfor %} <span class="muted small">(по прямой от точки участка)</span></td></tr>{% endif %}
     <tr><th>Кадастровый номер</th><td><code>{{ r.cad_num or '—' }}</code></td></tr>
     <tr><th>Площадь</th><td>{% if r.area_m2 %}{{ (r.area_m2 / 100)|round(1) }} сот. ({{ r.area_m2|round|int }} м²){% else %}не указана{% endif %}</td></tr>
     <tr><th>Назначение</th><td>{{ r.vri or groups.get(r.vri_group, '—') }}{% if r.category %} · {{ r.category }}{% endif %}</td></tr>
@@ -89,8 +99,13 @@ window.addEventListener('load', function () {
   <tbody>
     <tr><th>За сотку</th><td class="num">{{ s.sale_sotka.min|money if s.sale_sotka.min else '—' }}</td><td class="num"><strong>{{ s.sale_sotka.mid|money }}</strong></td><td class="num">{{ s.sale_sotka.max|money if s.sale_sotka.max else '—' }}</td></tr>
     <tr><th>За участок</th><td class="num">{{ s.sale.min|money if s.sale.min else '—' }}</td><td class="num"><strong>{{ s.sale.mid|money }}</strong></td><td class="num">{{ s.sale.max|money if s.sale.max else '—' }}</td></tr>
+    {% if i.range %}{% set rg = {} %}{% for x in i.range %}{% set _ = rg.update({x.key: x}) %}{% endfor %}
+    <tr><th>Прибыль после налога<div class="small muted">покупка за {{ e.entry|money }}</div></th>{% for k in ('min', 'mid', 'max') %}<td class="num{% if rg.get(k) and rg[k].profit < 0 %} err{% endif %}">{{ rg[k].profit|money if rg.get(k) else '—' }}</td>{% endfor %}</tr>
+    <tr><th>ROI за сделку</th>{% for k in ('min', 'mid', 'max') %}<td class="num">{% if rg.get(k) %}{% if k == 'mid' %}<strong>{{ pct(rg[k].roi) }}</strong>{% else %}{{ pct(rg[k].roi) }}{% endif %}{% else %}—{% endif %}</td>{% endfor %}</tr>
+    {% endif %}
   </tbody>
 </table>
+{% if s.spread and s.spread >= 2 %}<p class="small warn">Верх рынка выше низа в {{ s.spread }} раза: в выборке могут быть несопоставимые участки. Смотрите сделки ниже и сверяйте с объявлениями рядом.</p>{% endif %}
 <p class="small">Источник цены: <strong>{{ mk.source_label }}</strong>.{% if mk.note %} <span class="muted">{{ mk.note }}.</span>{% endif %}</p>
 {% if mk.deals %}
 <details open>
@@ -124,6 +139,16 @@ window.addEventListener('load', function () {
 </table>
 {% else %}
 <p class="muted">Без цены перепродажи расчёта нет.</p>
+{% endif %}
+{% if i.terms %}
+<h4>Если продать за 3, 6, 9 и 12 месяцев</h4>
+<table class="results invest">
+  <thead><tr><th>Продали за</th><th class="num">По середине рынка: ROI</th><th class="num">годовых</th><th class="num">Со скидкой до низа рынка: ROI</th><th class="num">годовых</th></tr></thead>
+  <tbody>
+    {% for x in i.terms %}<tr><th>{{ x.months }} мес.</th><td class="num">{{ pct(x.mid.roi) if x.mid else '—' }}</td><td class="num"><strong>{{ pct(x.mid.annual) if x.mid else '—' }}</strong></td><td class="num{% if x.low and x.low.profit < 0 %} err{% endif %}">{{ pct(x.low.roi) if x.low else '—' }}</td><td class="num">{{ pct(x.low.annual) if x.low else '—' }}</td></tr>{% endfor %}
+  </tbody>
+</table>
+<p class="small muted">Покупка — по ожидаемой цене победителя ({{ e.entry|money }}). ROI — прибыль после налога к вложенному, от срока не зависит; годовая доходность — тот же ROI, пересчитанный на год. Дольше года участок не держим: если не уходит, снижаем цену к низу рынка.</p>
 {% endif %}
 
 <h3>5. Как быстро продадим</h3>
