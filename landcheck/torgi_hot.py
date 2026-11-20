@@ -126,16 +126,25 @@ def demand_check(row: dict[str, Any]) -> tuple[list[str], list[str]]:
     fail: list[str] = []
     warn: list[str] = []
     closed, none = q.get("closed") or 0, q.get("none") or 0
+    unknown = q.get("unknown") or 0
+    known = (q.get("sold") or 0) + (q.get("single") or 0) + none  # торги с известным итогом
     where = "квартале" if q.get("where") == "квартал" else "районе"
-    if closed >= CALM_MIN:
-        share = none / closed
+    if known >= CALM_MIN:
+        share = none / known
         if share >= NO_DEMAND_SHARE:
             fail.append(
-                f"в этом {where} {none} из {closed} торгов за год прошли без единой заявки: "
+                f"в этом {where} {none} из {known} торгов за год прошли без единой заявки: "
                 "по таким ценам участки здесь не берут, перепродажа под вопросом"
             )
         elif share >= THIN_DEMAND_SHARE:
-            warn.append(f"в этом {where} без заявок прошли {none} из {closed} торгов за год")
+            warn.append(f"в этом {where} без заявок прошли {none} из {known} торгов за год")
+    if closed >= CALM_MIN and unknown * 2 >= closed:
+        # прод, 20.11.2026: три лота вышли в класс A, хотя у семи из восьми торгов квартала
+        # итог не был прочитан — «всё доказано» там сказать было нельзя
+        warn.append(
+            f"итоги {unknown} из {closed} торгов в этом {where} ещё не прочитаны: были ли на "
+            "них заявки, пока неизвестно"
+        )
     turn = s.get("turnover")
     if turn and turn["quarter_n"] == 0:
         warn.append(
@@ -359,8 +368,12 @@ def competition(row: dict[str, Any]) -> dict[str, Any] | None:
     if closed < CALM_MIN:
         return None
     sold, single, none = q.get("sold") or 0, q.get("single") or 0, q.get("none") or 0
-    quiet = (single + none) / closed
-    if none / closed >= NO_DEMAND_SHARE:
+    unknown = q.get("unknown") or 0
+    known = sold + single + none
+    # без борьбы — и торги одного участника, и торги без заявок, и те, чей итог не прочитан:
+    # не состоявшиеся торги борьбой не были в любом случае
+    quiet = (closed - sold) / closed
+    if known >= CALM_MIN and none / known >= NO_DEMAND_SHARE:
         level, text = "empty", "заявок здесь обычно нет"
     elif quiet >= CALM_SHARE:
         level, text = "calm", "скорее всего без борьбы"
@@ -374,7 +387,7 @@ def competition(row: dict[str, Any]) -> dict[str, Any] | None:
         "text": text,
         "detail": (
             f"в этом {where} {closed} торгов за год: с борьбой {sold}, одному участнику "
-            f"{single}, без заявок {none}"
+            f"{single}, без заявок {none}" + (f", итог не прочитан у {unknown}" if unknown else "")
         ),
     }
 

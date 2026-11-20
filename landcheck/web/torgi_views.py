@@ -630,7 +630,13 @@ def torgi_hot_page(request: Request, user: TorgiDep):
     queued = torgi_zones.start_fill(
         [i["row"]["id"] for i in candidates if i["zones"][0] == "unknown"]
     )
-    torgi_hotjobs.start_cards([i["row"]["id"] for i in candidates if not i["row"].get("card")])
+    torgi_hotjobs.start_cards(
+        [
+            *(i["row"]["id"] for i in candidates if not i["row"].get("card")),
+            # и итоги не состоявшихся торгов в кварталах показанных лотов: по ним судим о спросе
+            *torgi_hotjobs.unread_outcomes(i["row"].get("quarter") for i in (*shown, *work)),
+        ]
+    )
     # карту спрашиваем только по тем, кого показываем: запрос идёт до минуты
     torgi_nearby.start_fill(
         [i["row"]["id"] for i in (*shown, *weak[:HOT_NEARBY_ROWS], *work) if i["place"] is None]

@@ -1226,6 +1226,8 @@ def score_lot(
             "sold": liq.get("sold"),
             "single": liq.get("single"),
             "none": liq.get("none"),
+            # не состоялись, а карточка не прочитана: один участник или ни одного — неизвестно
+            "unknown": liq.get("failed_unknown"),
             "where": "квартал" if liq is q_stats else "район",
         },
         "start_m2": round(start / area, 1) if start and area else None,

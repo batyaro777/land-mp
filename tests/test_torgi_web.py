@@ -1468,8 +1468,22 @@ def test_candidate_cards_are_read_out_of_turn(client):  # noqa: F811
         db.commit()
     page = client.get("/tools/torgi-hot?annual=100&cap=2000000&days=3&top=25").text
     assert "задаток: карточка читается" in page
-    # завершённые торги и уже прочитанные карточки не трогаем; порядок — как попросили
+    # состоявшиеся торги и уже прочитанные карточки не трогаем; порядок — как попросили
     assert hj.missing_cards(["ACT_7", "ACT_0", "S_0", "ACT_3", None, "ACT_7"]) == ["ACT_7", "ACT_3"]
+    # не состоявшиеся торги без карточки в кварталах кандидатов читаем тоже: без итога не
+    # понять, был ли там единственный участник или заявок не было (прод, 20.11.2026)
+    with session() as db:
+        failed = [x for x in db.scalars(select(TorgiLot).where(TorgiLot.status == "FAILED"))]
+        assert failed, "в наборе есть не состоявшиеся торги"
+        quarter = failed[0].quarter
+        same = [x.id for x in failed if x.quarter == quarter]
+        for x in failed:
+            x.card_at = None if x.quarter == quarter else x.card_at
+        db.commit()
+    unread = hj.unread_outcomes([quarter, None, quarter])
+    assert sorted(unread) == sorted(same) and hj.unread_outcomes([]) == []
+    assert hj.unread_outcomes([quarter], limit=1) == unread[:1]
+    assert hj.missing_cards(unread) == unread
     api = torgi.TorgiClient(fake.client(), interval=0, sleep=lambda s: None)
     before = len(fake.seen)
     assert hj.fill_cards(["ACT_7", "ACT_0", "ACT_3"], api=api, now=NOW) == 2

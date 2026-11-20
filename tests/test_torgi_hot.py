@@ -311,3 +311,36 @@ def test_backtest_counts_lots_removed_for_no_demand():
     assert raw["returning"] == []  # за участками из мест без спроса не следим
     s = th.backtest_summary(th.merge_backtests([raw, raw]))
     assert s["nodemand"] == 10 and s["nodemand_none_share"] == 0.6
+
+
+def test_unread_outcomes_keep_the_lot_out_of_class_a():
+    """Прод, 20.11.2026: три лота попали в класс A («всё доказано»), хотя из восьми торгов
+    их квартала итог был прочитан у одних. Не состоявшиеся торги без карточки — не борьба,
+    но были ли на них заявки, неизвестно: это оговорка, а не доказательство."""
+    from tests.test_torgi_scan import _lot
+
+    unread = [_lot(f"U{i}", f"40:13:120101:{50 + i}", fin=None, status="FAILED") for i in range(6)]
+    lots = [*_district(sold=6, single=0, none=0), *unread, _active()]
+    row = ts.scan(lots, layer=LAYER, today=TODAY)["rows"][0]
+    q = row["s"]["liquidity"]
+    assert (q["closed"], q["sold"], q["unknown"]) == (12, 6, 6)
+    item = th.item_of(row, ts.ScanParams(), th.HotParams())
+    assert item["stop"] is None and item["cls"] != "A"
+    assert item["cls_why"][0].startswith("итоги 6 из 12 торгов в этом квартале ещё не прочитаны")
+    assert "итог не прочитан у 6" in item["comp"]["detail"]
+    # половина торгов с борьбой, половина не состоялась — «бывает по-разному»
+    assert item["comp"]["level"] == "mixed"
+    # не состоялись все, кроме одних: борьбы здесь не ждём, хотя итоги ещё читаются
+    calm = ts.scan(
+        [*_district(sold=1, single=0, none=0), *unread, _active()], layer=LAYER, today=TODAY
+    )["rows"][0]
+    assert th.competition(calm)["level"] == "calm"
+    # о спросе судим по торгам с известным итогом: в районе их пять, два — без заявок
+    far = [_lot(f"V{i}", f"40:13:120104:{i + 1}", fin=None, status="FAILED") for i in range(2)]
+    known = ts.scan(
+        [*_district(sold=1, single=2, none=2), *far, _active()], layer=LAYER, today=TODAY
+    )["rows"][0]
+    q = known["s"]["liquidity"]
+    assert (q["where"], q["closed"], q["unknown"]) == ("район", 7, 2)
+    fail, warn = th.demand_check(known)
+    assert fail == [] and warn == ["в этом районе без заявок прошли 2 из 5 торгов за год"]

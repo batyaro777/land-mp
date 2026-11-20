@@ -55,15 +55,42 @@ def _live() -> bool:
 
 
 # --- карточки кандидатов -----------------------------------------------------------------------
+NEED_CARD = (*torgi.ACTIVE, "FAILED")  # идущие лоты и не состоявшиеся торги без итога
+HISTORY_CARDS = 80  # столько непрочитанных итогов в кварталах кандидатов берём за раз
+
+
+def unread_outcomes(quarters: Iterable[str | None], limit: int = HISTORY_CARDS) -> list[str]:
+    """Не состоявшиеся торги в кварталах кандидатов, у которых карточка не прочитана. Без неё
+    не видно, был на торгах единственный участник или заявок не подали вовсе, — а от этого
+    зависит, есть ли в квартале спрос (прод, 20.11.2026: у лота класса A итог был известен
+    по одним торгам квартала из восьми). Свежие — первыми."""
+    qs = list(dict.fromkeys(q for q in quarters if q))[:300]
+    if not qs:
+        return []
+    with session() as db:
+        q = (
+            select(TorgiLot.id)
+            .where(
+                TorgiLot.quarter.in_(qs),
+                TorgiLot.status == "FAILED",
+                TorgiLot.card_at.is_(None),
+            )
+            .order_by(TorgiLot.published.desc(), TorgiLot.id)
+            .limit(limit)
+        )
+        return list(db.scalars(q))
+
+
 def missing_cards(lot_ids: Iterable[str | None]) -> list[str]:
-    """Идущие лоты из списка, у которых карточка ещё не прочитана (порядок сохраняется)."""
+    """Лоты из списка, у которых карточка ещё не прочитана: идущие и не состоявшиеся
+    (порядок сохраняется). Состоявшимся торгам карточка для итога не нужна."""
     todo = list(dict.fromkeys(i for i in lot_ids if i))
     out: list[str] = []
     with session() as db:
         for i in range(0, len(todo), 500):
             part = todo[i : i + 500]
             q = select(TorgiLot.id).where(
-                TorgiLot.id.in_(part), TorgiLot.card_at.is_(None), TorgiLot.status.in_(torgi.ACTIVE)
+                TorgiLot.id.in_(part), TorgiLot.card_at.is_(None), TorgiLot.status.in_(NEED_CARD)
             )
             unread = set(db.scalars(q))
             out += [x for x in part if x in unread]
@@ -157,7 +184,12 @@ def warm_candidates() -> int:
     res = torgi_hot.select(result["rows"])
     top = (res["hot"] + res["weak"])[:WARM_CANDIDATES]
     torgi_zones.start_fill([i["row"]["id"] for i in top if i["zones"][0] == "unknown"])
-    start_cards([i["row"]["id"] for i in top if not i["row"].get("card")])
+    start_cards(
+        [
+            *(i["row"]["id"] for i in top if not i["row"].get("card")),
+            *unread_outcomes(i["row"].get("quarter") for i in top),
+        ]
+    )
     return torgi_nearby.start_fill([i["row"]["id"] for i in top if i["place"] is None])
 
 
