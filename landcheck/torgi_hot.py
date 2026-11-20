@@ -117,6 +117,15 @@ NO_DEMAND_SHARE = 0.5
 THIN_DEMAND_SHARE = 0.2
 
 
+def outcomes_unread(row: dict[str, Any]) -> bool:
+    """Итог не прочитан у половины торгов места и больше: о спросе там судить рано. Прод,
+    20.11.2026: три лота вышли в класс A и в утреннюю сводку, хотя у семи из восьми торгов
+    квартала итог не был прочитан; после чтения оказалось — семь из восьми без заявок."""
+    q = row["s"]["liquidity"]
+    closed, unknown = q.get("closed") or 0, q.get("unknown") or 0
+    return closed >= CALM_MIN and unknown * 2 >= closed
+
+
 def demand_check(row: dict[str, Any]) -> tuple[list[str], list[str]]:
     """Есть ли спрос на такие участки в этом месте: (почему расчёту нельзя верить, что снижает
     уверенность). Судим по двум вещам, которые видны до торгов: чем кончались торги в квартале
@@ -138,9 +147,7 @@ def demand_check(row: dict[str, Any]) -> tuple[list[str], list[str]]:
             )
         elif share >= THIN_DEMAND_SHARE:
             warn.append(f"в этом {where} без заявок прошли {none} из {known} торгов за год")
-    if closed >= CALM_MIN and unknown * 2 >= closed:
-        # прод, 20.11.2026: три лота вышли в класс A, хотя у семи из восьми торгов квартала
-        # итог не был прочитан — «всё доказано» там сказать было нельзя
+    if outcomes_unread(row):
         warn.append(
             f"итоги {unknown} из {closed} торгов в этом {where} ещё не прочитаны: были ли на "
             "них заявки, пока неизвестно"

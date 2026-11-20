@@ -32,6 +32,7 @@ from landcheck.web.db import TorgiLot, TorgiMark, User, session
 log = logging.getLogger(__name__)
 
 CARDS_PER_RUN = 40  # карточек за один заход: при паузе 6 с это четыре минуты
+QUEUE_BATCH = 10  # столько берём из очереди за раз: между заходами в неё встают срочные
 CARD_FAILURES = 3  # столько неудач подряд — площадка не отвечает, заход прекращаем
 DIGEST_MAX = 10  # лотов в одном сообщении: длиннее в Telegram не читают
 DUE_DAYS = 3  # за сколько дней до конца приёма заявок напоминать о лоте «в работе»
@@ -56,29 +57,65 @@ def _live() -> bool:
 
 # --- карточки кандидатов -----------------------------------------------------------------------
 NEED_CARD = (*torgi.ACTIVE, "FAILED")  # идущие лоты и не состоявшиеся торги без итога
-HISTORY_CARDS = 80  # столько непрочитанных итогов в кварталах кандидатов берём за раз
+HISTORY_CARDS = 80  # столько непрочитанных итогов в местах кандидатов берём за раз
+DISTRICT_MIN = 5  # и не меньше стольких на район, когда районов много
 
 
-def unread_outcomes(quarters: Iterable[str | None], limit: int = HISTORY_CARDS) -> list[str]:
-    """Не состоявшиеся торги в кварталах кандидатов, у которых карточка не прочитана. Без неё
+def demand_places(items: Iterable[dict[str, Any]]) -> tuple[list[str], list[str]]:
+    """Места, по истории торгов которых расчёт судит о спросе у этих лотов: (кварталы, районы).
+    Квартал — когда в нём хватает торгов, иначе район (`torgi_scan.score_lot`)."""
+    quarters: dict[str, None] = {}
+    districts: dict[str, None] = {}
+    for item in items:
+        row = item["row"]
+        where = ((row.get("s") or {}).get("liquidity") or {}).get("where")
+        if where == "район":
+            if row.get("district"):
+                districts[row["district"]] = None
+        elif row.get("quarter"):
+            quarters[row["quarter"]] = None
+    return list(quarters), list(districts)
+
+
+def unread_outcomes(
+    quarters: Iterable[str | None],
+    districts: Iterable[str | None] = (),
+    limit: int = HISTORY_CARDS,
+) -> list[str]:
+    """Не состоявшиеся торги в местах кандидатов, у которых карточка не прочитана. Без неё
     не видно, был на торгах единственный участник или заявок не подали вовсе, — а от этого
-    зависит, есть ли в квартале спрос (прод, 20.11.2026: у лота класса A итог был известен
-    по одним торгам квартала из восьми). Свежие — первыми."""
+    зависит, есть ли в месте спрос (прод, 20.11.2026: у лота класса A итог был известен
+    по одним торгам квартала из восьми). Сначала кварталы, затем районы — поровну на район,
+    чтобы большой район не занял всю очередь; внутри — свежие первыми. Берём только торги
+    за срок, по которому считается ликвидность: старше расчёт не видит."""
     qs = list(dict.fromkeys(q for q in quarters if q))[:300]
-    if not qs:
+    ds = list(dict.fromkeys(d for d in districts if d))[:100]
+    if not qs and not ds:
         return []
+    since = (datetime.now(UTC) - timedelta(days=30 * settings.torgi_scan_months)).date()
+    base = (
+        TorgiLot.status == "FAILED",
+        TorgiLot.card_at.is_(None),
+        TorgiLot.published.is_(None) | (TorgiLot.published >= since.isoformat()),
+        # в историю места расчёт берёт только земельные торги, не извещения и не другие виды
+        TorgiLot.bidd_type.is_(None)
+        | TorgiLot.bidd_type.in_([t for t in torgi_scan.MARKET_TYPES if t is not None]),
+        torgi_sync._is_auction(),
+    )
+    order = (TorgiLot.published.desc(), TorgiLot.id)
+    out: dict[str, None] = {}
     with session() as db:
-        q = (
-            select(TorgiLot.id)
-            .where(
-                TorgiLot.quarter.in_(qs),
-                TorgiLot.status == "FAILED",
-                TorgiLot.card_at.is_(None),
-            )
-            .order_by(TorgiLot.published.desc(), TorgiLot.id)
-            .limit(limit)
-        )
-        return list(db.scalars(q))
+        if qs:
+            q = select(TorgiLot.id).where(TorgiLot.quarter.in_(qs), *base)
+            out.update(dict.fromkeys(db.scalars(q.order_by(*order).limit(limit))))
+        if ds and len(out) < limit:
+            per = max(DISTRICT_MIN, (limit - len(out)) // len(ds))
+            for district in ds:
+                q = select(TorgiLot.id).where(TorgiLot.district == district, *base)
+                out.update(dict.fromkeys(db.scalars(q.order_by(*order).limit(per))))
+                if len(out) >= limit:
+                    break
+    return list(out)[:limit]
 
 
 def missing_cards(lot_ids: Iterable[str | None]) -> list[str]:
@@ -129,26 +166,39 @@ def fill_cards(
     return stats["cards"]
 
 
-def start_cards(lot_ids: Iterable[str | None]) -> int:
+def _enqueue(todo: list[str], urgent: bool) -> int:
+    """Поставить лоты в очередь карточек; срочные — в начало. Возвращает, сколько новых."""
+    with _cards_lock:
+        fresh = [i for i in todo if i not in _cards_queue]
+        if urgent:
+            first = set(todo)
+            rest = [i for i in _cards_queue if i not in first]
+            _cards_queue.clear()
+            _cards_queue.update(dict.fromkeys([*todo, *rest]))
+        else:
+            _cards_queue.update(dict.fromkeys(fresh))
+    return len(fresh)
+
+
+def start_cards(lot_ids: Iterable[str | None], *, urgent: bool = False) -> int:
     """Фоном, один поток на сервер, общая очередь (как у проверки обременений). Возвращает,
-    сколько лотов добавлено в очередь."""
+    сколько лотов добавлено в очередь. `urgent` — карточки самих кандидатов (задаток, шаг):
+    их ждёт человек на странице, они идут впереди итогов прошлых торгов, которых сотни."""
     global _cards_running
     if not _live():
         return 0
-    todo = missing_cards(lot_ids)
+    added = _enqueue(missing_cards(lot_ids), urgent)
     with _cards_lock:
-        fresh = [i for i in todo if i not in _cards_queue]
-        for i in fresh:
-            _cards_queue[i] = None
         if not _cards_queue or _cards_running:
-            return len(fresh)
+            return added
         _cards_running = True
 
     def job() -> None:
         global _cards_running
         while True:
             with _cards_lock:
-                batch = list(_cards_queue)[:CARDS_PER_RUN]
+                # короткими заходами: срочная карточка ждёт не дольше одного захода
+                batch = list(_cards_queue)[:QUEUE_BATCH]
                 if not batch:
                     _cards_running = False
                     return
@@ -162,7 +212,7 @@ def start_cards(lot_ids: Iterable[str | None]) -> int:
                         _cards_queue.pop(i, None)
 
     threading.Thread(target=job, name="torgi-hot-cards", daemon=True).start()
-    return len(fresh)
+    return added
 
 
 def cards_queued() -> int:
@@ -172,6 +222,17 @@ def cards_queued() -> int:
 
 # --- прогрев расчёта ---------------------------------------------------------------------------
 WARM_CANDIDATES = 40  # по стольким лучшим лотам готовим карточку, обременения и карту заранее
+
+
+def read_outcomes_of(lot_ids: Iterable[str]) -> int:
+    """Итоги прошлых торгов в местах этих лотов — в очередь чтения вне общей очереди.
+    Возвращает, сколько карточек добавлено."""
+    from landcheck.web import torgi_views
+
+    result, _names = torgi_views._scan_all(torgi_scan.ScanParams())
+    by_id = {r["id"]: r for r in result["rows"]}
+    items = [{"row": by_id[i]} for i in lot_ids if i in by_id]
+    return start_cards(unread_outcomes(*demand_places(items)))
 
 
 def warm_candidates() -> int:
@@ -184,12 +245,10 @@ def warm_candidates() -> int:
     res = torgi_hot.select(result["rows"])
     top = (res["hot"] + res["weak"])[:WARM_CANDIDATES]
     torgi_zones.start_fill([i["row"]["id"] for i in top if i["zones"][0] == "unknown"])
-    start_cards(
-        [
-            *(i["row"]["id"] for i in top if not i["row"].get("card")),
-            *unread_outcomes(i["row"].get("quarter") for i in top),
-        ]
-    )
+    start_cards([i["row"]["id"] for i in top if not i["row"].get("card")], urgent=True)
+    # итоги торгов — в местах всех прошедших отбор, не только сорока лучших: без них сводка
+    # придержит лот на сутки
+    start_cards(unread_outcomes(*demand_places(res["hot"] + res["weak"])))
     return torgi_nearby.start_fill([i["row"]["id"] for i in top if i["place"] is None])
 
 
@@ -205,9 +264,7 @@ def start_warm_loop(*, first_delay_s: float = 20.0, period_s: float = 180.0):
             try:
                 from landcheck.web import torgi_views
 
-                t0 = time.monotonic()
-                torgi_views._scan_all(torgi_scan.ScanParams())
-                took = time.monotonic() - t0
+                took = torgi_views.warm_recent()
                 # проверка на завершённых торгах: по ней же собирается «вернутся на торги»
                 torgi_views.backtest_start(torgi_views._synced_regions())
                 warm_candidates()
@@ -301,6 +358,8 @@ def _lot_line(n: int, item: dict[str, Any], names: dict[str, str], base: str, mo
     also = (
         f"\nв этом аукционе ещё {_count(more, 'лот', 'лота', 'лотов')} под критерии" if more else ""
     )
+    if torgi_hot.outcomes_unread(r):
+        also += "\nспрос не проверен: итоги прошлых торгов в этом месте площадка пока не отдала"
     return (
         f"{n}. {head} — вход {torgi_calc.rub(e['entry'])}{cut}, "
         f"{round((e['annual'] or 0) * 100)} % годовых, класс {item['cls']}, "
@@ -327,10 +386,21 @@ def build_digest(
     # Прод, 19.11.2026: все пять строк пробной сводки оказались лотами одного аукциона.
     # Строка сводки — аукцион: лучший лот и число остальных, прошедших отбор.
     groups: dict[str, list[dict[str, Any]]] = {}
+    # Прод, 20.11.2026: первые три строки первой сводки — лоты квартала, где семь торгов из
+    # восьми прошли без заявок; на момент сводки их итоги не были прочитаны. Новый лот, у
+    # которого спрос в месте ещё не проверен, в сводку не идёт и показанным не считается:
+    # итоги дочитываются вне очереди, лот придёт следующей сводкой. Ждём один раз — если
+    # площадка итоги так и не отдала, показываем с пометкой.
+    held = set((state or {}).get("waiting") or [])
+    waiting: list[dict[str, Any]] = []
     for i in res["hot"]:
         lot_id = i["row"]["id"]
-        if lot_id not in seen and lot_id not in marks:  # убранные и «в работе» не новые
-            groups.setdefault(auction_of(i["row"]), []).append(i)
+        if lot_id in seen or lot_id in marks:  # убранные и «в работе» не новые
+            continue
+        if lot_id not in held and torgi_hot.outcomes_unread(i["row"]):
+            waiting.append(i)
+            continue
+        groups.setdefault(auction_of(i["row"]), []).append(i)
     picked = list(groups.values())[: min(hp.top, DIGEST_MAX)]
     fresh = [g[0] for g in picked]
     fresh_ids = [i["row"]["id"] for g in picked for i in g]
@@ -352,7 +422,11 @@ def build_digest(
         {x["cad_num"] for raw in ready.values() for x in raw.get("returning", [])}
         | (watched - {r["cad_num"] for r in back} if not ready else set())
     )
-    new_state = {"seen": kept[-500:], "returning": now_watch[:1000]}
+    new_state = {
+        "seen": kept[-500:],
+        "returning": now_watch[:1000],
+        "waiting": [i["row"]["id"] for i in waiting][:500],
+    }
     if not fresh and not due and not back:
         return None, new_state
     base = settings.base_url or ""
@@ -368,6 +442,11 @@ def build_digest(
             f"(всего проходит {len(hot_ids)})"
         )
         lines += [_lot_line(n, g[0], names, base, len(g) - 1) for n, g in enumerate(picked, 1)]
+        if waiting:
+            lines.append(
+                f"Ещё {_count(len(waiting), 'лот ждёт', 'лота ждут', 'лотов ждут')} проверки "
+                "спроса: итоги прошлых торгов в их месте дочитываются, придут следующей сводкой"
+            )
     if due:
         if lines:
             lines.append("")
@@ -418,6 +497,8 @@ def run_digests(now: datetime | None = None) -> int:
                 notify.notify(db, user_id, "hot", text, "/tools/torgi-hot")
                 sent += 1
             db.commit()
+        if new_state.get("waiting"):
+            read_outcomes_of(new_state["waiting"])
     return sent
 
 

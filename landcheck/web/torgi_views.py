@@ -276,14 +276,32 @@ def district_names(lots: list[dict[str, Any]]) -> dict[str, str]:
 # расчёта и подписи районов: память не растёт с размером базы.
 SCAN_CACHE_TTL_S = 600
 SCAN_CACHE_MAX = 256
-_scan_cache: dict[tuple[str, str], tuple[float, Any, dict[str, Any], dict[str, str]]] = {}
+_scan_cache: dict[tuple[str, str], tuple[float, Any, dict[str, Any], dict[str, str], int]] = {}
 _data_version: dict[str, int] = {}
 _cache_lock = threading.Lock()  # расчёты идут в потоках запросов, записи — и в потоке сбора
+# Фоновые потоки (сбор, карточки, точки, обременения, карта) пишут лоты каждые несколько
+# секунд и во всех регионах сразу. Прод, 20.11.2026: пока читались итоги торгов, расчёт
+# устаревал быстрее, чем считался, и страница «Горячие» отвечала 8–15 с вместо 0,3 с. Запись
+# из фонового потока расчёт не сбрасывает: страница отдаёт прежний, пока ему меньше
+# `SOFT_STALE_S`, а обновляет его прогрев (`warm_recent`, раз в три минуты). Запись из запроса
+# пользователя (цена рынка в слое) сбрасывает расчёт сразу.
+SOFT_STALE_S = 300
+BACKGROUND_THREADS = "torgi-"  # имена всех фоновых потоков раздела начинаются так
+_soft_version: dict[str, int] = {}
+RECENT_PARAMS_S = 600  # чьи настройки расчёта держим тёплыми: с какими открывали за десять минут
+RECENT_PARAMS_MAX = 2
+_recent_params: dict[str, tuple[float, torgi_scan.ScanParams]] = {}
 
 
 @event.listens_for(Session, "after_flush")
 def _bump_versions(db: Session, _ctx: Any) -> None:
-    """Записали лот, запись слоя рынка или сделку — расчёт по этому региону устарел."""
+    """Записали лот, запись слоя рынка или сделку — расчёт по этому региону устарел: сразу,
+    если писал запрос пользователя, и «мягко», если фоновый поток."""
+    versions = (
+        _soft_version
+        if threading.current_thread().name.startswith(BACKGROUND_THREADS)
+        else _data_version
+    )
     for obj in (*db.new, *db.dirty, *db.deleted):
         if isinstance(obj, TorgiLot):
             region = obj.region or ""
@@ -294,7 +312,7 @@ def _bump_versions(db: Session, _ctx: Any) -> None:
         else:
             continue
         with _cache_lock:
-            _data_version[region] = _data_version.get(region, 0) + 1
+            versions[region] = versions.get(region, 0) + 1
 
 
 def _local_fn(region: str, lots: list[dict[str, Any]]):
@@ -319,16 +337,23 @@ def _local_fn(region: str, lots: list[dict[str, Any]]):
 
 
 def _region_scan(
-    region: str, params: torgi_scan.ScanParams
+    region: str, params: torgi_scan.ScanParams, *, fresh: bool = False
 ) -> tuple[dict[str, Any], dict[str, str]]:
     """Расчёт списка лотов региона и подписи его районов (из кэша, если данные не менялись).
-    Отдаём копию: страница сортирует и фильтрует строки на месте."""
+    Отдаём копию: страница сортирует и фильтрует строки на месте. `fresh` — учесть и фоновые
+    записи последних минут (так считает прогрев)."""
     key = (f"{dbmod.generation}:{region}", repr(params))
     # до расчёта: запись во время расчёта его устарит; объявления ленты — своя версия
     version = (_data_version.get(region, 0), ads_sync.version(region), rr_sync.version())
+    soft = _soft_version.get(region, 0)
     now = time.monotonic()
     hit = _scan_cache.get(key)
-    if hit and hit[1] == version and now - hit[0] < SCAN_CACHE_TTL_S:
+    if (
+        hit
+        and hit[1] == version
+        and now - hit[0] < SCAN_CACHE_TTL_S
+        and (hit[4] == soft or (not fresh and now - hit[0] < SOFT_STALE_S))
+    ):
         result, names = hit[2], hit[3]
     else:
         lots = torgi_sync.lots_of(region, months=settings.torgi_scan_months)
@@ -340,14 +365,19 @@ def _region_scan(
             _scan_cache.pop(key, None)
             while len(_scan_cache) >= SCAN_CACHE_MAX:
                 _scan_cache.pop(next(iter(_scan_cache)))  # самый давний расчёт
-            _scan_cache[key] = (now, version, result, names)
+            _scan_cache[key] = (now, version, result, names, soft)
     return {**result, "rows": list(result["rows"])}, names
 
 
-def _scan_all(params: torgi_scan.ScanParams) -> tuple[dict[str, Any], dict[str, str]]:
+def _scan_all(
+    params: torgi_scan.ScanParams, *, fresh: bool = False
+) -> tuple[dict[str, Any], dict[str, str]]:
     """Все собранные регионы одним списком (запрос Тони 17.11: видеть все ликвидные
     предложения сразу). Ликвидность и цены перепродажи считаются внутри своего региона,
     общий у списка только порядок: лучшие лоты всех регионов первыми."""
+    if not fresh:  # прогрев свои же обращения «свежими» не считает
+        with _cache_lock:
+            _recent_params[repr(params)] = (time.monotonic(), params)
     merged: dict[str, Any] = {
         "rows": [],
         "counts": {},
@@ -361,7 +391,7 @@ def _scan_all(params: torgi_scan.ScanParams) -> tuple[dict[str, Any], dict[str, 
     names_all: dict[str, str] = {}
     regions = _synced_regions()
     for code in regions:
-        result, names = _region_scan(code, params)
+        result, names = _region_scan(code, params, fresh=fresh)
         merged["rows"] += result["rows"]
         for key in ("total", "market_based", "priced"):
             merged[key] += result[key]
@@ -376,6 +406,25 @@ def _scan_all(params: torgi_scan.ScanParams) -> tuple[dict[str, Any], dict[str, 
     merged["regions"] = regions
     merged["rows"].sort(key=lambda r: (r["s"]["rank"], -r["s"]["score"]))
     return merged, names_all
+
+
+def warm_recent() -> float:
+    """Обновить расчёт всех регионов с учётом фоновых записей — при настройках по умолчанию
+    и при тех, с которыми страницы открывали за последние десять минут. Возвращает, сколько секунд
+    занял расчёт по умолчанию."""
+    t0 = time.monotonic()
+    default = torgi_scan.ScanParams()
+    _scan_all(default, fresh=True)
+    took = time.monotonic() - t0
+    now = time.monotonic()
+    with _cache_lock:
+        for key in [k for k, (at, _p) in _recent_params.items() if now - at > RECENT_PARAMS_S]:
+            del _recent_params[key]
+        recent = sorted(_recent_params.items(), key=lambda kv: -kv[1][0])
+    others = [p for key, (_at, p) in recent if key != repr(default)]
+    for params in others[:RECENT_PARAMS_MAX]:
+        _scan_all(params, fresh=True)
+    return took
 
 
 def _scan(region: str, q) -> tuple[dict[str, Any], torgi_scan.ScanParams, dict[str, str]]:
@@ -631,11 +680,11 @@ def torgi_hot_page(request: Request, user: TorgiDep):
         [i["row"]["id"] for i in candidates if i["zones"][0] == "unknown"]
     )
     torgi_hotjobs.start_cards(
-        [
-            *(i["row"]["id"] for i in candidates if not i["row"].get("card")),
-            # и итоги не состоявшихся торгов в кварталах показанных лотов: по ним судим о спросе
-            *torgi_hotjobs.unread_outcomes(i["row"].get("quarter") for i in (*shown, *work)),
-        ]
+        [i["row"]["id"] for i in candidates if not i["row"].get("card")], urgent=True
+    )
+    # и итоги не состоявшихся торгов в местах показанных лотов: по ним судим о спросе
+    torgi_hotjobs.start_cards(
+        torgi_hotjobs.unread_outcomes(*torgi_hotjobs.demand_places((*shown, *work)))
     )
     # карту спрашиваем только по тем, кого показываем: запрос идёт до минуты
     torgi_nearby.start_fill(

@@ -1454,6 +1454,112 @@ def test_map_facts_for_candidates_feed_class_and_investor_summary(client):  # no
     assert "ещё не спрошена" in client.get("/tools/torgi-lot/ACT_5/invest").text
 
 
+def test_background_writes_do_not_drop_the_scan_cache(client, monkeypatch):  # noqa: F811
+    """Прод, 20.11.2026: пока фоновые потоки читали итоги торгов, расчёт устаревал быстрее,
+    чем считался, и «Горячие» отвечали 8–15 с. Фоновая запись расчёт не сбрасывает — его
+    обновляет прогрев; запись из запроса пользователя сбрасывает сразу."""
+    import threading
+
+    from landcheck import torgi_scan
+    from landcheck.web import torgi_views as tv
+    from landcheck.web.db import TorgiLot, session
+
+    _hot_ready(client)
+    sp = torgi_scan.ScanParams()
+
+    def price() -> float:
+        rows = tv._scan_all(sp)[0]["rows"]
+        return next(r["price_start"] for r in rows if r["id"] == "ACT_0")
+
+    def write(value: float) -> None:
+        with session() as db:
+            db.get(TorgiLot, "ACT_0").price_start = value
+            db.commit()
+
+    def in_background(value: float, name: str) -> None:
+        thread = threading.Thread(target=write, args=(value,), name=name)
+        thread.start()
+        thread.join()
+
+    was = price()
+    in_background(was + 1000, "torgi-sync_0")
+    assert price() == was  # страница отдаёт прежний расчёт
+    assert tv.warm_recent() >= 0 and price() == was + 1000  # прогрев запись учёл
+    write(was + 2000)  # запись из запроса пользователя видна сразу
+    assert price() == was + 2000
+    in_background(was + 3000, "torgi-hot-cards")
+    assert price() == was + 2000
+    monkeypatch.setattr(tv, "SOFT_STALE_S", 0)  # расчёт старше срока — считаем и без прогрева
+    assert price() == was + 3000
+    # прогрев держит тёплыми и настройки, с которыми страницы открывали недавно
+    other = torgi_scan.ScanParams(extra=50_000)
+    tv._scan_all(other)
+    assert {repr(sp), repr(other)} <= set(tv._recent_params)
+    monkeypatch.setattr(tv, "RECENT_PARAMS_S", -1)
+    tv.warm_recent()
+    assert not tv._recent_params
+
+
+def test_digest_holds_new_lot_until_place_demand_is_checked(client):  # noqa: F811
+    """Прод, 20.11.2026: первые три строки первой сводки — лоты квартала, где семь торгов из
+    восьми прошли без заявок; итоги этих торгов на момент сводки не были прочитаны. Лот с
+    непроверенным спросом в сводку не идёт, итоги торгов его места читаются вне очереди."""
+    from landcheck.web import torgi_hotjobs as hj
+    from landcheck.web.db import TorgiLot, User, session
+
+    _hot_ready(client)
+    with session() as db:
+        uid = db.scalars(select(User).where(User.is_admin)).first().id
+        done = db.scalars(
+            select(TorgiLot).where(TorgiLot.status.in_(["SUCCEED", "FAILED"])).order_by(TorgiLot.id)
+        ).all()
+        unread = [x.id for x in done[:12]]  # итог не прочитан у 12 торгов района из 21
+        for lot in done[:12]:
+            lot.status, lot.card_at, lot.price_fin = "FAILED", None, None
+            lot.applied = lot.admitted = lot.fail_code = lot.fail_reason = None
+        db.commit()
+    crit = {"annual": "100", "cap": "2000000", "days": "3", "top": "5", "dg": "1"}
+    text, state = hj.build_digest(uid, crit, None)
+    # все двенадцать лотов района ждут: сообщения нет, показанными они не считаются
+    assert text is None and state["seen"] == [] and len(state["waiting"]) == 12
+    # о спросе у этих лотов расчёт судит по району — итоги читаем по району, свежие первыми
+    from landcheck import torgi_hot, torgi_scan
+    from landcheck.web import torgi_views as tv
+
+    rows = tv._scan_all(torgi_scan.ScanParams())[0]["rows"]
+    items = [{"row": r} for r in rows if r["id"] in state["waiting"]]
+    assert all(torgi_hot.outcomes_unread(i["row"]) for i in items)
+    assert hj.demand_places(items) == ([], ["40:13"])
+    assert sorted(hj.unread_outcomes([], ["40:13"])) == sorted(unread)
+    assert len(hj.unread_outcomes([], ["40:13", "40:14"], limit=4)) == 4
+    assert hj.unread_outcomes([], ["40:99"]) == []
+    assert hj.read_outcomes_of(state["waiting"]) == 0  # в тестах фоновое чтение выключено
+    # трое ждали со вчера — идут с пометкой; остальные девять ждут первый раз
+    part, st = hj.build_digest(uid, crit, {"waiting": state["waiting"][:3]})
+    assert part.startswith("Новых лотов под ваши критерии: 3 (всего проходит 12)")
+    assert "Ещё 9 лотов ждут проверки спроса" in part and len(st["waiting"]) == 9
+    assert len(st["seen"]) == 3 and part.count("спрос не проверен") == 3
+    # старше срока, по которому считается ликвидность, — не читаем: расчёт их не видит
+    with session() as db:
+        db.get(TorgiLot, unread[0]).published = "2020-01-01"
+        db.commit()
+    assert unread[0] not in hj.unread_outcomes([], ["40:13"])
+    # сутки спустя площадка итоги так и не отдала — показываем, но с пометкой
+    text, again = hj.build_digest(uid, crit, state)
+    assert text.startswith("Новых лотов под ваши критерии: 5 (всего проходит 12)")
+    assert text.count("спрос не проверен: итоги прошлых торгов") == 5
+    assert len(again["seen"]) == 5 and again["waiting"] == []
+    # итоги прочитаны, заявки на торгах были — пометки нет, лоты идут обычным порядком
+    with session() as db:
+        for lot_id in unread:
+            lot = db.get(TorgiLot, lot_id)
+            lot.card_at, lot.applied, lot.price_fin = NOW, 1, lot.price_start
+        db.commit()
+    text, state = hj.build_digest(uid, crit, None)
+    assert text.startswith("Новых лотов под ваши критерии: 5") and "спрос не проверен" not in text
+    assert state["waiting"] == [] and "ждут проверки спроса" not in text
+
+
 def test_candidate_cards_are_read_out_of_turn(client):  # noqa: F811
     """Прод, 19.11.2026: у 994 из 1519 идущих продаж региона карточка не прочитана — нет
     задатка, шага, отметки о градплане. Кандидатам карточку читаем сразу."""
@@ -1484,6 +1590,11 @@ def test_candidate_cards_are_read_out_of_turn(client):  # noqa: F811
     assert sorted(unread) == sorted(same) and hj.unread_outcomes([]) == []
     assert hj.unread_outcomes([quarter], limit=1) == unread[:1]
     assert hj.missing_cards(unread) == unread
+    # карточку кандидата ждёт человек на странице — она идёт впереди итогов прошлых торгов
+    hj._cards_queue.clear()
+    assert hj._enqueue(["H1", "H2"], False) == 2 and hj._enqueue(["C1", "H2"], True) == 1
+    assert list(hj._cards_queue) == ["C1", "H2", "H1"] and hj._enqueue(["H1"], False) == 0
+    hj._cards_queue.clear()
     api = torgi.TorgiClient(fake.client(), interval=0, sleep=lambda s: None)
     before = len(fake.seen)
     assert hj.fill_cards(["ACT_7", "ACT_0", "ACT_3"], api=api, now=NOW) == 2
