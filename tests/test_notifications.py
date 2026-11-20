@@ -221,3 +221,39 @@ def test_telegram_link_and_webhook(client, monkeypatch):  # noqa: F811
         assert (
             db.scalar(select(User).where(User.email == "tg@example.com")).telegram_chat_id is None
         )
+
+
+def test_long_notification_is_stored_whole_and_shown_with_lines_and_links(client):  # noqa: F811
+    """Прод, 20.11.2026: первая утренняя сводка из десяти лотов обрезалась на 2000 знаках —
+    девятая ссылка оборвана, десятого лота нет, а на странице текст шёл одним абзацем."""
+    from landcheck.web import notify
+    from landcheck.web.app import _note_html
+
+    _register(client, "digest@example.com", role="broker")
+    lines = ["Новых лотов под ваши критерии: 10 (всего проходит 25)"]
+    for i in range(1, 11):
+        lines.append(
+            f"{i}. обл. Свердловская, г.о. Верхняя Пышма, п. Красный, 11.7 сот., жильё: ИЖС, "
+            "ЛПХ — вход 580 974 ₽, не выше 879 237 ₽, 196 % годовых, класс A, заявки до 02.03"
+        )
+        lines.append(f"https://land-mp.example/tools/torgi-lot/2200007213000000076{i}_1/invest")
+    text = "\n".join(lines)
+    assert 2000 < len(text) < notify.NOTE_MAX
+    with session() as db:
+        uid = db.scalar(select(User.id).where(User.email == "digest@example.com"))
+        notify.notify(db, uid, "hot", text, "/tools/torgi-hot")
+        db.commit()
+    stored = _notes("digest@example.com")[-1].text
+    assert stored == text and stored.endswith("220000721300000007610_1/invest")
+    page = client.get("/notifications").text
+    link = "https://land-mp.example/tools/torgi-lot/22000072130000000769_1/invest"
+    assert f'<a href="{link}">{link}</a>' in page and page.count("/invest</a>") == 10
+    assert "(всего проходит 25)<br>" in page and "10. обл. Свердловская" in page
+    # разметка из текста уведомления не исполняется, точка после адреса в ссылку не входит
+    html = str(_note_html('<b>x</b> "q" https://a.example/p?x=1&y=2. Дальше'))
+    assert "&lt;b&gt;x&lt;/b&gt;" in html and "<b>" not in html
+    assert (
+        '<a href="https://a.example/p?x=1&amp;y=2">https://a.example/p?x=1&amp;y=2</a>. Д' in html
+    )
+    assert str(_note_html(None)) == ""
+    assert "<a" not in str(_note_html("javascript:alert(1) и /tools/torgi-hot"))  # только http(s)

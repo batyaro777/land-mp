@@ -39,12 +39,18 @@ KIND_LABELS = {
 BOT_USERNAME = "aimpland_bot"  # имя бота Land-MP в Telegram (подключён 21.10)
 
 
+# Сколько знаков уведомления храним для сайта. Первая утренняя сводка (прод, 20.11.2026) из
+# десяти лотов заняла больше прежних 2000 знаков: девятая ссылка оборвалась на полуслове,
+# десятый лот пропал. Колонка текстовая, запас — на сводку вдвое длиннее.
+NOTE_MAX = 8000
+
+
 def notify(db, user_id: int, kind: str, text: str, url: str | None = None) -> Notification | None:
     """Создать уведомление (без commit — его делает вызывающий код) и запланировать доставку."""
     user = db.get(User, user_id)
     if user is None:
         return None
-    n = Notification(user_id=user_id, kind=kind, text=text[:2000], url=url)
+    n = Notification(user_id=user_id, kind=kind, text=text[:NOTE_MAX], url=url)
     db.add(n)
     db.flush()
     _schedule_delivery(user, kind, text, url)

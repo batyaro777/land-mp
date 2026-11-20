@@ -101,6 +101,24 @@ from landcheck.lawlinks import law_links  # noqa: E402
 templates.env.filters["lawlinks"] = law_links
 templates.env.filters["lcfirst"] = lambda s: (s[:1].lower() + s[1:]) if s else s
 
+_NOTE_URL_RE = re.compile(r"https?://[^\s<>\"']+")
+
+
+def _note_html(text: str | None) -> Markup:
+    """Текст уведомления для страницы: строки остаются строками, адреса становятся ссылками.
+    Утренняя сводка — десяток строк со ссылками на лоты; одним абзацем её не прочитать."""
+
+    def link(m: re.Match[str]) -> str:
+        url = m.group(0).rstrip(".,;:!?)")
+        tail = m.group(0)[len(url) :]
+        return f'<a href="{url}">{url}</a>{tail}'
+
+    safe = str(escape(text or ""))  # сначала экранируем: в адресе остаются только & → &amp;
+    return Markup(_NOTE_URL_RE.sub(link, safe).replace("\n", "<br>\n"))
+
+
+templates.env.filters["note_html"] = _note_html
+
 
 def _short_category(name: str | None) -> str:
     """«Земли промышленности, энергетики, транспорта, связи, …» → «земли промышленности и
