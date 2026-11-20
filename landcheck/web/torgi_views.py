@@ -925,6 +925,7 @@ def _invest_item(lot_id: str, crit: dict[str, str]) -> dict[str, Any]:
     hp, sp = _hot_params(crit)
     row, names = _lot_row(lot_id, sp)
     item = torgi_hot.item_of(row, sp, hp)
+    item["towns"] = torgi_hot.towns_of(row)
     item["district_name"] = names.get(row.get("district") or "", "")
     item["region_name"] = CADASTRAL_REGIONS.get(row.get("region") or "", "")
     item["active"] = row.get("status") in torgi_scan.ACTIVE

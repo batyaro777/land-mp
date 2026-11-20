@@ -1491,6 +1491,22 @@ def test_background_writes_do_not_drop_the_scan_cache(client, monkeypatch):  # n
     assert price() == was + 2000
     monkeypatch.setattr(tv, "SOFT_STALE_S", 0)  # расчёт старше срока — считаем и без прогрева
     assert price() == was + 3000
+    # города рядом ищем только для страницы одного лота: поиск по справочнику для каждого из
+    # восьми тысяч лотов стоил «Горячим» две секунды на запрос
+    from landcheck import nearby, torgi_hot
+
+    calls: list[tuple[float, float]] = []
+    real = nearby.far_places
+    monkeypatch.setattr(nearby, "far_places", lambda a, b: calls.append((a, b)) or real(a, b))
+    assert client.get("/tools/torgi-hot").status_code == 200 and not calls
+    res = torgi_hot.select(tv._scan_all(sp)[0]["rows"])
+    assert res["hot"] and "towns" not in res["hot"][0] and not calls
+    with session() as db:
+        lot = db.get(TorgiLot, "ACT_3")
+        lot.lat, lot.lon = 54.60, 36.30
+        db.commit()
+    assert "Ближайший город: Калуга, " in client.get("/tools/torgi-lot/ACT_3/invest").text
+    assert calls == [(54.60, 36.30)]
     # прогрев держит тёплыми и настройки, с которыми страницы открывали недавно
     other = torgi_scan.ScanParams(extra=50_000)
     tv._scan_all(other)
