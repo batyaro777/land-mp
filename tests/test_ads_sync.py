@@ -152,7 +152,8 @@ def test_scan_and_lot_page_price_lots_by_ads_nearby(client):  # noqa: F811
     assert mk["source_label"].endswith("с поправкой на торг")
     invest = client.get("/tools/torgi-lot/ACT_0/invest").text
     assert "В объявлениях просят, за сотку" in invest and "В расчёте, за сотку" in invest
-    assert "цена взята по объявлениям с поправкой на торг" in invest  # класс не выше B
+    assert "цена взята по объявлениям с поправкой на торг: это гипотеза" in invest
+    assert "<strong>класс C</strong>" in invest
     assert torgi_scan.scan(lots)["counts"]["go"] == 0
 
     lot_page = client.get("/tools/torgi-lot/ACT_0?roi=40").text
