@@ -213,7 +213,7 @@ def test_weighted_quantiles_count_every_deal():
 def test_pick_local_prefers_quarter_deals_then_ads_then_district_deals():
     quarter = {"mid_m2": 300.0, "source_label": "сделки: квартал", "deals_level": "quarter"}
     district = {"mid_m2": 250.0, "source_label": "сделки: район", "deals_level": "district"}
-    ads = {"mid_m2": 500.0, "source_label": "объявления в радиусе 2 км: 6 шт."}
+    ads = {"mid_m2": 500.0, "source_label": "объявления в радиусе 2 км: 6 шт.", "radius_km": 2.0}
     pick = torgi_scan.pick_local
     best = pick(quarter, ads)
     assert best["source_label"] == "сделки: квартал"
@@ -222,6 +222,13 @@ def test_pick_local_prefers_quarter_deals_then_ads_then_district_deals():
     best = pick(district, ads)
     assert best["source_label"].startswith("объявления") and best["alt"]["label"] == "сделки: район"
     assert pick(district, None)["source_label"] == "сделки: район"
+    # объявления из радиуса 10 км — не «рядом»: сделки своего района идут первыми
+    # (прод, 20.11.2026: у 82 «горячих» из 142 выборка объявлений набрана в 10–20 км)
+    far = {**ads, "source_label": "объявления в радиусе 10 км: 6 шт.", "radius_km": 10.0}
+    best = pick(district, far)
+    assert best["source_label"] == "сделки: район" and best["alt"]["label"].startswith("объявл")
+    assert pick(None, far)["source_label"].startswith("объявления")  # других оценок нет
+    assert torgi_scan.NEAR_ADS_KM == 5.0
     assert "alt" not in pick(None, ads) and pick(None, None) is None
     assert pick({"mid_m2": None}, None) is None
 

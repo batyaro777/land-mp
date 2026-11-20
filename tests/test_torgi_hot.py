@@ -383,3 +383,16 @@ def test_summary_is_a_deal_case_with_range_terms_and_arguments():
     if not blind["sc"]["expected"]:
         assert th.sale_range(blind, sp) == [] and th.by_term(blind, sp) == []
     assert isinstance(th.case_of(blind, sp, hp)["pro"], list)
+
+
+def test_ask_prices_are_not_proof_enough_for_class_a():
+    """Прод, 20.11.2026: лента объявлений включена — «горячих» стало 130 вместо 15, три лота
+    в классе A. Объявление — цена предложения, а не сделки: класс не выше B, причина названа."""
+    sp = ts.ScanParams()
+    row = th.select(_rows(_active()))["hot"][0]["row"]
+    assert th.klass(row, [], sp) == ("A", [])
+    by_ads = {**row, "s": {**row["s"], "market": {**row["s"]["market"], "source": "ads"}}}
+    cls, why = th.klass(by_ads, [], sp)
+    assert cls == "B" and why == [th.ASK_PRICE]
+    item = th.item_of(by_ads, sp, th.HotParams())
+    assert item["cls"] == "B" and th.ASK_PRICE in th.case_of(item, sp, th.HotParams())["con"]

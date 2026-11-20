@@ -291,3 +291,28 @@ def test_index_measures_distance_along_longitude_too():
     assert index.around(LAT, LON, 2.0) == []
     ((dist, row),) = index.around(LAT, LON, 5.0)
     assert dist == pytest.approx(3.0, abs=0.01) and row[0] == 1
+
+
+def test_ask_prices_enter_the_model_at_deal_level():
+    """Прод, 20.11.2026, первый час работы ленты: у 1 470 лотов, где рядом есть и объявления,
+    и сделки Росреестра в том же квартале, объявления в середине в 1,93 раза выше сделок;
+    «горячие» с ценой по объявлениям на истории в 46 % случаев остались без заявок. В расчёт
+    цена объявлений идёт приведённой к уровню сделок, цена предложения остаётся рядом."""
+    ask = {
+        "min_m2": 1000.0,
+        "mid_m2": 1250.0,
+        "max_m2": 1500.0,
+        "source": "ads",
+        "source_label": "объявления в радиусе 2 км: 6 шт.",
+        "note": "земли поселений (ИЖС); это цены предложений, торг обычно снижает их",
+        "ads_n": 6,
+        "radius_km": 2.0,
+    }
+    mk = ads_api.deal_level(ask)
+    assert ads_api.ASK_TO_DEAL == 0.52 and round(1 / ads_api.ASK_TO_DEAL, 2) == 1.92
+    assert (mk["min_m2"], mk["mid_m2"], mk["max_m2"]) == (520.0, 650.0, 780.0)
+    assert (mk["ask_min_m2"], mk["ask_mid_m2"], mk["ask_max_m2"]) == (1000.0, 1250.0, 1500.0)
+    assert mk["source_label"] == "объявления в радиусе 2 км: 6 шт., с поправкой на торг"
+    assert "в 1,9 раза выше цен сделок" in mk["note"] and mk["ads_n"] == 6
+    assert ask["mid_m2"] == 1250.0 and "ask_mid_m2" not in ask  # исходную оценку не портим
+    assert ads_api.deal_level(None) is None

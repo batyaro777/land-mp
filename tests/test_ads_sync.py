@@ -146,6 +146,13 @@ def test_scan_and_lot_page_price_lots_by_ads_nearby(client):  # noqa: F811
     lots = torgi_sync.lots_of("40")
     res = torgi_scan.scan(lots, near_fn=ads_sync.near_fn("40", lots))
     assert res["counts"]["go"] == 12 and res["market_based"] == 12
+    # в расчёт цена объявлений идёт с поправкой на торг, цена предложения — рядом
+    mk = next(r for r in res["rows"] if r["id"] == "ACT_0")["s"]["market"]
+    assert mk["source"] == "ads" and mk["mid_m2"] == pytest.approx(mk["ask_mid_m2"] * 0.52)
+    assert mk["source_label"].endswith("с поправкой на торг")
+    invest = client.get("/tools/torgi-lot/ACT_0/invest").text
+    assert "В объявлениях просят, за сотку" in invest and "В расчёте, за сотку" in invest
+    assert "цена взята по объявлениям с поправкой на торг" in invest  # класс не выше B
     assert torgi_scan.scan(lots)["counts"]["go"] == 0
 
     lot_page = client.get("/tools/torgi-lot/ACT_0?roi=40").text

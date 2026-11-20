@@ -97,7 +97,8 @@ window.addEventListener('load', function () {
 <table class="results invest">
   <thead><tr><th></th><th class="num">Низ рынка</th><th class="num">Середина</th><th class="num">Верх</th></tr></thead>
   <tbody>
-    <tr><th>За сотку</th><td class="num">{{ s.sale_sotka.min|money if s.sale_sotka.min else '—' }}</td><td class="num"><strong>{{ s.sale_sotka.mid|money }}</strong></td><td class="num">{{ s.sale_sotka.max|money if s.sale_sotka.max else '—' }}</td></tr>
+    {% if mk.ask_mid_m2 %}<tr><th>В объявлениях просят, за сотку<div class="small muted">цены предложения, до торга</div></th><td class="num muted">{{ (mk.ask_min_m2 * 100)|money }}</td><td class="num muted">{{ (mk.ask_mid_m2 * 100)|money }}</td><td class="num muted">{{ (mk.ask_max_m2 * 100)|money }}</td></tr>{% endif %}
+    <tr><th>{{ 'В расчёте, за сотку' if mk.ask_mid_m2 else 'За сотку' }}{% if mk.ask_mid_m2 %}<div class="small muted">с поправкой на торг</div>{% endif %}</th><td class="num">{{ s.sale_sotka.min|money if s.sale_sotka.min else '—' }}</td><td class="num"><strong>{{ s.sale_sotka.mid|money }}</strong></td><td class="num">{{ s.sale_sotka.max|money if s.sale_sotka.max else '—' }}</td></tr>
     <tr><th>За участок</th><td class="num">{{ s.sale.min|money if s.sale.min else '—' }}</td><td class="num"><strong>{{ s.sale.mid|money }}</strong></td><td class="num">{{ s.sale.max|money if s.sale.max else '—' }}</td></tr>
     {% if i.range %}{% set rg = {} %}{% for x in i.range %}{% set _ = rg.update({x.key: x}) %}{% endfor %}
     <tr><th>Прибыль после налога<div class="small muted">покупка за {{ e.entry|money }}</div></th>{% for k in ('min', 'mid', 'max') %}<td class="num{% if rg.get(k) and rg[k].profit < 0 %} err{% endif %}">{{ rg[k].profit|money if rg.get(k) else '—' }}</td>{% endfor %}</tr>

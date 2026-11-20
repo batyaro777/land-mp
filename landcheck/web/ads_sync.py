@@ -200,8 +200,11 @@ def near_fn(
             point, approx = (lot["lat"], lot["lon"]), False
         else:
             point, approx = quarters.get(lot.get("quarter") or ""), True
-        return ads_api.near_market(
-            point, lot.get("area_m2"), lot.get("vri_group"), index, now=now, approx=approx
+        # в расчёт лота цена объявлений идёт приведённой к уровню сделок (`ads_api.deal_level`)
+        return ads_api.deal_level(
+            ads_api.near_market(
+                point, lot.get("area_m2"), lot.get("vri_group"), index, now=now, approx=approx
+            )
         )
 
     return fn
