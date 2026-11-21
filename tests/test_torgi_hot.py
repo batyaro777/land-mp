@@ -561,3 +561,39 @@ def test_plot_nobody_took_twice_at_the_same_price_goes_to_manual_check():
     raw = th.backtest([*twice, third, *_district()], layer=LAYER, today=TODAY)
     assert raw["nodemand"] == 1 and raw["nodemand_outcomes"]["none"] == 1
     assert ts.prior_of([*twice, third])[(cad, "sale")] == (3, 200_000)
+
+
+def test_lot_from_a_region_where_selection_often_missed_is_a_hypothesis():
+    """Прод, 21.11.2026: «Выбор системы» поставил первым лот в Новгородской области, где на
+    завершённых торгах больше половины таких же «горячих» остались без заявок (в Московской
+    области — 2 %). Отбор, который в регионе ошибается через раз, лот не доказывает."""
+    assert th.trust_of(None) is None and th.trust_of({"hot_outcomes": {}}) is None
+    bad = th.trust_of({"hot_outcomes": {"sold": 3, "single": 4, "none": 9}})
+    good = th.trust_of({"hot_outcomes": {"sold": 24, "single": 22, "none": 1}})
+    few = th.trust_of({"hot_outcomes": {"sold": 1, "single": 0, "none": 4}})
+    assert bad == {"n": 16, "none": 9, "share": 0.56} and good["share"] == 0.02
+
+    def pick(trust) -> dict:
+        rows = _rows(_active())
+        rows[0]["s"]["trust"] = trust
+        res = th.best(rows)
+        return (res["picks"] or res["weak"])[0]
+
+    sp, hp = ts.ScanParams(), th.HotParams()
+    doubt = pick(bad)
+    assert doubt["cls"] == "C" and th.shaky(doubt["row"]["s"])
+    assert any(
+        "из 16 таких же лотов прошлых торгов 9 остались без заявок (56 %)" in t
+        for t in doubt["cls_why"]
+    )
+    assert th.best(_rows(_active()))["picks"][0]["cls"] == "A"  # без проверки региона — как раньше
+    proven = pick(good)
+    assert proven["cls"] == "A" and proven["dims"]["trust"] == good
+    pro = " | ".join(th.case_of(proven, sp, hp)["pro"])
+    assert "в этом регионе отбор подтверждается: из 47 таких же лотов" in pro
+    assert "покупателя нашли 46" in pro
+    # пяти лотов мало, чтобы судить о регионе: класс не меняется, довода «за» тоже нет
+    unknown = pick(few)
+    assert unknown["cls"] == "A" and not th.shaky(unknown["row"]["s"])
+    assert "отбор подтверждается" not in " | ".join(th.case_of(unknown, sp, hp)["pro"])
+    assert th.TRUST_MIN == 10 and th.TRUST_NONE == 0.4

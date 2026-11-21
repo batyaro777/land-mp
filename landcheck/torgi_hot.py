@@ -121,6 +121,34 @@ NO_DEMAND_SHARE = 0.5
 THIN_DEMAND_SHARE = 0.2
 
 
+# Прод, 21.11.2026: «Выбор системы» поставил первым лот в Новгородской области, а проверка на
+# завершённых торгах там же показывает, что больше половины «горячих» остались без заявок
+# (Новгородская 56 %, Пермский край 55 %, Краснодарский 50 % при 22 % в среднем и 2 % в
+# Московской области). Отбор прошёл все проверки места и всё равно ошибается в этих регионах
+# через раз — значит, лот оттуда не доказан, пока его не посмотрел человек.
+TRUST_MIN = 10  # «горячих» на истории региона, с которых о точности отбора в нём можно судить
+TRUST_NONE = 0.4  # доля оставшихся без заявок, с которой отбору в регионе не верим
+TRUST_GOOD = 0.15  # доля не выше — отбор в регионе подтверждается, это довод «за»
+
+
+def trust_of(raw: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Проверка отбора в регионе по его же завершённым торгам (`backtest`): сколько лотов
+    прошли бы в «горячие» и сколько из них остались без заявок. None — проверки ещё нет."""
+    outcomes = (raw or {}).get("hot_outcomes") or {}
+    n = sum(outcomes.values())
+    if not n:
+        return None
+    none = outcomes.get("none", 0)
+    return {"n": n, "none": none, "share": round(none / n, 2)}
+
+
+def shaky(s: dict[str, Any]) -> bool:
+    """В регионе лота отбор на истории слишком часто выбирал участки, на которые никто не
+    пришёл."""
+    trust = s.get("trust")
+    return bool(trust and trust["n"] >= TRUST_MIN and trust["share"] >= TRUST_NONE)
+
+
 # Прод, 21.11.2026, «горячие» на завершённых торгах всех регионов (321 лот): у участков без
 # прежних попыток без заявок остались 22 % торгов; у тех, кого дважды и больше выставляли по
 # той же цене, — 86 % (14 лотов); у повторных со сниженным стартом — 23 % (13 лотов), и больше
@@ -348,6 +376,12 @@ def case_of(
         pro.append(f"район ликвидный: индекс {idx} из 100")
     if item["zones"][0] == "clean":
         pro.append("обременений и охранных зон на участке нет")
+    trust = s.get("trust")
+    if trust and trust["n"] >= TRUST_MIN and trust["share"] <= TRUST_GOOD:
+        pro.append(
+            f"в этом регионе отбор подтверждается: из {trust['n']} таких же лотов прошлых "
+            f"торгов покупателя нашли {trust['n'] - trust['none']}"
+        )
     place = item.get("place")
     if place and place["level"] == "good":
         pro.append("доступность хорошая: " + ", ".join(place["why"]))
@@ -459,6 +493,13 @@ def klass(
         why.append("до участка трудно добраться: " + ", ".join(place["why"]))
     if place and place["bad"]:
         why.append("рядом: " + ", ".join(place["bad"]))
+    unproven = shaky(s)
+    if unproven:
+        trust = s["trust"]
+        why.append(
+            f"в этом регионе отбор часто ошибается: из {trust['n']} таких же лотов прошлых "
+            f"торгов {trust['none']} остались без заявок ({round(trust['share'] * 100)} %)"
+        )
     if fail:
         # цена рынка не прошла сверку — это гипотеза, какими бы ни были остальные признаки
         return "C", [*fail, *why]
@@ -470,8 +511,9 @@ def klass(
         or bool(spread and spread >= torgi_scan.WIDE_SPREAD)
     )
     by_ads = mk.get("source") == "ads"
-    # участок, до которого по карте не доехать, и цена по объявлениям — гипотезы
-    return ("C" if weak or remote or by_ads else "B"), why
+    # участок, до которого по карте не доехать, цена по объявлениям и регион, где отбор на
+    # истории ошибается через раз, — гипотезы
+    return ("C" if weak or remote or by_ads or unproven else "B"), why
 
 
 def _passes(item: dict[str, Any], hp: HotParams, min_annual: float) -> str | None:
@@ -742,6 +784,7 @@ def dims_of(item: dict[str, Any]) -> dict[str, Any]:
         "hold": sc["hold"],
         "comp": comp["text"] if comp else None,
         "liquidity": s["liquidity"].get("index"),
+        "trust": s.get("trust"),
     }
 
 

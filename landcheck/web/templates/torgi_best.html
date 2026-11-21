@@ -34,6 +34,7 @@
       <tr><th title="Сделки Росреестра с участками того же назначения и похожей площади">Ликвидность места</th><td>{% if d.deals_quarter is not none %}сделок за год: в квартале {{ d.deals_quarter }}, в районе {{ d.deals_district }}{% else %}оборот сделок не посчитан{% endif %}{% if d.liquidity is not none %} · индекс торгов района {{ d.liquidity }} из 100{% endif %}</td></tr>
       <tr><th title="Срок, за который участок продаётся в расчёте: по обороту сделок места">Срок продажи</th><td>{{ d.hold }} мес. в расчёте{% if i.cutoff %} · цена отсечения на торгах — <strong>{{ i.cutoff|money }}</strong>{% endif %}</td></tr>
       <tr><th>Торги в этом месте</th><td>{% if i.comp %}{{ i.comp.text }}: {{ i.comp.detail }}{% else %}завершённых торгов мало, о конкуренции судить не по чему{% endif %}</td></tr>
+      <tr><th title="Завершённые торги региона оценены так, как если бы шли сейчас: сколько лотов прошли бы этот же отбор и чем для них кончились торги">Проверка отбора в регионе</th><td>{% if d.trust %}из {{ d.trust.n }} таких же лотов прошлых торгов покупателя нашли {{ d.trust.n - d.trust.none }}{% if d.trust.n >= 10 %} ({{ ((1 - d.trust.share) * 100)|round|int }} %){% else %} — лотов мало, судить рано{% endif %}{% else %}ещё считается{% endif %} · <a href="/tools/torgi-backtest" class="muted">точность модели</a></td></tr>
     </tbody>
   </table>
   <div class="invest-case">

@@ -377,6 +377,10 @@ def _region_scan(
             while len(_scan_cache) >= SCAN_CACHE_MAX:
                 _scan_cache.pop(next(iter(_scan_cache)))  # самый давний расчёт
             _scan_cache[key] = (now, version, result, names, soft)
+    # проверка отбора в регионе по его завершённым торгам — как только она посчитана
+    trust = torgi_hot.trust_of(backtest_ready([region]).get(region))
+    for row in result["rows"]:
+        row["s"]["trust"] = trust
     return {**result, "rows": list(result["rows"])}, names
 
 
@@ -812,6 +816,7 @@ def torgi_best_page(request: Request, user: TorgiDep):
     критериев, по одной мере, со стратегией и доводами по каждому лоту — и набор под бюджет."""
     q = request.query_params
     budget, top, sp = _best_params(q)
+    backtest_start(_synced_regions())  # проверка отбора по регионам — её цифры стоят в карточках
     result, names = _scan_all(sp)
     marks = torgi_hotjobs.marks_of(user.id)
     res = torgi_hot.best(
@@ -1054,6 +1059,7 @@ def _lot_row(lot_id: str, sp: torgi_scan.ScanParams) -> tuple[dict[str, Any], di
         prior=torgi_scan.prior_of(lots),
         near=near_fn(found) if near_fn else None,
     )
+    s["trust"] = torgi_hot.trust_of(backtest_ready([region]).get(region))
     return {**found, "s": s}, names
 
 

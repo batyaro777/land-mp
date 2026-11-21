@@ -1505,6 +1505,9 @@ def test_system_choice_page_ranks_deals_builds_a_set_and_keeps_criteria(client):
     assert html.count('<article class="best-card') == 10 and "Лучшие сделки: 10 из 12" in html
     assert '<span class="best-rank">1</span>' in html and "Стратегия:" in html
     assert "Недооценка" in html and "Ликвидность места" in html and "Срок продажи" in html
+    # проверка отбора по завершённым торгам региона — в каждой карточке, с числами
+    assert "Проверка отбора в регионе" in html and "таких же лотов прошлых торгов" in html
+    assert "покупателя нашли" in html and "ещё считается" not in html
     assert "За сделку" in html and "Против и что проверить" in html and "<h4>Риски</h4>" in html
     assert 'href="/tools/torgi-lot/ACT_0/invest"' in html and "torgi.gov.ru/new/public/lots" in html
     assert 'hx-get="/tools/torgi-best/split"' in html and "Набор под бюджет" not in html
