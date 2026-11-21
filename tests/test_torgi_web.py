@@ -1573,8 +1573,18 @@ def test_background_writes_do_not_drop_the_scan_cache(client, monkeypatch):  # n
     assert price() == was + 2000
     in_background(was + 3000, "torgi-hot-cards")
     assert price() == was + 2000
-    monkeypatch.setattr(tv, "SOFT_STALE_S", 0)  # расчёт старше срока — считаем и без прогрева
-    assert price() == was + 3000
+    # прогрев жив — запрос пользователя не считает сам ни по сроку, ни из-за фоновых записей
+    # (прод, 21.11.2026: первое открытие «Горячих» — 6 с, потому что срок расчёта кончался
+    # между двумя прогревами)
+    assert tv.warm_recent() >= 0 and price() == was + 3000
+    in_background(was + 3500, "torgi-hot-cards")
+    monkeypatch.setattr(tv, "SOFT_STALE_S", 0)
+    monkeypatch.setattr(tv, "SCAN_CACHE_TTL_S", 0)
+    assert price() == was + 3000  # прежний расчёт: обновит прогрев
+    monkeypatch.setattr(tv, "_warmed_at", (None, 0.0))  # прогрев умер — считаем сами
+    assert price() == was + 3500
+    monkeypatch.setattr(tv, "SCAN_CACHE_TTL_S", 600)
+    monkeypatch.setattr(tv, "SOFT_STALE_S", 300)
     # города рядом ищем только для страницы одного лота: поиск по справочнику для каждого из
     # восьми тысяч лотов стоил «Горячим» две секунды на запрос
     from landcheck import nearby, torgi_hot

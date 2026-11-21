@@ -41,6 +41,8 @@ BUMP_EVERY_PAGES = 20  # при долгой загрузке расчёты л�
 
 _lock = threading.Lock()
 _version: dict[str, int] = {}
+_loud: dict[str, int] = {}
+LOOP_THREAD = "ads-api"  # имя потока фонового сбора
 _index: dict[str, tuple[tuple[int, int], ads_api.AdIndex | None]] = {}
 _wanted: dict[str, None] = {}
 _fatal: str | None = None
@@ -67,9 +69,17 @@ def version(region: str) -> int:
     return _version.get(region, 0)
 
 
+def loud_version(region: str) -> int:
+    """Растёт, когда объявления региона загрузили по запросу человека (не фоновым сбором):
+    такая загрузка устаревает расчёт списка лотов сразу, а фоновая — «мягко», до прогрева."""
+    return _loud.get(region, 0)
+
+
 def _bump(region: str) -> None:
     with _lock:
         _version[region] = _version.get(region, 0) + 1
+        if threading.current_thread().name != LOOP_THREAD:
+            _loud[region] = _loud.get(region, 0) + 1
 
 
 # --- хранение -------------------------------------------------------------------------------
@@ -409,7 +419,7 @@ def start_loop(*, first_delay_s: float = 180.0) -> threading.Thread | None:
                 log.warning("ads-api loop: %s", type(exc).__name__)
                 time.sleep(LOOP_PAUSE_S)
 
-    _thread = threading.Thread(target=loop, name="ads-api", daemon=True)
+    _thread = threading.Thread(target=loop, name=LOOP_THREAD, daemon=True)
     _thread.start()
     return _thread
 

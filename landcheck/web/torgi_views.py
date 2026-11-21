@@ -276,7 +276,7 @@ def district_names(lots: list[dict[str, Any]]) -> dict[str, str]:
 # расчёта и подписи районов: память не растёт с размером базы.
 SCAN_CACHE_TTL_S = 600
 SCAN_CACHE_MAX = 256
-_scan_cache: dict[tuple[str, str], tuple[float, Any, dict[str, Any], dict[str, str], int]] = {}
+_scan_cache: dict[tuple[str, str], tuple[float, Any, dict[str, Any], dict[str, str], Any]] = {}
 _data_version: dict[str, int] = {}
 _cache_lock = threading.Lock()  # расчёты идут в потоках запросов, записи — и в потоке сбора
 # Фоновые потоки (сбор, карточки, точки, обременения, карта) пишут лоты каждые несколько
@@ -288,6 +288,13 @@ _cache_lock = threading.Lock()  # расчёты идут в потоках за
 SOFT_STALE_S = 300
 BACKGROUND_THREADS = "torgi-"  # имена всех фоновых потоков раздела начинаются так
 _soft_version: dict[str, int] = {}
+# Прод, 21.11.2026: первое открытие «Горячих» — 6 с, второе — 2 с, третье — 0,3 с. Расчёт
+# региона живёт `SCAN_CACHE_TTL_S`, прогрев приходит раз в три минуты, и запрос, попавший в
+# промежуток между концом срока и прогревом, считал регион сам; то же после каждой загрузки
+# объявлений. Пока прогрев жив, запрос пользователя берёт прежний расчёт и ничего не считает:
+# обновление — дело прогрева. Прогрев умер — работают прежние сроки.
+WARM_ALIVE_S = 420.0  # прогрев отработал не раньше — он жив (его период — три минуты)
+_warmed_at: tuple[Any, float] = (None, 0.0)  # база, которую грел, и когда
 RECENT_PARAMS_S = 600  # чьи настройки расчёта держим тёплыми: с какими открывали за десять минут
 RECENT_PARAMS_MAX = 2
 _recent_params: dict[str, tuple[float, torgi_scan.ScanParams]] = {}
@@ -343,16 +350,20 @@ def _region_scan(
     Отдаём копию: страница сортирует и фильтрует строки на месте. `fresh` — учесть и фоновые
     записи последних минут (так считает прогрев)."""
     key = (f"{dbmod.generation}:{region}", repr(params))
-    # до расчёта: запись во время расчёта его устарит; объявления ленты — своя версия
-    version = (_data_version.get(region, 0), ads_sync.version(region), rr_sync.version())
-    soft = _soft_version.get(region, 0)
+    # до расчёта: запись во время расчёта его устарит. Объявления ленты грузит фоновый поток —
+    # их версия «мягкая», как и фоновые записи лотов
+    version = (_data_version.get(region, 0), rr_sync.version(), ads_sync.loud_version(region))
+    soft = (_soft_version.get(region, 0), ads_sync.version(region))
     now = time.monotonic()
     hit = _scan_cache.get(key)
+    age = now - hit[0] if hit else 0.0
+    # запрос пользователя при живом прогреве не считает ни из-за срока, ни из-за фоновых записей
+    lenient = not fresh and _warmed_at[0] == dbmod.generation and now - _warmed_at[1] < WARM_ALIVE_S
     if (
         hit
         and hit[1] == version
-        and now - hit[0] < SCAN_CACHE_TTL_S
-        and (hit[4] == soft or (not fresh and now - hit[0] < SOFT_STALE_S))
+        and (age < SCAN_CACHE_TTL_S or (lenient and age < SCAN_CACHE_TTL_S + WARM_ALIVE_S))
+        and (hit[4] == soft or lenient or (not fresh and age < SOFT_STALE_S))
     ):
         result, names = hit[2], hit[3]
     else:
@@ -412,10 +423,12 @@ def warm_recent() -> float:
     """Обновить расчёт всех регионов с учётом фоновых записей — при настройках по умолчанию
     и при тех, с которыми страницы открывали за последние десять минут. Возвращает, сколько секунд
     занял расчёт по умолчанию."""
+    global _warmed_at
     t0 = time.monotonic()
     default = torgi_scan.ScanParams()
     _scan_all(default, fresh=True)
     took = time.monotonic() - t0
+    _warmed_at = (dbmod.generation, time.monotonic())
     now = time.monotonic()
     with _cache_lock:
         for key in [k for k, (at, _p) in _recent_params.items() if now - at > RECENT_PARAMS_S]:
