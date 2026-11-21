@@ -775,6 +775,105 @@ def torgi_hot_page(request: Request, user: TorgiDep):
     )
 
 
+# --- «Выбор системы» (ТЗ v5, п. 9) -----------------------------------------------------------
+SPLIT_TTL_S = 600.0  # гипотезы «под раздел» пересчитываем не чаще: это обход сделок всех округов
+_split_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+
+
+def _best_params(q) -> tuple[float | None, int, torgi_scan.ScanParams]:
+    """Параметры «Выбора системы» из адреса страницы. Нигде не запоминаются: критерии
+    «Горячих» и утренней сводки пользователя этот режим не трогает."""
+    budget = _rub(_num(q.get("budget")))
+    top = _num(q.get("top"))
+    top = int(top) if top is not None and int(top) in torgi_hot.BEST_TOPS else 10
+    sp = torgi_scan.ScanParams()
+    if q.get("assign"):
+        ratio = torgi_calc._pct(q.get("assign"), 0.0)
+        sp.assign_ratio = min(ratio, 2.0) if ratio > 0 else None
+    return budget, top, sp
+
+
+@router.get("/tools/torgi-best", response_class=HTMLResponse)
+def torgi_best_page(request: Request, user: TorgiDep):
+    """«Выбор системы»: лучшие сделки всех собранных регионов одним списком — без настройки
+    критериев, по одной мере, со стратегией и доводами по каждому лоту — и набор под бюджет."""
+    q = request.query_params
+    budget, top, sp = _best_params(q)
+    result, names = _scan_all(sp)
+    marks = torgi_hotjobs.marks_of(user.id)
+    res = torgi_hot.best(
+        result["rows"],
+        sp,
+        budget=budget,
+        top=top,
+        skip=lambda i: marks.get(i["row"]["id"], ("", None))[0] == "skip",
+    )
+    hp = res["params"]
+    plan_ids = {i["row"]["id"] for i in res["plan"]["lots"]} if res["plan"] else set()
+    for item in (*res["picks"], *res["weak"], *(res["plan"]["lots"] if res["plan"] else ())):
+        if "case" not in item:
+            item["case"] = torgi_hot.case_of(item, sp, hp)
+        if "towns" not in item["row"]:
+            item["row"]["towns"] = torgi_hot.towns_of(item["row"])
+    # карточки, обременения, карта и итоги торгов в местах выбранных лотов — как у «Горячих»
+    shown = [*res["picks"], *res["weak"]]
+    torgi_zones.start_fill([i["row"]["id"] for i in shown if i["zones"][0] == "unknown"])
+    torgi_hotjobs.start_cards(
+        [i["row"]["id"] for i in shown if not i["row"].get("card")], urgent=True
+    )
+    torgi_hotjobs.start_cards(
+        torgi_hotjobs.unread_outcomes(*torgi_hotjobs.demand_places(res["picks"]))
+    )
+    torgi_nearby.start_fill([i["row"]["id"] for i in res["picks"] if i["place"] is None])
+    return render(
+        request,
+        "torgi_best.html",
+        user=user,
+        res=res,
+        hp=hp,
+        sp=sp,
+        budget=budget,
+        top=top,
+        tops=torgi_hot.BEST_TOPS,
+        assign=q.get("assign") or "",
+        plan_ids=plan_ids,
+        marks=marks,
+        strategies=torgi_hot.STRATEGY_RU,
+        synced=_synced_regions(),
+        region_names=CADASTRAL_REGIONS,
+        names=names,
+        kinds=torgi_scan.KIND_RU,
+        groups=torgi_scan.GROUPS,
+        img_base=torgi.FILE_URL.format(file_id=""),
+        split_qs=urlencode({"assign": q.get("assign")} if q.get("assign") else {}),
+    )
+
+
+@router.get("/tools/torgi-best/split", response_class=HTMLResponse)
+def torgi_best_split(request: Request, user: TorgiDep):
+    """Гипотезы «большой участок под раздел» — отдельным запросом: обход сделок всех округов
+    идёт дольше страницы, поэтому блок подгружается после неё и держится в памяти."""
+    sp = torgi_scan.ScanParams()
+    key = repr(sp)
+    hit = _split_cache.get(key)
+    if hit and time.monotonic() - hit[0] < SPLIT_TTL_S:
+        found = hit[1]
+    else:
+        result, _ = _scan_all(sp)
+        found = torgi_hot.split_candidates(result["rows"], rr_sync.market_fn(), sp)
+        _split_cache[key] = (time.monotonic(), found)
+    return render(
+        request,
+        "_torgi_split.html",
+        user=user,
+        found=found,
+        region_names=CADASTRAL_REGIONS,
+        plot_sotka=torgi_hot.SPLIT_PLOT / 100,
+        use=torgi_hot.SPLIT_USE,
+        min_ratio=torgi_hot.SPLIT_MIN_RATIO,
+    )
+
+
 @router.post("/tools/torgi-mark/{lot_id}/{mark}")
 async def torgi_mark(request: Request, user: TorgiDep, lot_id: str, mark: str):
     """Отметка на лоте: `work` — взял в работу, `skip` — не подходит (с причиной), `clear` —

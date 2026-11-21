@@ -1486,6 +1486,58 @@ def test_hot_row_opens_summary_that_defends_the_deal(client):  # noqa: F811
         assert db.scalars(select(User).where(User.is_admin)).first().hot_criteria["order"] == "mo"
 
 
+def test_system_choice_page_ranks_deals_builds_a_set_and_keeps_criteria(client):  # noqa: F811
+    """ТЗ v5, п. 9, в концепции Тони от 20.11.2026: лучшие сделки всех регионов одним списком
+    без настройки критериев, стратегия и доводы по каждой, набор лотов под бюджет. Режим не
+    трогает сохранённые критерии «Горячих» — по ним идёт утренняя сводка."""
+    from landcheck.web import torgi_views as tv
+    from landcheck.web.db import User, session
+
+    _hot_ready(client)
+    client.get("/tools/torgi-hot?annual=100&cap=2000000&days=3&top=5")
+    with session() as db:
+        saved = dict(db.scalars(select(User).where(User.is_admin)).first().hot_criteria)
+    page = client.get("/tools/torgi-best")
+    assert page.status_code == 200
+    html = page.text
+    assert "<h2>Выбор системы" in html and 'class="active">Выбор системы</a>' in html
+    assert "Как система сравнивает сделки" in html and "годовая доходность в осторожном" in html
+    assert html.count('<article class="best-card') == 10 and "Лучшие сделки: 10 из 12" in html
+    assert '<span class="best-rank">1</span>' in html and "Стратегия:" in html
+    assert "Недооценка" in html and "Ликвидность места" in html and "Срок продажи" in html
+    assert "За сделку" in html and "Против и что проверить" in html and "<h4>Риски</h4>" in html
+    assert 'href="/tools/torgi-lot/ACT_0/invest"' in html and "torgi.gov.ru/new/public/lots" in html
+    assert 'hx-get="/tools/torgi-best/split"' in html and "Набор под бюджет" not in html
+    assert "Что осталось за бортом: из 12 идущих аукционов" in html
+    assert "имуществу должников система не берёт" in html
+    # бюджет: набор собран, лоты набора помечены; бюджет в миллионах и в рублях — одно и то же
+    rub = client.get("/tools/torgi-best?budget=250000&top=5").text
+    mln = client.get("/tools/torgi-best?budget=0,25&top=5").text
+    for html in (rub, mln):
+        assert "Набор под бюджет 250" in html and "Лотов в наборе" in html
+        assert "в наборе</span>" in html and 'class="best-card in-plan"' in html
+        assert html.count('<article class="best-card') == 5
+    assert "Прибыль, осторожно" in rub and "набор собран по ней" in rub
+    # бюджета не хватает ни на один лот — так и сказано
+    small = client.get("/tools/torgi-best?budget=5000").text
+    assert "не проходит ни один лот" in small and '<article class="best-card' not in small
+    # убранный пользователем лот в выбор не попадает
+    client.post("/tools/torgi-mark/ACT_0/skip", data={"reason-ACT_0": "другое"})
+    assert 'id="lot-ACT_0"' not in client.get("/tools/torgi-best?top=20").text
+    # критерии «Горячих» остались прежними: режим ничего не запоминает
+    with session() as db:
+        assert db.scalars(select(User).where(User.is_admin)).first().hot_criteria == saved
+    # гипотезы «под раздел» подгружаются отдельно; без сделок Росреестра — пустой блок
+    tv._split_cache.clear()
+    split = client.get("/tools/torgi-best/split")
+    assert split.status_code == 200 and "Большие участки под раздел: 0" in split.text
+    # раздел закрытый: без доступа к торгам страница не отдаётся
+    client.post("/logout")
+    client.cookies.clear()
+    for url in ("/tools/torgi-best", "/tools/torgi-best/split"):
+        assert client.get(url, follow_redirects=False).status_code == 307  # на вход
+
+
 def test_background_writes_do_not_drop_the_scan_cache(client, monkeypatch):  # noqa: F811
     """Прод, 20.11.2026: пока фоновые потоки читали итоги торгов, расчёт устаревал быстрее,
     чем считался, и «Горячие» отвечали 8–15 с. Фоновая запись расчёт не сбрасывает — его

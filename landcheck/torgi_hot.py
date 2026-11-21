@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import math
 import statistics
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -645,6 +646,245 @@ def select(
         "relaxed": relaxed,
         "classes": {c: sum(1 for i in passed if i["cls"] == c) for c in "ABC"},
     }
+
+
+# --- «Выбор системы» (ТЗ v5, п. 9) ---------------------------------------------------------------
+# Тони, 20.11.2026: нужны «самые ликвидные, самые недооценённые участки, которые мы можем продать
+# быстрее всего и дороже всего». Пользователь задаёт только бюджет или ничего. Система ставит
+# лоты всех регионов в один ряд по одной мере и по каждому называет стратегию, на которой он
+# выбран. Все числа считает код; текст объяснения собран из этих чисел.
+STRATEGY_RU = {
+    "calm": "ниже рынка, торги без борьбы",
+    "fight": "ниже рынка с запасом на борьбу",
+    "repeat": "повторные торги",
+    "lease": "аренда под переуступку",
+}
+BEST_TOPS = (5, 10, 20)
+PLAN_CELLS = 4000  # на столько шагов делим бюджет при подборе набора лотов
+PLAN_MAX_LOTS = 60
+
+
+def measure(item: dict[str, Any]) -> float:
+    """Мера, по которой система сравнивает сделки: годовая доходность в осторожном сценарии —
+    покупаем по ожидаемой цене победителя, продаём по низу рынка и в полтора раза дольше. В ней
+    сразу и недооценка (низ рынка против цены входа), и скорость (срок продажи по обороту
+    сделок места), и расходы с налогом."""
+    c = item["sc"]["cautious"]
+    return c["annual"] if c and c["annual"] is not None else -1.0
+
+
+def strategy_of(item: dict[str, Any]) -> tuple[str, str]:
+    """Стратегия, на которой лот выбран, и что из неё следует для ставки."""
+    row = item["row"]
+    e = item["sc"]["expected"]
+    if row.get("kind") == "rent":
+        return "lease", (
+            "на торгах покупается право аренды, продаётся переуступка; её цена взята как доля "
+            "цены такого же участка в собственности — долю вы задали сами"
+        )
+    n = row["s"].get("repeats") or 0
+    if n:
+        return "repeat", (
+            f"участок уже выставляли {torgi_scan.times_ru(n)} без результата: соперников, скорее "
+            "всего, не будет, вход рядом со стартом; почему его не взяли раньше — проверить на "
+            "месте"
+        )
+    comp = item.get("comp")
+    if comp and comp["level"] == "calm":
+        return "calm", f"{comp['detail']} — рассчитываем купить по старту или рядом с ним"
+    start = row.get("price_start")
+    grow = f" (старт × {e['entry'] / start:.2f})" if e and start and e["entry"] != start else ""
+    cutoff = f"; ставим не выше {torgi_calc.rub(item['cutoff'])}" if item.get("cutoff") else ""
+    return "fight", (
+        f"в расчёт заложена цена победителя {torgi_calc.rub(e['entry'])}{grow}: и при ней "
+        f"сделка проходит порог{cutoff}"
+    )
+
+
+def dims_of(item: dict[str, Any]) -> dict[str, Any]:
+    """Четыре числа, из которых складывается выбор: во сколько раз рынок выше входа, сколько
+    сделок с такими участками в квартале за год, срок продажи в расчёте и чем здесь обычно
+    кончаются торги."""
+    row, sc = item["row"], item["sc"]
+    s = row["s"]
+    e = sc["expected"]
+    mid, low = s["sale"].get("mid"), s["sale"].get("min")
+    turn = s.get("turnover") or {}
+    comp = item.get("comp")
+    return {
+        "under": round(mid / e["entry"], 1) if e and mid else None,
+        "under_low": round(low / e["entry"], 1) if e and low else None,
+        "deals_quarter": turn.get("quarter_n"),
+        "deals_district": turn.get("district_n"),
+        "hold": sc["hold"],
+        "comp": comp["text"] if comp else None,
+        "liquidity": s["liquidity"].get("index"),
+    }
+
+
+def plan_of(
+    items: list[dict[str, Any]], budget: float | None, extra: float = 0.0
+) -> dict[str, Any] | None:
+    """Набор лотов под бюджет: какие сделки взять, чтобы прибыль в осторожном сценарии была
+    наибольшей, а сумма цен входа с расходами не вышла за бюджет. Точная задача о рюкзаке на
+    бюджете, поделённом на `PLAN_CELLS` шагов. None — бюджет не задан или лотов нет."""
+    pool = [
+        i
+        for i in items[:PLAN_MAX_LOTS]
+        if i["sc"]["expected"] and i["sc"]["cautious"] and i["sc"]["cautious"]["profit"] > 0
+    ]
+    if not budget or budget <= 0 or not pool:
+        return None
+    step = max(1.0, budget / PLAN_CELLS)
+    cap = int(budget // step)
+    costs = [i["sc"]["expected"]["entry"] + extra for i in pool]
+    weights = [max(1, math.ceil(c / step)) for c in costs]
+    values = [i["sc"]["cautious"]["profit"] for i in pool]
+    best_at = [0.0] * (cap + 1)
+    took = [[False] * (cap + 1) for _ in pool]
+    for n, (w, v) in enumerate(zip(weights, values, strict=True)):
+        for c in range(cap, w - 1, -1):
+            if best_at[c - w] + v > best_at[c]:
+                best_at[c] = best_at[c - w] + v
+                took[n][c] = True
+    chosen, c = [], cap
+    for n in range(len(pool) - 1, -1, -1):
+        if took[n][c]:
+            chosen.append(n)
+            c -= weights[n]
+    chosen.reverse()
+    picked = [pool[n] for n in chosen]
+    if not picked:
+        return None
+    cost = sum(costs[n] for n in chosen)
+    deposits = [i["row"].get("deposit") for i in picked]
+    return {
+        "budget": round(budget),
+        "lots": picked,
+        "cost": round(cost),
+        "left": round(budget - cost),
+        "profit": sum(i["sc"]["expected"]["profit"] for i in picked),
+        "cautious": sum(i["sc"]["cautious"]["profit"] for i in picked),
+        # задаток вносится до торгов по каждому лоту; у кого карточка не прочитана — неизвестен
+        "deposit": round(sum(d for d in deposits if d)),
+        "deposit_unknown": sum(1 for d in deposits if not d),
+    }
+
+
+def best(
+    rows: list[dict[str, Any]],
+    scan_params: torgi_scan.ScanParams | None = None,
+    *,
+    budget: float | None = None,
+    top: int = 10,
+    skip: Callable[[dict[str, Any]], bool] | None = None,
+) -> dict[str, Any]:
+    """«Выбор системы»: лучшие сделки всех регионов одним списком и набор под бюджет.
+
+    Отбор тот же, что у «Горячих» с критериями по умолчанию (от 100 % годовых при ожидаемой
+    цене победителя, осторожный сценарий не в минус, сверка цены и спроса пройдена), лимит цены
+    входа — бюджет. Порядок: сначала класс (A — всё доказано), внутри класса — по `measure`.
+    `skip` — лоты, которые пользователь убрал сам."""
+    sp = scan_params or torgi_scan.ScanParams()
+    hp = HotParams(price_cap=budget or None, top=top)
+    res = select(rows, sp, hp)
+
+    def keep(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        kept = [i for i in items if not (skip and skip(i))]
+        return sorted(kept, key=lambda i: ("ABC".index(i["cls"]), -measure(i)))
+
+    hot, weak = keep(res["hot"]), keep(res["weak"])
+    for item in (*hot, *weak):
+        item["strategy"], item["strategy_why"] = strategy_of(item)
+        item["dims"] = dims_of(item)
+    lease_waiting = 0
+    if sp.assign_ratio is None:
+        lease_waiting = sum(
+            1
+            for r in rows
+            if r.get("kind") == "rent"
+            and torgi_scan.in_market(r)
+            and not torgi_scan.is_notice(r)
+            and not r["s"].get("stop")
+            and (r["s"].get("days_left") or 0) >= hp.min_days
+        )
+    by_strategy: dict[str, int] = {}
+    for item in hot:
+        by_strategy[item["strategy"]] = by_strategy.get(item["strategy"], 0) + 1
+    return {
+        "total": res["total"],
+        "passed": len(hot),
+        "picks": hot[:top],
+        "plan": plan_of(hot, budget, sp.extra),
+        "weak": weak[:top],
+        "weak_n": len(weak),
+        "check_n": len(res["check"]),
+        "funnel": res["funnel"],
+        "classes": res["classes"],
+        "by_strategy": by_strategy,
+        "lease_waiting": lease_waiting,
+        "params": hp,
+    }
+
+
+# --- большой участок под раздел: гипотеза (ТЗ v5, п. 9, стратегия 4) ------------------------------
+SPLIT_FACTOR = 3.0  # участок больше верхней границы ходовой площади во столько раз — большой
+SPLIT_PLOT = 1000.0  # на какие участки делим, м²
+SPLIT_USE = 0.8  # доля площади, которая останется участками после проездов — допущение
+SPLIT_MIN_RATIO = 3.0  # выручка от участков к цене входа, с которой гипотезу показываем
+SPLIT_MAX_AREA = 100_000.0  # крупнее — это проект планировки территории, а не межевание
+
+
+def split_candidates(
+    rows: list[dict[str, Any]],
+    market_fn: Callable[[dict[str, Any]], dict[str, Any] | None] | None,
+    scan_params: torgi_scan.ScanParams | None = None,
+    *,
+    min_days: int = 3,
+    top: int = 10,
+) -> list[dict[str, Any]]:
+    """Большие участки на продажу, которые после раздела на участки по десять соток стоили бы
+    по сделкам своего квартала в разы дороже цены входа. Это гипотеза, а не расчёт сделки:
+    можно ли делить, сколько уйдёт под проезды, сколько стоит и длится межевание — код не
+    знает. Цена участка после раздела берётся только по сделкам Росреестра в том же квартале."""
+    if market_fn is None:
+        return []
+    sp = scan_params or torgi_scan.ScanParams()
+    out = []
+    for row in sorted(rows, key=lambda r: r.get("region") or ""):  # округ за округом
+        s = row["s"]
+        band = sp.liquid_area.get(row.get("vri_group") or "")
+        area, start = row.get("area_m2"), row.get("price_start")
+        if not band or not area or not start or row.get("kind") != "sale":
+            continue
+        if not band[1] * SPLIT_FACTOR <= area <= SPLIT_MAX_AREA:
+            continue
+        if not torgi_scan.in_market(row) or torgi_scan.is_notice(row):
+            continue
+        if s.get("stop") or (s.get("days_left") or 0) < min_days:
+            continue
+        mk = market_fn({**row, "area_m2": SPLIT_PLOT})
+        if not mk or mk.get("deals_level") != "quarter":
+            continue
+        plots = int(area * SPLIT_USE // SPLIT_PLOT)
+        entry = s.get("expected_price") or start
+        gross = plots * SPLIT_PLOT * mk["mid_m2"]
+        if plots < 2 or gross / entry < SPLIT_MIN_RATIO:
+            continue
+        out.append(
+            {
+                "row": row,
+                "plots": plots,
+                "plot_price": round(SPLIT_PLOT * mk["mid_m2"]),
+                "gross": round(gross),
+                "entry": round(entry),
+                "ratio": round(gross / entry, 1),
+                "deals_n": mk.get("deals_n"),
+                "deals_span": mk.get("deals_span"),
+            }
+        )
+    out.sort(key=lambda x: -x["ratio"])
+    return out[:top]
 
 
 # --- проверка модели на завершённых торгах (ТЗ v5, п. 8) ---------------------------------------

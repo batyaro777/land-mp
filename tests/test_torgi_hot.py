@@ -400,3 +400,119 @@ def test_lot_priced_by_listings_is_a_hypothesis():
     assert item["cls"] == "C" and th.ASK_PRICE in th.case_of(item, sp, th.HotParams())["con"]
     res = th.select([by_ads])
     assert not res["hot"] and [i["row"]["id"] for i in res["weak"]] == ["A1"]
+
+
+def test_system_choice_ranks_by_cautious_yield_and_names_the_strategy():
+    """Концепция Тони 20.11.2026: «самые ликвидные, самые недооценённые, которые мы можем
+    продать быстрее всего и дороже всего». Пользователь не настраивает ничего: система ставит
+    лоты в один ряд по одной мере и по каждому говорит, на какой стратегии он выбран."""
+    rows = _rows(_active(), _active("B22", start=170_000), _active("C333", start=220_000))
+    res = th.best(rows)
+    picks = res["picks"]
+    # мера — годовая доходность в осторожном сценарии: дешевле вход — выше место
+    assert [i["row"]["id"] for i in picks] == ["B22", "A1", "C333"]
+    assert [th.measure(i) for i in picks] == sorted((th.measure(i) for i in picks), reverse=True)
+    assert th.measure(picks[1]) == picks[1]["sc"]["cautious"]["annual"] == 0.641
+    assert res["passed"] == 3 and res["by_strategy"] == {"fight": 3} and res["plan"] is None
+    top = picks[1]
+    # в квартале лота торги шли с борьбой: стратегия — запас на борьбу, с ценой и отсечкой
+    assert top["strategy"] == "fight" and th.STRATEGY_RU["fight"].startswith("ниже рынка")
+    why = top["strategy_why"].replace("\u202f", " ")
+    assert "300 000 ₽ (старт × 1.50)" in why and "ставим не выше 372 193 ₽" in why
+    assert top["dims"]["under"] == 2.7 and top["dims"]["under_low"] == 2.3
+    assert top["dims"]["hold"] == 12 and top["dims"]["comp"] == "обычно с борьбой"
+    # там, где торги обычно проходят без борьбы, стратегия другая — берём по старту
+    quiet = ts.scan([*_district(sold=1, single=5, none=4), _active()], layer=LAYER, today=TODAY)
+    calm = th.best(quiet["rows"])["picks"][0]
+    assert calm["strategy"] == "calm" and "купить по старту" in calm["strategy_why"]
+    # повторные торги: участок уже выставляли без результата
+    again = [
+        _closed("N1", "40:13:120105:4", start=300_000, fin=None, status="FAILED", applied=0),
+        _active("N2", start=200_000) | {"cad_num": "40:13:120105:4"},
+    ]
+    rep = th.best(_rows(*again))["picks"][0]
+    assert (
+        rep["strategy"] == "repeat" and "уже выставляли 1 раз без результата" in rep["strategy_why"]
+    )
+    assert rep["cls"] == "B"  # повторный лот в класс A не идёт
+    # убранные пользователем лоты в выбор не попадают
+    kept = th.best(rows, skip=lambda i: i["row"]["id"] == "B22")
+    assert [i["row"]["id"] for i in kept["picks"]] == ["A1", "C333"]
+    assert len(th.best(rows, top=5)["picks"]) == 3 and 5 in th.BEST_TOPS
+
+
+def test_system_choice_builds_a_set_of_lots_for_the_budget():
+    """Бюджет — единственное, что задаёт пользователь: система берёт те лоты, которые вместе
+    дают наибольшую прибыль в осторожном сценарии и укладываются в бюджет."""
+    rows = _rows(
+        _active(deposit=200_000),
+        _active("B22", start=170_000, deposit=34_000),
+        _active("C333", start=220_000),
+    )
+    # цены входа 255, 300 и 330 тыс.: в 600 тыс. влезают два лота, лучшие — первые два
+    plan = th.best(rows, budget=600_000)["plan"]
+    assert [i["row"]["id"] for i in plan["lots"]] == ["B22", "A1"]
+    assert plan["cost"] == 555_000 and plan["left"] == 45_000 and plan["budget"] == 600_000
+    assert plan["cautious"] == 369_750 + 330_600 and plan["profit"] == 474_150 + 435_000
+    assert plan["deposit"] == 234_000 and plan["deposit_unknown"] == 0
+    # 600 тыс. можно занять и иначе (255 + 330), но прибыль меньше — набор считает точно
+    assert plan["cautious"] > 369_750 + 304_500
+    # на 300 тыс. — один лот, и это не самый дорогой из проходящих, а самый прибыльный
+    one = th.best(rows, budget=300_000)
+    assert [i["row"]["id"] for i in one["plan"]["lots"]] == ["B22"]
+    assert [i["row"]["id"] for i in one["picks"]] == ["B22", "A1"]  # 330 тыс. в бюджет не влез
+    # бюджета не хватает ни на один лот — набора нет, страница скажет об этом
+    none = th.best(rows, budget=100_000)
+    assert none["plan"] is None and none["picks"] == []
+    # у лота без прочитанной карточки задаток неизвестен — это видно
+    three = th.best(rows, budget=1_000_000)["plan"]
+    assert len(three["lots"]) == 3 and three["deposit_unknown"] == 1
+    assert th.plan_of([], 500_000) is None and th.plan_of(three["lots"], None) is None
+
+
+def test_system_choice_counts_lease_lots_waiting_for_the_assignment_share():
+    """Аренда без доли переуступки не оценивается — система говорит, сколько лотов ждёт числа,
+    а с долей ставит аренду в общий ряд со своей стратегией."""
+    rent = _active("R1", start=20_000) | {"kind": "rent"}
+    rows = _rows(_active(), rent)
+    res = th.best(rows)
+    assert res["lease_waiting"] == 1 and [i["row"]["id"] for i in res["picks"]] == ["A1"]
+    sp = ts.ScanParams(assign_ratio=0.5)
+    with_share = th.best(_rows(_active(), rent, params=sp), sp)
+    assert with_share["lease_waiting"] == 0
+    lease = [i for i in (*with_share["picks"], *with_share["weak"]) if i["row"]["id"] == "R1"]
+    if lease:  # прошла отбор — стратегия названа
+        assert lease[0]["strategy"] == "lease" and "переуступка" in lease[0]["strategy_why"]
+
+
+def test_big_plot_for_splitting_is_a_hypothesis_with_quarter_deals_only():
+    """ТЗ v5, п. 9, стратегия 4: большой участок под раздел — гипотеза с пометкой «нужна оценка
+    межевания». Цена участка после раздела — только по сделкам Росреестра в том же квартале."""
+    big = _active("BIG1", start=900_000) | {"area_m2": 12_000.0}
+    rows = _rows(_active(), big)
+    seen = []
+
+    def by_quarter(lot):
+        seen.append((lot["id"], lot["area_m2"]))
+        return {"mid_m2": 800.0, "deals_level": "quarter", "deals_n": 7, "deals_span": "2026"}
+
+    found = th.split_candidates(rows, by_quarter)
+    # цену спрашиваем только для большого участка и для площади участка после раздела
+    assert seen == [("BIG1", th.SPLIT_PLOT)]
+    assert [x["row"]["id"] for x in found] == ["BIG1"]
+    x = found[0]
+    # 12 000 м² × 0,8 = 9 600 м² → девять участков по десять соток, каждый по 800 тыс.
+    assert x["plots"] == 9 and x["plot_price"] == 800_000 and x["gross"] == 7_200_000
+    assert x["ratio"] == round(7_200_000 / x["entry"], 1) >= th.SPLIT_MIN_RATIO
+    assert x["deals_n"] == 7
+    # сделки только по району — гипотезу не показываем; без сделок Росреестра — тоже
+    by_district = lambda lot: {"mid_m2": 800.0, "deals_level": "district", "deals_n": 40}  # noqa: E731
+    assert th.split_candidates(rows, by_district) == []
+    assert (
+        th.split_candidates(rows, None) == [] and th.split_candidates(rows, lambda lot: None) == []
+    )
+    # дёшево после раздела — не гипотеза; аренду и обычные участки не трогаем
+    cheap = lambda lot: {"mid_m2": 100.0, "deals_level": "quarter", "deals_n": 7}  # noqa: E731
+    assert th.split_candidates(rows, cheap) == []
+    rent = big | {"id": "BIG2", "kind": "rent"}
+    assert [x["row"]["id"] for x in th.split_candidates(_rows(rent, big), by_quarter)] == ["BIG1"]
