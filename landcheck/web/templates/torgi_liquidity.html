@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+{% block title %}Ликвидность торгов{% if region_name %} — {{ region_name }}{% endif %}{% endblock %}
+{% block head %}
+{% include "_leaflet.html" %}
+{% endblock %}
+{% block content %}
+{% set tab = 'liquidity' %}
+<h2>Ликвидность и рынок <span class="badge mini">внутренний режим</span></h2>
+{% include "_torgi_nav.html" %}
+<p class="muted small">Карта ликвидности таблицей: по каждому кадастровому району или кварталу — чем кончились торги за год, насколько росла цена и почём уходила земля. Справа — слой рынка: цена перепродажи за сотку, которую вы знаете сами. Она главнее итогов торгов при оценке лотов.</p>
+
+<form method="get" class="grid no-print">
+  <label>Регион
+    <select name="region" onchange="this.form.submit()">
+      {% if not region %}<option value="">— выберите —</option>{% endif %}
+      {% for r in regions %}<option value="{{ r.code }}"{% if r.code == region %} selected{% endif %}>{{ r.name }}{% if r.synced %} · собран{% endif %}</option>{% endfor %}
+    </select></label>
+  <label>Разрез
+    <select name="level" onchange="this.form.submit()">
+      <option value="district">по районам</option>
+      <option value="quarter"{% if level == 'quarter' %} selected{% endif %}>по кварталам</option>
+    </select></label>
+  <label>Назначение
+    <select name="group" onchange="this.form.submit()">
+      <option value="">любое</option>
+      {% for key, label in groups.items() %}<option value="{{ key }}"{% if key == group %} selected{% endif %}>{{ label }}</option>{% endfor %}
+    </select></label>
+  <label>Район или квартал <input name="d" value="{{ place }}" placeholder="40:13"></label>
+  <label title="Показать только районы или кварталы, где медиана заявок на лот не меньше выбранного числа">Заявок на лот не меньше: <strong id="bids-out">{{ bids or 'любое' }}</strong>
+    <input type="range" name="bids" min="0" max="10" step="1" value="{{ bids }}" oninput="document.getElementById('bids-out').textContent = this.value == 0 ? 'любое' : this.value" onchange="this.form.submit()"></label>
+</form>
+
+{% if not region %}
+<article><p>Выберите регион. Если он ещё не собран — соберите его на вкладке «Лоты».</p></article>
+{% else %}
+{% include "_torgi_sync.html" %}
+{% if total and total.closed %}
+<p class="small">По выборке: завершено {{ total.closed }}, с борьбой {{ total.sold }}, единственному участнику {{ total.single }}{% if total.single %} ({% for k in ('one_bid', 'one_admitted', 'one_came') %}{% if total.reasons.get(k) %}{{ fail_ru[k] }} — {{ total.reasons[k] }}; {% endif %}{% endfor %}{% if total.single_no_reason %}причина в протоколе исход не называет либо не прочитана, определено по цене договора — {{ total.single_no_reason }}{% else %}всё по протоколу{% endif %}){% endif %}, не ушли {{ total.none }}{% if total.none %} ({% for k in ('no_bids', 'all_rejected', 'no_bids_or_rejected', 'no_show', 'no_offers') %}{% if total.reasons.get(k) %}{{ fail_ru[k] }} — {{ total.reasons[k] }}; {% endif %}{% endfor %}{% if total.none_no_reason %}причина в протоколе исход не называет либо не прочитана, цены договора нет — {{ total.none_no_reason }}{% else %}всё по протоколу{% endif %}){% endif %}{% if total.failed_unknown %}, не состоялись без прочитанной карточки {{ total.failed_unknown }}{% endif %}; нашли хозяина {{ (total.sell_through * 100)|round|int if total.sell_through is not none else '—' }} %; рост цены к старту: аренда {% if total.rent.growth_median %}×{{ total.rent.growth_median }} ({{ total.rent.growth_n }} лот.){% else %}—{% endif %}, продажа {% if total.sale.growth_median %}×{{ total.sale.growth_median }} ({{ total.sale.growth_n }} лот.){% else %}—{% endif %}; индекс {{ total.index if total.index is not none else '—' }}.</p>
+{% endif %}
+{% if hidden_bids %}<p class="small muted">Скрыто {{ 'кварталов' if level == 'quarter' else 'районов' }}: {{ hidden_bids }} — у них медиана заявок на лот меньше {{ bids }}.</p>{% endif %}
+{% if places %}
+<details class="torgi-map-wrap" open>
+  <summary class="small">Карта {{ 'кварталов' if level == 'quarter' else 'районов' }}: {{ places|length }} на карте{% if places_pending %}, границы ещё {{ places_pending }} подгружаются из НСПД — обновите страницу через пару минут{% endif %}</summary>
+  <p class="small muted">Цвет — конкуренция по индексу ликвидности: <span class="map-key hot"></span> высокая (всё выкупают, много заявок, цена растёт), <span class="map-key mid"></span> средняя, <span class="map-key cold"></span> мало участников, <span class="map-key none"></span> мало данных. Точки — идущие лоты. Нажмите на {{ 'квартал' if level == 'quarter' else 'район' }} — итоги и ссылки на его лоты.{% if level == 'district' %} Кварталы района — по ссылке «кварталы» в подсказке.{% endif %}</p>
+  <div id="liq-map"></div>
+</details>
+<script>
+(function () {
+  const places = {{ places|tojson }};
+  const points = {{ points|tojson }};
+  const region = {{ region|tojson }};
+  const level = {{ level|tojson }};
+  const group = {{ (group or '')|tojson }};
+  const names = {{ names|tojson }};
+  const color = function (i) { return i === null ? '#8a8a8a' : (i >= 55 ? '#b42318' : (i >= 30 ? '#d59b00' : '#1f6b2a')); };
+  const map = L.map('liq-map', { scrollWheelZoom: false });
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+  const q = function (extra) { return 'region=' + encodeURIComponent(region) + extra + (group ? '&group=' + encodeURIComponent(group) : ''); };
+  const popup = function (p) {
+    const box = document.createElement('div');
+    const head = document.createElement('strong');
+    head.textContent = (level === 'quarter' ? 'Квартал ' : 'Район ') + p.key + (names[p.key] ? ' · ' + names[p.key] : '');
+    box.appendChild(head);
+    const facts = document.createElement('div');
+    facts.className = 'small';
+    facts.textContent = 'Индекс ' + (p.index === null ? '— (мало данных)' : p.index + ' · ' + p.label) +
+      '. Завершено ' + p.closed + ': с борьбой ' + p.sold + ', одному ' + p.single + ', не ушли ' + p.none +
+      (p.sell !== null ? '; нашли хозяина ' + Math.round(p.sell * 100) + ' %' : '') +
+      (p.applied !== null ? '; заявок на лот ' + p.applied : '') + '. Идёт: ' + (p.active || 0) + '.';
+    box.appendChild(facts);
+    const links = [
+      ['идущие лоты', '/tools/torgi-scan?' + q('&d=' + encodeURIComponent(p.key) + '&form=all')],
+      ['завершённые', '/tools/torgi-history?' + q('&d=' + encodeURIComponent(p.key))],
+      ['не ушли', '/tools/torgi-history?' + q('&d=' + encodeURIComponent(p.key) + '&outcome=none')],
+    ];
+    if (level === 'district') links.push(['кварталы', '/tools/torgi-liquidity?' + q('&level=quarter&d=' + encodeURIComponent(p.key))]);
+    const nav = document.createElement('div');
+    nav.className = 'small';
+    links.forEach(function (l, i) {
+      const a = document.createElement('a'); a.href = l[1]; a.textContent = l[0];
+      nav.appendChild(a); if (i < links.length - 1) nav.appendChild(document.createTextNode(' · '));
+    });
+    box.appendChild(nav);
+    return box;
+  };
+  const layers = [];
+  places.forEach(function (p) {
+    const c = color(p.index);
+    let layer;
+    if (p.geometry) {
+      layer = L.geoJSON(p.geometry, { style: { color: c, weight: 1, fillColor: c, fillOpacity: 0.35 } });
+    } else {
+      layer = L.circleMarker([p.lat, p.lon], { radius: 9, color: c, fillColor: c, fillOpacity: 0.45, weight: 1, dashArray: '3' });
+    }
+    layer.bindPopup(function () { return popup(p); }).bindTooltip(p.key + (p.index === null ? '' : ' · ' + p.index), { sticky: true });
+    layer.addTo(map);
+    layers.push(layer);
+  });
+  points.forEach(function (p) {
+    const m = L.circleMarker([p.lat, p.lon], { radius: 3, color: '#1d4e89', fillColor: '#2e75b6', fillOpacity: 0.9, weight: 1 });
+    const a = document.createElement('a');
+    a.href = '/tools/torgi-lot/' + encodeURIComponent(p.id) + '?region=' + encodeURIComponent(region);
+    a.textContent = (p.cad || 'лот') + (p.kind ? ' · ' + p.kind : '');
+    m.bindPopup(a).addTo(map);
+    layers.push(m);
+  });
+  const bounds = L.featureGroup(layers).getBounds();
+  if (bounds.isValid()) map.fitBounds(bounds.pad(0.05)); else map.setView([60, 90], 3);
+})();
+</script>
+{% endif %}
+{% if rows %}
+<div class="table-wrap">
+<table class="results torgi">
+  <thead><tr>
+    <th>{{ 'Квартал' if level == 'quarter' else 'Район' }}</th>
+    <th class="num" title="Индекс 0–100: доля участков, нашедших хозяина (60), заявок на лот (20), рост цены к старту (20)">Индекс</th>
+    <th class="num">Завершено</th>
+    <th class="num" title="Состоялись: была борьба, цена выросла">С борьбой</th>
+    <th class="num" title="Торги не состоялись, но участок ушёл: договор с единственным участником по начальной цене (ст. 39.12 ЗК) — у лота есть цена договора">Одному</th>
+    <th class="num" title="Не состоялись, и участок не ушёл: заявок не было либо договор не заключили (в карточке лота нет ни цены договора, ни единственной заявки)">Не ушли</th>
+    <th class="num" title="Доля участков, которые нашли хозяина">Продано</th>
+    <th class="num" title="Во сколько раз цена победителя выше начальной, медиана; аренда и продажа отдельно — годовую плату на аукционах аренды разгоняют сильнее">Рост</th>
+    <th class="num" title="Медиана по завершённым торгам: у половины торгов заявок не больше этого числа">Заявок на лот, медиана</th>
+    <th class="num" title="Медиана итоговой цены состоявшихся торгов продажи; ниже — число лотов и середина выборки (от 25 до 75 %)">Продажа, ₽/сот.</th>
+    <th class="num" title="Медиана итоговой годовой платы; ниже — число лотов и середина выборки (от 25 до 75 %)">Аренда, ₽/сот. в год</th>
+    <th class="num">Идёт</th>
+    <th>Рынок (ваш слой)</th>
+  </tr></thead>
+  <tbody>
+  {% for r in rows %}
+  <tr>
+    <td><a href="/tools/torgi-scan?region={{ region }}&amp;d={{ r.key }}"><code>{{ r.key }}</code></a>{% if level == 'district' %}<div class="small muted">{{ names.get(r.key, '') }}</div><a class="small" href="/tools/torgi-liquidity?region={{ region }}&amp;level=quarter&amp;d={{ r.key }}">кварталы</a>{% else %}<br><a class="small" href="/tools/free-land?scope={{ r.key }}" title="Найти в этом квартале публичные участки без видимых препятствий">свободная земля</a>{% endif %}</td>
+    <td class="num">{% if r.index is not none %}<span class="badge mini v-{{ 'ok' if r.index >= 55 else ('check' if r.index >= 30 else 'stop') }}">{{ r.index }}</span><div class="small muted">{{ r.label }}</div>{% else %}<span class="muted small">мало данных</span>{% endif %}</td>
+    {% set hq = 'region=' ~ region ~ '&d=' ~ r.key ~ ('&group=' ~ group if group else '') %}
+    <td class="num"><a href="/tools/torgi-history?{{ hq }}">{{ r.closed }}</a></td>
+    <td class="num">{% if r.sold %}<a href="/tools/torgi-history?{{ hq }}&amp;outcome=sold">{{ r.sold }}</a>{% else %}0{% endif %}</td>
+    <td class="num">{% if r.single %}<a href="/tools/torgi-history?{{ hq }}&amp;outcome=single">{{ r.single }}</a>{% else %}0{% endif %}</td>
+    <td class="num">{% if r.none %}<a href="/tools/torgi-history?{{ hq }}&amp;outcome=none">{{ r.none }}</a>{% else %}0{% endif %}{% if r.failed_unknown %}<div class="small muted" title="Не состоялись, карточка ещё не прочитана: число заявок неизвестно">+{{ r.failed_unknown }} ?</div>{% endif %}</td>
+    <td class="num">{% if r.sell_through is not none %}{{ (r.sell_through * 100)|round|int }} %{% else %}—{% endif %}</td>
+    <td class="num small">{% if r.rent.growth_median %}аренда ×{{ r.rent.growth_median }}{% endif %}{% if r.rent.growth_median and r.sale.growth_median %}<br>{% endif %}{% if r.sale.growth_median %}продажа ×{{ r.sale.growth_median }}{% endif %}{% if not r.rent.growth_median and not r.sale.growth_median %}—{% endif %}</td>
+    <td class="num">{{ r.applied_median if r.applied_median is not none else '—' }}</td>
+    <td class="num">{% if r.sale.median_m2 %}{{ (r.sale.median_m2 * sotka)|money }}<div class="small muted">{{ r.sale.n }} лот.{% if r.sale.n > 1 and r.sale.p25_m2 and r.sale.p75_m2 %}<br>{{ (r.sale.p25_m2 * sotka)|money }} – {{ (r.sale.p75_m2 * sotka)|money }}{% endif %}</div>{% else %}—{% endif %}</td>
+    <td class="num">{% if r.rent.median_m2 %}{{ (r.rent.median_m2 * sotka)|money }}<div class="small muted">{{ r.rent.n }} лот.{% if r.rent.n > 1 and r.rent.p25_m2 and r.rent.p75_m2 %}<br>{{ (r.rent.p25_m2 * sotka)|money }} – {{ (r.rent.p75_m2 * sotka)|money }}{% endif %}</div>{% else %}—{% endif %}</td>
+    <td class="num">{% if r.active %}<a href="/tools/torgi-scan?region={{ region }}&amp;d={{ r.key }}&amp;form=all" title="Идущие лоты {{ 'квартала' if level == 'quarter' else 'района' }}">{{ r.active }}</a>{% endif %}</td>
+    <td class="small">{% for m in by_scope.get(r.key, []) %}<div>{{ kinds.get(m.kind, m.kind) }}: <strong>{{ m.price_mid|money if m.price_mid else '—' }}</strong>{% if m.exposure_days %} · {{ m.exposure_days }} дн.{% endif %}{% if m.liquid %} · {{ 'ликвид' if m.liquid == 'liquid' else 'неликвид' }}{% endif %} <span class="muted">({{ {'manual': 'вручную', 'deals': 'сделки', 'ads': 'объявления'}.get(m.source, m.source) }})</span></div>{% endfor %}
+      <a href="#market-form" onclick="document.getElementById('market-scope').value='{{ r.key }}'">задать</a></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if not group %}<p class="muted small">Цены за сотку здесь — по всем назначениям сразу: поле и участок под дом в одной строке. Чтобы сравнивать цены, выберите назначение. Для оценки лота сравниваются только торги того же назначения и сопоставимой площади.</p>{% endif %}
+{% else %}
+<article><p>{% if sync and sync.state == 'never' %}Регион ещё не собирали — соберите его на вкладке «Лоты».{% else %}Завершённых торгов по этим условиям нет.{% endif %}</p></article>
+{% endif %}
+
+<article id="market-form">
+  <h4>Слой рынка: цена перепродажи за сотку</h4>
+  <p class="small muted">Как полигоны на вашей карте: «край по торгам 240, рынок 320–350». Запись по кварталу главнее записи по району. Для аренды задаётся цена переуступки права.</p>
+  <p class="small">Не знаете рынок района — не вводите цифру на глаз. Откройте идущий лот этого района на вкладке «Лоты» и нажмите «объявления рядом»: сервис найдёт объявления о продаже похожих участков в том же населённом пункте, покажет их списком со ссылками и сам запишет сюда медиану и разброс за сотку. Потом диапазон можно поправить руками. Столбец «Продажа, ₽/сот.» в таблице выше — нижняя граница для сверки: почём землю покупали у государства. Если рынок вы знаете, задайте «от» и «до»: вердикт «интересен» проверяется и по нижней цене.</p>
+  {% if rr and (rr.periods or rr.enabled) %}
+  <p class="small" id="rr-deals"><strong>Сделки Росреестра:</strong> {% if rr.periods %}загружены {% for p in rr.periods %}{{ p.label }} ({{ p.deals }} сделок с участками в регионе){% if not loop.last %}, {% endif %}{% endfor %}{% else %}ещё не загружены{% endif %}. По ним цена перепродажи считается для каждого лота отдельно: сделки той же группы назначения и сопоставимой площади в кадастровом квартале лота, а если их мало — в районе. Это цены из договоров, обычно нижняя граница рынка. Запись в слое рынка, сделанная вручную, главнее. Источник: <a href="{{ rr_source }}" target="_blank" rel="noopener">Росреестр, государственные дата-сеты</a>.</p>
+  {% if rr.error and user.is_admin %}<p class="small warn">Загрузка сделок Росреестра: {{ rr.error }}.</p>{% endif %}
+  {% endif %}
+  {% if ads and (ads.enabled or ads.count) %}
+  <div id="ads-feed">
+  <p class="small"><strong>Объявления о продаже земли:</strong> {% if ads.count %}в базе {{ ads.count }}{% if ads.newest %}, загружены по {{ ads.newest[:16] }} МСК{% endif %}{% else %}пока не загружены{% endif %}{% if ads.state == 'running' or ads.pending %} — идёт загрузка{% if ads.cursor %}, дошли до {{ ads.cursor[:10] }}{% endif %}{% elif ads.queued %} — в очереди на загрузку{% endif %}. По ним цена перепродажи считается для каждого лота отдельно: объявления той же категории земли и сопоставимой площади в радиусе от 2 до 20 км, не старше полугода. Запись в слое рынка, сделанная вручную, главнее объявлений.</p>
+  {% if not ads.known %}<p class="small muted">Этого региона нет в справочнике ленты объявлений.</p>{% endif %}
+  {% if ads.fatal or ads.error %}<p class="small warn">Лента объявлений не отвечает как надо: {{ ads.fatal or ads.error }}.</p>{% endif %}
+  {% if user.is_admin and ads.enabled and ads.known %}
+  <form method="post" action="/tools/torgi-ads/sync" class="inline no-print">
+    <input type="hidden" name="region" value="{{ region }}">
+    <input type="hidden" name="back" value="/tools/torgi-liquidity?region={{ region }}&amp;level={{ level }}#ads-feed">
+    <button class="outline secondary sm">Обновить объявления</button>
+    <button class="outline secondary sm" name="full" value="1" title="Загрузить заново за весь срок — тратит много запросов ленты">Загрузить заново</button>
+  </form>
+  {% set st = ads.stats %}{% if st.got %}
+  <details><summary class="small muted">Разбор последней загрузки (видит только администратор)</summary>
+    <p class="small">Пришло {{ st.got }}, годятся в расчёт {{ st.kept }}, запросов {{ st.requests or 0 }}{% if st.window %}; окно {{ st.window.lo[:16] }} – {{ st.window.hi[:16] }} МСК{% endif %}.
+    {% if st.skip %}Отброшено: {% for k, v in st.skip.items() %}{{ {'lease': 'аренда', 'house': 'дом', 'no_coords': 'нет точки', 'no_area': 'нет площади в заголовке', 'metric': 'цена не за участок', 'no_price': 'нет цены', 'no_time': 'нет времени', 'other_region': 'другой регион', 'no_class': 'нет категории земли', 'no_id': 'нет номера'}.get(k, k) }} — {{ v }}{% if not loop.last %}, {% endif %}{% endfor %}.{% endif %}
+    {% if st.sources %}Площадки: {% for k, v in st.sources.items() %}{{ k }} — {{ v }}{% if not loop.last %}, {% endif %}{% endfor %}.{% endif %}
+    {% if st.units %}Поле «Площадь» при сверке с заголовком: {% for src, box in st.units.items() %}{{ src }} ({% for k, v in box.items() %}{{ k }} — {{ v }}{% if not loop.last %}, {% endif %}{% endfor %}){% if not loop.last %}; {% endif %}{% endfor %}.{% endif %}</p>
+  </details>
+  {% endif %}
+  {% endif %}
+  </div>
+  {% endif %}
+  <form method="post" action="/tools/torgi-market">
+    <input type="hidden" name="back" value="/tools/torgi-liquidity?region={{ region }}&amp;level={{ level }}">
+    <div class="grid">
+      <label>Район или квартал <input name="scope" id="market-scope" required placeholder="{{ region }}:13 или {{ region }}:13:120101" value="{{ place }}"></label>
+      <label>Сделка <select name="kind">{% for key, label in kinds.items() %}<option value="{{ key }}">{{ label }}{% if key == 'rent' %} (переуступка){% endif %}</option>{% endfor %}</select></label>
+      <label>Назначение <select name="vri_group"><option value="any">любое</option>{% for key, label in groups.items() %}<option value="{{ key }}"{% if key == group %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+      <label>Оценка <select name="liquid"><option value="">—</option><option value="liquid">ликвид</option><option value="illiquid">неликвид</option></select></label>
+    </div>
+    <div class="grid">
+      <label>Цена, ₽ за сотку <input name="price_mid" inputmode="decimal"></label>
+      <label>от <input name="price_min" inputmode="decimal"></label>
+      <label>до <input name="price_max" inputmode="decimal"></label>
+      <label>Срок продажи, дней <input name="exposure_days" inputmode="numeric"></label>
+    </div>
+    <label>Заметка <input name="note" placeholder="направление, откуда цифра"></label>
+    <button class="sm">Сохранить</button>
+  </form>
+  {% set manual = layer|rejectattr('source', 'equalto', 'deals')|list %}
+  {% if manual %}
+  <table class="facts">
+    <tr><th>Где</th><th>Сделка · назначение</th><th class="num">₽ за сотку: от – середина – до</th><th class="num">Срок</th><th>Заметка</th><th></th></tr>
+    {% for m in manual %}
+    <tr><td><code>{{ m.scope }}</code></td><td>{{ kinds.get(m.kind, m.kind) }} · {{ groups.get(m.vri_group, 'любое') }}</td>
+      <td class="num">{{ m.price_min|money if m.price_min else '—' }} – <strong>{{ m.price_mid|money if m.price_mid else '—' }}</strong> – {{ m.price_max|money if m.price_max else '—' }}</td>
+      <td class="num">{{ m.exposure_days ~ ' дн.' if m.exposure_days else '—' }}</td>
+      <td class="small">{{ {'manual': 'вручную', 'ads': 'объявления'}.get(m.source, m.source) }}{% if m.liquid %} · {{ 'ликвид' if m.liquid == 'liquid' else 'неликвид' }}{% endif %}{% if m.note %} · {{ m.note }}{% endif %}</td>
+      <td><form method="post" action="/tools/torgi-market/{{ m.id }}/delete" class="inline"><input type="hidden" name="back" value="/tools/torgi-liquidity?region={{ region }}"><button class="outline secondary sm">убрать</button></form></td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+</article>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,108 @@
+{
+ "schema_version": 1,
+ "cad_num": "50:09:0060202:105",
+ "fetched_at": "2026-10-10T09:12:56.962855+00:00",
+ "provider": "fixture",
+ "found": true,
+ "landplot": {
+  "type": "Feature",
+  "id": 123456,
+  "geometry": {
+   "type": "Polygon",
+   "coordinates": [
+    [
+     [
+      37.0,
+      55.0
+     ],
+     [
+      37.001,
+      55.0
+     ],
+     [
+      37.001,
+      55.001
+     ],
+     [
+      37.0,
+      55.001
+     ],
+     [
+      37.0,
+      55.0
+     ]
+    ]
+   ]
+  },
+  "properties": {
+   "category": 36368,
+   "categoryName": "Земельные участки из ЕГРН",
+   "options": {
+    "cad_num": "50:09:0060202:105",
+    "readable_address": "Синтетический адрес, тестовые данные",
+    "status": "Архивный",
+    "land_record_type": "Земельный участок",
+    "land_record_subtype": "Землепользование",
+    "land_record_reg_date": "2015-06-01T00:00:00",
+    "land_record_category_type": "Земли населенных пунктов",
+    "permitted_use_established_by_document": "Для индивидуального жилищного строительства",
+    "area": 1000.0,
+    "specified_area": 1000.0,
+    "declared_area": null,
+    "cost_value": 1500000.0,
+    "cost_index": 1500.0,
+    "ownership_type": "Частная собственность",
+    "geocoderObject": false,
+    "objdocId": 1,
+    "registersId": 1
+   },
+   "systemInfo": null
+  }
+ },
+ "permission_types": null,
+ "zouit": [],
+ "territorial_zones": [
+  {
+   "type": "Feature",
+   "id": 1,
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       37.0,
+       55.0
+      ],
+      [
+       37.001,
+       55.0
+      ],
+      [
+       37.001,
+       55.001
+      ],
+      [
+       37.0,
+       55.001
+      ],
+      [
+       37.0,
+       55.0
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "category": 36940,
+    "categoryName": "Территориальные зоны",
+    "options": {
+     "reg_numb_border": "50:09-7.1",
+     "type": "Ж-1",
+     "name": "Зона застройки ИЖС"
+    }
+   }
+  }
+ ],
+ "errors": [],
+ "_synthetic": true
+}

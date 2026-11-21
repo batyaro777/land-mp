@@ -1,0 +1,13 @@
+services:
+  landcheck:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8010:8000"
+    env_file: .env
+    volumes:
+      - landcheck-data:/data
+      # Сертификаты с корнем Минцифры для torgi.gov.ru через RU-шлюз (ТЗ v3, п. 9)
+      - /etc/ssl/ru-gateway:/etc/ssl/ru-gateway:ro
+volumes:
+  landcheck-data:

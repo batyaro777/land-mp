@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Мои сделки с торгов{% endblock %}
+{% block content %}
+{% set tab = 'deals' %}
+<h2>Мои сделки с торгов <span class="badge mini">внутренний режим</span></h2>
+{% include "_torgi_nav.html" %}
+<p class="muted small">Журнал сделок: за сколько взяли, за сколько выставили и продали, сколько дней ушло. Закрытые сделки дают фактическую цену перепродажи и срок экспозиции района — анализатор берёт их раньше итогов торгов.</p>
+
+{% if summary.n %}
+<p class="small"><strong>Всего сделок:</strong> {{ summary.n }}, закрыто {{ summary.closed }}{% if summary.roi_median is not none %}; медианная доходность {{ (summary.roi_median * 100)|round|int }} %{% endif %}{% if summary.days_median is not none %}; срок продажи {{ summary.days_median }} дн.{% endif %}{% if summary.profit is not none %}; прибыль по закрытым {{ summary.profit|money }}{% endif %}{% if summary.invested_open %}; в открытых сделках вложено {{ summary.invested_open|money }}{% endif %}.</p>
+<div class="table-wrap">
+<table class="results">
+  <thead><tr><th>Участок</th><th>Сделка</th><th class="num">Площадь</th><th class="num">Вход</th><th class="num">Расходы</th><th class="num">Выставлено</th><th class="num">Продано</th><th class="num">Прибыль</th><th class="num">ROI</th><th class="num">Дней в продаже</th><th>Заметка</th><th></th></tr></thead>
+  <tbody>
+  {% for d in deals %}
+  <tr>
+    <td><code>{{ d.cad_num }}</code>{% if d.lot_url %}<br><a href="{{ d.lot_url }}" target="_blank" rel="noopener" class="small muted">лот</a>{% endif %}</td>
+    <td class="small">{{ kinds.get(d.kind, d.kind) }}<div class="muted">{{ groups.get(d.vri_group, '') }}</div></td>
+    <td class="num">{% if d.area_m2 %}{{ (d.area_m2 / 100)|round(1) }} сот.{% else %}—{% endif %}</td>
+    <td class="num">{{ d.buy_price|money }}<div class="small muted">{{ d.bought_at or '' }}</div></td>
+    <td class="num">{{ d.extra_costs|money }}</td>
+    <td class="num">{{ d.list_price|money }}<div class="small muted">{{ d.listed_at or '' }}</div></td>
+    <td class="num">{% if d.sell_price %}<strong>{{ d.sell_price|money }}</strong><div class="small muted">{{ d.sold_at or '' }}</div>{% else %}<span class="muted">в продаже</span>{% endif %}</td>
+    <td class="num">{% if d.profit is not none %}{{ d.profit|money }}{% if not d.closed %}<div class="small muted">по цене выставления</div>{% endif %}{% else %}—{% endif %}</td>
+    <td class="num">{% if d.roi is not none %}{{ (d.roi * 100)|round|int }} %{% if d.annual is not none %}<div class="small muted">{{ (d.annual * 100)|round|int }} % год.</div>{% endif %}{% else %}—{% endif %}</td>
+    <td class="num">{% if d.days is not none %}{{ d.days }} дн.{% else %}—{% endif %}</td>
+    <td class="small">{{ d.note or '' }}</td>
+    <td class="no-print"><a href="/tools/torgi-deals?edit={{ d.id }}#deal-form" class="small">изменить</a>
+      <form method="post" action="/tools/torgi-deals/{{ d.id }}/delete" class="inline" onsubmit="return confirm('Удалить сделку из журнала?')"><button class="outline secondary sm">убрать</button></form></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<article><p>Сделок пока нет. Запишите первую: вход с торгов, цену выставления и — когда продадите — цену и дату продажи.</p></article>
+{% endif %}
+
+<article id="deal-form">
+  <h4>{% if prefill.deal_id %}Изменить сделку{% elif prefill %}Записать сделку по лоту{% else %}Добавить сделку{% endif %}</h4>
+  <form method="post" action="/tools/torgi-deals">
+    {% if prefill.deal_id %}<input type="hidden" name="deal_id" value="{{ prefill.deal_id }}">{% endif %}
+    <div class="grid">
+      <label>Кадастровый номер <input name="cad_num" required value="{{ prefill.cad_num or '' }}" placeholder="40:13:120101:22"></label>
+      <label>Сделка <select name="kind">{% for key, label in kinds.items() %}<option value="{{ key }}"{% if prefill.kind == key %} selected{% endif %}>{{ label }}{% if key == 'rent' %} (переуступка){% endif %}</option>{% endfor %}</select></label>
+      <label>Назначение <select name="vri_group"><option value="any">любое</option>{% for key, label in groups.items() %}<option value="{{ key }}"{% if prefill.vri_group == key %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+      <label>Площадь, сот. <input name="area" inputmode="decimal" value="{{ prefill.area or '' }}"></label>
+    </div>
+    <div class="grid">
+      <label>Дата входа <input name="bought_at" type="date" value="{{ prefill.bought_at or '' }}"></label>
+      <label>Цена входа, ₽ <input name="buy_price" inputmode="decimal" value="{{ prefill.buy_price|int if prefill.buy_price else '' }}"></label>
+      <label>Расходы, ₽ <input name="extra_costs" inputmode="decimal" value="{{ prefill.extra_costs|int if prefill.extra_costs else '' }}" placeholder="регистрация, межевание, реклама"></label>
+      <label>Ссылка на лот <input name="lot_url" value="{{ prefill.lot_url or '' }}"></label>
+    </div>
+    <div class="grid">
+      <label>Выставлено <input name="listed_at" type="date" value="{{ prefill.listed_at or '' }}"></label>
+      <label>Цена выставления, ₽ <input name="list_price" inputmode="decimal" value="{{ prefill.list_price|int if prefill.list_price else '' }}"></label>
+      <label>Продано <input name="sold_at" type="date" value="{{ prefill.sold_at or '' }}"></label>
+      <label>Цена продажи, ₽ <input name="sell_price" inputmode="decimal" value="{{ prefill.sell_price|int if prefill.sell_price else '' }}"></label>
+    </div>
+    <label>Заметка <input name="note" value="{{ prefill.note or '' }}" placeholder="направление, покупатель, что сработало"></label>
+    <button class="sm">Сохранить</button>
+  </form>
+</article>
+{% endblock %}

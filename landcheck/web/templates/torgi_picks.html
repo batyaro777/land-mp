@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Мои подборки — торги{% endblock %}
+{% block content %}
+{% set tab = 'hot' %}
+{% include "_copy_js.html" %}
+<h2>Подборки для инвестора <span class="badge mini">внутренний режим</span></h2>
+{% include "_torgi_nav.html" %}
+<p class="muted small">Подборка — отмеченные в «Горячих» лоты одной сравнительной таблицей. У каждой своя ссылка, которая открывается без входа.</p>
+{% if picks %}
+<table class="results">
+  <thead><tr><th>Подборка</th><th class="num">Лотов</th><th>Создана</th><th>Ссылка для инвестора</th><th></th></tr></thead>
+  <tbody>
+  {% for p in picks %}
+  <tr>
+    <td><a href="/tools/torgi-picks/{{ p.id }}">{{ p.title or ('Подборка №' ~ p.id) }}</a></td>
+    <td class="num">{{ p.n }}</td>
+    <td class="small">{{ p.created.strftime('%d.%m.%Y') }}</td>
+    <td class="small"><code>{{ p.url }}</code><button type="button" class="copy" data-copy="{{ p.url }}" title="Скопировать ссылку" aria-label="Скопировать ссылку">⧉</button></td>
+    <td><form method="post" action="/tools/torgi-picks/{{ p.id }}/delete" class="inline" onsubmit="return confirm('Удалить подборку? Ссылка перестанет открываться.')"><button class="outline secondary sm">Удалить</button></form></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<article>Подборок пока нет. Отметьте лоты на вкладке <a href="/tools/torgi-hot">«Горячие»</a> и нажмите «В подборку».</article>
+{% endif %}
+{% endblock %}

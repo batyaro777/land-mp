@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Вход — {{ brand }}{% endblock %}
+{% block content %}
+<article class="narrow">
+  <hgroup>
+    <h2>Вход</h2>
+    <p>Проверка земельных участков по открытым данным: для покупателей, продавцов и брокеров. <a href="/proverka">Что входит в проверку</a></p>
+  </hgroup>
+  {% if error %}<p class="err">{{ error }}</p>{% endif %}
+  {% if pending is defined and pending %}<p class="ok-msg small">Участок <code>{{ pending[0] }}</code> ждёт проверки: зарегистрируйтесь или войдите — отчёт откроется сразу.</p>{% endif %}
+  <nav class="tabs">
+    <a href="/login?tab=password" class="{{ 'active' if tab == 'password' else '' }}">Войти</a>
+    <a href="/login?tab=register" class="{{ 'active' if tab == 'register' else '' }}">Регистрация</a>
+    <a href="/login?tab=code" class="{{ 'active' if tab == 'code' else '' }}">По коду приглашения</a>
+  </nav>
+
+  {% if tab == 'register' %}
+  {% set f = form if form is defined and form else {} %}
+  <form method="post" action="/register" id="reg-form">
+    {% if ref %}<input type="hidden" name="ref" value="{{ ref }}"><p class="small muted">Вы пришли по партнёрской ссылке.</p>{% endif %}
+    <label>Email<input type="email" name="email" placeholder="you@example.com" value="{{ f.email or '' }}" required autofocus></label>
+    <label>Пароль <small class="muted">(не короче 8 знаков)</small><input type="password" name="password" minlength="8" required></label>
+    <label>Как вас называть<input name="name" placeholder="Имя" value="{{ f.name or '' }}" required></label>
+    <fieldset>
+      <legend>Вы регистрируетесь как</legend>
+      {% for key, label in ENTITIES.items() %}
+      <label class="inline-check"><input type="radio" name="entity" value="{{ key }}"{% if (f.entity or 'person') == key %} checked{% endif %}> {{ label }}</label>
+      {% endfor %}
+    </fieldset>
+    <div data-entity="person">
+      <label>Кто вы
+        <select name="role">
+          {% for key, label in PUBLIC_ROLES_MAP.items() %}<option value="{{ key }}"{% if f.role == key %} selected{% endif %}>{{ label }}</option>{% endfor %}
+        </select>
+        <small class="muted">Покупатель — проверка участков под свою цель. Продавец — объявление с проверкой права. Брокер — всё сразу и подборки до 300 участков.</small>
+      </label>
+    </div>
+    <div data-entity="company">
+      <label>Чем занимается организация
+        <select name="org_kind">
+          {% for key, item in ORG_KINDS.items() %}<option value="{{ key }}"{% if f.org_kind == key %} selected{% endif %}>{{ item[0] }}</option>{% endfor %}
+        </select>
+        <small class="muted">От этого зависит, с чего начнётся кабинет: агентству — подборки и объявления, владельцу земли — объявления, инвестору — поиск. Режим можно сменить в меню под именем.</small>
+      </label>
+      <label>ИНН <small class="muted">(необязательно: 10 цифр у организации, 12 у ИП)</small><input name="inn" inputmode="numeric" value="{{ f.inn or '' }}"></label>
+    </div>
+    <label><span data-entity="person">Название бренда <small class="muted">(необязательно, для шапки отчётов)</small></span><span data-entity="company">Название организации или ИП <small class="muted">(в шапке отчётов и объявлений)</small></span><input name="brand_name" value="{{ f.brand_name or '' }}"></label>
+    <label>Регион интереса <small class="muted">(необязательно: база участков и поиск откроются по нему)</small><input name="region" list="region-names" placeholder="Ставропольский край" value="{{ f.region or '' }}"></label>
+    <datalist id="region-names">{% for r in REGION_NAMES %}<option value="{{ r }}">{% endfor %}</datalist>
+    <button type="submit">Зарегистрироваться</button>
+  </form>
+  <script>
+  (function () {
+    var form = document.getElementById('reg-form');
+    if (!form) return;
+    function sync() {
+      var who = (form.querySelector('input[name=entity]:checked') || {}).value || 'person';
+      form.querySelectorAll('[data-entity]').forEach(function (el) { el.hidden = el.dataset.entity !== who; });
+    }
+    form.querySelectorAll('input[name=entity]').forEach(function (el) { el.addEventListener('change', sync); });
+    sync();
+  })();
+  </script>
+  {% elif tab == 'code' %}
+  <form method="post" action="/login">
+    <label>Код приглашения<input name="code" placeholder="LC-XXXXXX" required autocomplete="off" autofocus></label>
+    <label>Как вас называть<input name="name" placeholder="Имя" required></label>
+    <label>Название вашей компании или бренда <small class="muted">(будет в шапке отчётов для клиентов)</small><input name="brand_name" placeholder="Например, Земля Подмосковья"></label>
+    <label>Контакт <small class="muted">(телефон или Telegram, по желанию)</small><input name="contact" placeholder="@username"></label>
+    <button type="submit">Войти по коду</button>
+    <p class="muted small">Код выдаёт организатор пилота. Пароль не нужен; email и пароль можно задать потом в профиле.</p>
+  </form>
+  {% else %}
+  <form method="post" action="/login/password">
+    <label>Email<input type="email" name="email" required autofocus></label>
+    <label>Пароль<input type="password" name="password" required></label>
+    <button type="submit">Войти</button>
+    <p class="muted small">Нет аккаунта — <a href="/login?tab=register">зарегистрируйтесь</a>. Есть код приглашения — <a href="/login?tab=code">войдите по коду</a>.</p>
+  </form>
+  {% endif %}
+</article>
+{% endblock %}

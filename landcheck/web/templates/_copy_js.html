@@ -1,0 +1,19 @@
+{# Кнопки «скопировать»: <button type="button" class="copy" data-copy="…">. Номер и координаты одним нажатием, как в карточке кадастровой карты (зум 13.11, 16:56) #}
+<script>
+document.addEventListener('click', function (e) {
+  var btn = e.target.closest('button.copy[data-copy]');
+  if (!btn) return;
+  e.preventDefault();
+  var text = btn.getAttribute('data-copy');
+  var done = function () {
+    var was = btn.textContent;
+    btn.textContent = '✓';
+    setTimeout(function () { btn.textContent = was; }, 1200);
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(done, function () { window.prompt('Скопируйте:', text); });
+  } else {
+    window.prompt('Скопируйте:', text);
+  }
+});
+</script>

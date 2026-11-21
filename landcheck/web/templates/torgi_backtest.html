@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Насколько точна модель — торги{% endblock %}
+{% block head %}{% if pending %}<meta http-equiv="refresh" content="20">{% endif %}{% endblock %}
+{% block content %}
+{% set tab = 'backtest' %}
+{% macro share(v) %}{% if v is none %}—{% else %}{{ (v * 100)|round|int }} %{% endif %}{% endmacro %}
+{% macro times(v) %}{% if v is none %}—{% else %}×{{ ('%.2f'|format(v))|replace('.', ',') }}{% endif %}{% endmacro %}
+<h2>Насколько точна модель <span class="badge mini">внутренний режим</span></h2>
+{% include "_torgi_nav.html" %}
+<p class="muted small">Завершённые за год земельные аукционы продажи оценены так, как если бы они шли сейчас, с критериями по умолчанию (от 100 % годовых, вход до 2 млн ₽), и сравнены с тем, чем торги кончились. Проверяется сторона входа: прошёл бы лот в «горячие», за сколько его купили, была ли борьба. Цену, по которой победитель потом продал участок, мы не видим — доходность ниже посчитана по сегодняшней цене рынка.</p>
+{% if pending %}<p class="small warn">Считается: осталось регионов — {{ pending }}. Страница обновится сама.</p>{% endif %}
+
+{% if total.lots %}
+<h3>Все посчитанные регионы: {{ rows|length }} из {{ regions_n }}</h3>
+<table class="results invest">
+  <tbody>
+    <tr><th>Завершённых аукционов продажи</th><td>{{ total.lots }}: с борьбой {{ total.outcomes.sold }}, одному участнику {{ total.outcomes.single }}, без заявок {{ total.outcomes.none }}</td></tr>
+    <tr><th>С ценой рынка</th><td>{{ total.priced }}. Прошли бы в «горячие» — <strong>{{ total.hot }}</strong>; не прошли бы сверку цены — {{ total.check }}; сняты по спросу (в их месте половина торгов и больше без заявок) — {{ total.nodemand }}{% if total.nodemand %}, из них без заявок остались {{ share(total.nodemand_none_share) }}{% endif %}</td></tr>
+    <tr><th>Чем кончились «горячие»</th><td>с борьбой {{ total.hot_outcomes.sold }} ({{ share(total.hot_sold_share) }}), одному участнику по старту {{ total.hot_outcomes.single }} ({{ share(total.hot_single_share) }}), <strong>без единой заявки {{ total.hot_outcomes.none }} ({{ share(total.hot_none_share) }})</strong></td></tr>
+    <tr><th>Цена покупки против ожидаемой</th><td>{% if total.hot_ratio.n %}у {{ total.hot_ratio.n }} купленных «горячих» лотов итоговая цена к ожидаемой — в середине <strong>{{ times(total.hot_ratio.median) }}</strong>, у половины лотов от {{ times(total.hot_ratio.low) }} до {{ times(total.hot_ratio.high) }}; в ±{{ band }} % попало {{ share(total.hot_ratio.within) }}{% else %}купленных «горячих» лотов нет{% endif %}</td></tr>
+    <tr><th>Уложились в цену отсечения</th><td>{{ share(total.hot_within_cutoff) }} покупок: итоговая цена не выше ставки, при которой ещё выходит 100 % годовых</td></tr>
+    <tr><th>Доходность при фактической цене входа</th><td>{% if total.hot_annual_median is not none %}в середине <strong>{{ share(total.hot_annual_median) }} годовых</strong>; порог 100 % выдержали {{ share(total.hot_annual_ok) }} покупок{% else %}—{% endif %}</td></tr>
+    <tr><th>Все торги с борьбой, не только «горячие»</th><td>{% if total.all_ratio.n %}{{ total.all_ratio.n }} лотов: итог к ожиданию {{ times(total.all_ratio.median) }}, в ±{{ band }} % попало {{ share(total.all_ratio.within) }}{% else %}—{% endif %}</td></tr>
+    <tr><th>Повторные торги</th><td>{% if total.relist_n %}{{ total.relist_n }} случаев, когда участок выставили снова после торгов без результата: старт менялся в середине {{ times(total.relist_median) }}; снижали в {{ share(total.relist_lower) }} случаев, оставляли прежним в {{ share(total.relist_same) }}{% else %}таких случаев в базе нет{% endif %}</td></tr>
+    <tr><th>Ждём повторных торгов</th><td>{{ total.returning }} участк. без заявок за полгода прошли бы отбор и сейчас не выставлены — список на вкладке <a href="/tools/torgi-hot">«Горячие»</a></td></tr>
+  </tbody>
+</table>
+
+<h3>По регионам</h3>
+<div class="table-wrap">
+<table class="results">
+  <thead><tr>
+    <th>Регион</th><th class="num">Аукционов</th><th class="num">С ценой</th><th class="num">«Горячих»</th>
+    <th class="num" title="Доля «горячих», ушедших единственному участнику по начальной цене">Одному участнику</th>
+    <th class="num" title="Доля «горячих», на которые не подали ни одной заявки">Без заявок</th>
+    <th class="num" title="Итоговая цена к ожидаемой у купленных «горячих», середина">Цена к ожиданию</th>
+    <th class="num">В цене отсечения</th>
+    <th class="num" title="Годовых при фактической цене входа, середина">Годовых по факту</th>
+    <th class="num" title="Участки без заявок за полгода, которые прошли бы отбор и сейчас не выставлены">Вернутся</th>
+  </tr></thead>
+  <tbody>
+  {% for r in rows %}
+  <tr>
+    <td>{{ r.code }} — {{ r.name }}</td><td class="num">{{ r.lots }}</td><td class="num">{{ r.priced }}</td><td class="num"><strong>{{ r.hot }}</strong></td>
+    <td class="num">{{ share(r.hot_single_share) }}</td><td class="num">{{ share(r.hot_none_share) }}</td>
+    <td class="num">{{ times(r.hot_ratio.median) }}</td><td class="num">{{ share(r.hot_within_cutoff) }}</td>
+    <td class="num">{{ share(r.hot_annual_median) }}</td><td class="num">{{ r.returning }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% elif not pending %}
+<article>Завершённых аукционов продажи в собранных регионах пока нет.</article>
+{% endif %}
+<p class="muted small">Как читать. «Цена к ожиданию» ×1,00 — победитель заплатил ровно столько, сколько модель ждала; больше единицы — борьба оказалась сильнее. Оценка слегка оптимистична: итог самого лота входит в статистику роста цены его места. Цена рынка — сегодняшняя, а не на день торгов.</p>
+{% endblock %}

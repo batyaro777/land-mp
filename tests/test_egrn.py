@@ -1,0 +1,192 @@
+"""Автосверка выписки ЕГРН (R12): разбор печатной формы и сравнение с объявлением/продавцом."""
+
+from __future__ import annotations
+
+from datetime import date
+
+from landcheck import egrn
+
+EXTRACT = """Выписка из Единого государственного реестра недвижимости об основных характеристиках
+и зарегистрированных правах на объект недвижимости
+На основании запроса от 10.10.2026, сообщаем, что по состоянию на 10.10.2026 в ЕГРН содержатся сведения:
+Земельный участок
+Кадастровый номер: 50:09:0060202:101
+Номер кадастрового квартала: 50:09:0060202
+Дата присвоения кадастрового номера: 12.05.2005
+Адрес: Московская область, Солнечногорский район, СНТ Виктория, уч. 5
+Площадь: 1000 +/- 11 кв. м
+Кадастровая стоимость, руб.: 1 500 000
+Категория земель: Земли населённых пунктов
+Виды разрешенного использования: Для индивидуального жилищного строительства
+Сведения о зарегистрированных правах
+1. Правообладатель (правообладатели): 1.1. Иванов Иван Иванович
+2. Вид, номер и дата государственной регистрации права: 2.1. Собственность, № 50:09:0060202:101-50/001/2019-1 от 15.03.2019
+3. Ограничение прав и обременение объекта недвижимости: не зарегистрировано
+4. Договоры участия в долевом строительстве: данные отсутствуют
+"""
+
+TODAY = date(2026, 10, 20)
+
+
+def test_parse_extract_fields():
+    ex = egrn.parse_extract(EXTRACT)
+    assert ex.is_extract
+    assert ex.cad_num == "50:09:0060202:101"
+    assert ex.area_m2 == 1000.0
+    assert ex.address == "Московская область, Солнечногорский район, СНТ Виктория, уч. 5"
+    assert ex.holders == ["Иванов Иван Иванович"]
+    assert ex.right_kind == "собственность" and ex.right_date == "15.03.2019"
+    assert ex.issued == "10.10.2026"
+    assert ex.encumbrances_known and ex.encumbrances == []
+
+
+def test_compare_ok_for_owner():
+    ex = egrn.parse_extract(EXTRACT)
+    res = egrn.compare(
+        ex, cad_num="50:09:0060202:101", area_m2=1000.0, seller_name="Иван Иванов", today=TODAY
+    )
+    assert res.verdict == "ok"
+    by = {i.key: i for i in res.items}
+    assert by["cad"].status == "ok" and by["area"].status == "ok"
+    assert by["holder"].status == "ok" and "И***в И. И." in by["holder"].note
+    assert "Иванов Иван" not in by["holder"].note  # ФИО наружу не уходит
+    assert by["right"].status == "ok" and by["date"].status == "ok" and by["enc"].status == "ok"
+    d = res.to_dict()
+    assert d["verdict"] == "ok" and len(d["items"]) == 8 and d["checked_at"] == "2026-10-20"
+
+
+def test_compare_mismatch_cad_and_holder():
+    ex = egrn.parse_extract(EXTRACT)
+    res = egrn.compare(
+        ex, cad_num="50:09:0060202:108", area_m2=1200.0, seller_name="Пётр Сидоров", today=TODAY
+    )
+    assert res.verdict == "mismatch"
+    by = {i.key: i.status for i in res.items}
+    assert by["cad"] == "mismatch" and by["area"] == "mismatch" and by["holder"] == "mismatch"
+    assert "кадастровый номер" in res.label and "правообладатель" in res.label
+
+
+def test_compare_agent_does_not_require_name_match():
+    ex = egrn.parse_extract(EXTRACT)
+    res = egrn.compare(
+        ex,
+        cad_num="50:09:0060202:101",
+        seller_name="Агент Брокеров",
+        proof_kind="agent",
+        today=TODAY,
+    )
+    assert res.verdict == "ok" and "представител" in res.label
+    assert {i.key: i.status for i in res.items}["holder"] == "unknown"
+
+
+def test_company_holder_stale_date_and_encumbrance():
+    text = EXTRACT.replace("1.1. Иванов Иван Иванович", '1.1. ООО "Ромашка", ИНН 5044000000')
+    text = text.replace("по состоянию на 10.10.2026", "по состоянию на 01.03.2026")
+    text = text.replace(
+        "обременение объекта недвижимости: не зарегистрировано",
+        "обременение объекта недвижимости: Ипотека, № 50:09:0060202:101-50/001/2021-2 от 01.02.2021",
+    )
+    ex = egrn.parse_extract(text)
+    assert ex.encumbrances == ["ипотека"]
+    res = egrn.compare(ex, cad_num="50:09:0060202:101", seller_name="Иван Иванов", today=TODAY)
+    by = {i.key: i for i in res.items}
+    assert by["holder"].status == "unknown" and "юрлицо" in by["holder"].note
+    assert by["date"].status == "warn" and "233 дн." in by["date"].note
+    assert by["enc"].status == "warn" and "ипотека" in by["enc"].note
+    assert res.verdict == "unknown" and "внимание" in res.label
+
+
+def test_non_extract_document():
+    res = egrn.compare(
+        egrn.parse_extract("Договор купли-продажи. Стороны договорились."), cad_num="x"
+    )
+    assert res.verdict == "unknown" and "не похож на выписку" in res.label and res.items == []
+    assert egrn.parse_extract("").is_extract is False
+
+
+def test_name_match_and_mask():
+    assert egrn.name_match("Иванов Иван Иванович", "Иванов Иван Иванович") == "ok"
+    assert egrn.name_match("Иван Иванов", "Иванов И. И.") == "ok"
+    assert egrn.name_match("Иванов Пётр", "Иванов И. И.") == "mismatch"
+    assert egrn.name_match("Сидоров Пётр", "Иванов Иван Иванович") == "mismatch"
+    assert egrn.name_match("Иван Иванов", "Администрация городского округа") == "unknown"
+    assert egrn.name_match("Иван", "Петров Иван Сергеевич") == "unknown"  # одно слово, не фамилия
+    assert egrn.name_match("Иванов", "Иванов Иван Иванович") == "ok"
+    assert egrn.name_match("Петр Иванов", "Иванов Пётр Сергеевич") == "ok"
+    assert egrn.name_match("", "Иванов Иван") == "unknown"
+    assert egrn.mask_name("Иванов Иван Иванович") == "И***в И. И."
+    assert egrn.mask_name("Ли") == "Л***"
+
+
+def test_best_extract_and_summary():
+    best = egrn.best_extract(["просто текст", EXTRACT])
+    assert best is not None and best.cad_num == "50:09:0060202:101"
+    full = {"verdict": "ok", "label": "x", "checked_at": "2026-10-20", "items": [{"key": "holder"}]}
+    assert egrn.summary_only(full) == {"verdict": "ok", "label": "x", "checked_at": "2026-10-20"}
+    assert egrn.summary_only(None) is None
+
+
+# Форма выписки Росреестра по документу от апреля 2025 года (прод, 12.11.2026 — по ней автосверка показывала «вид
+# права не найден» и «дата выписки не найдена»): подпись «Вид, номер, дата и время
+# государственной регистрации права» с переносом строки, дата выписки — в шапке листа рядом с
+# номером КУВИ, слов «дата формирования» нет. Имена и номера вымышлены.
+EXTRACT_ROSREESTR = """Филиал публично-правовой компании "Роскадастр" по Краснодарскому краю
+Выписка из Единого государственного реестра недвижимости об объекте недвижимости
+Сведения о характеристиках объекта недвижимости
+На основании запроса от 16.04.2025, поступившего на рассмотрение 16.04.2025, сообщаем, что согласно записям Единого государственного
+реестра недвижимости:
+Раздел 1 Лист 1
+Земельный участок
+Лист № 1 раздела 1 Всего листов раздела 1: 2 Всего разделов: 5 Всего листов выписки: 12
+17.04.2025г. № КУВИ-001/2025-12345678
+Кадастровый номер: 23:49:0420013:1016
+Номер кадастрового квартала: 23:49:0420013
+Дата присвоения кадастрового номера: 02.03.2015
+Площадь: 4851 +/- 24
+Раздел 2 Лист 4
+Сведения о зарегистрированных правах
+1 Правообладатель (правообладатели): 1.1 Петров Пётр Петрович
+2 Вид, номер, дата и время государственной
+регистрации права:
+2.1 Собственность
+23:49:0420013:1016-23/238/2021-3
+17.05.2021 10:11:12
+3 Документы-основания 3.1 Договор купли-продажи
+5 Ограничение прав и обременение объекта недвижимости:
+5.1 вид: Ипотека
+дата государственной регистрации: 18.05.2021 09:00:00
+Получатель выписки: Сидоров Сидор Сидорович
+"""
+
+
+def test_parse_extract_rosreestr_form():
+    ex = egrn.parse_extract(EXTRACT_ROSREESTR)
+    assert ex.is_extract and ex.cad_num == "23:49:0420013:1016" and ex.area_m2 == 4851.0
+    assert ex.holders == ["Петров Пётр Петрович"]
+    assert ex.right_kind == "собственность" and ex.right_date == "17.05.2021"
+    assert ex.issued == "17.04.2025"  # из шапки листа, а не дата запроса и не дата регистрации
+    assert ex.encumbrances == ["ипотека"]
+    # выписка о переходе прав: та же строка со скобкой
+    moved = EXTRACT_ROSREESTR.replace(
+        "регистрации права:", "регистрации права (перехода, прекращения\nправа):"
+    )
+    ex2 = egrn.parse_extract(moved)
+    assert ex2.right_kind == "собственность" and ex2.right_date == "17.05.2021"
+    # сверка: вид права и дата теперь найдены; выписка старше объявления — это видно
+    from datetime import UTC, datetime
+
+    res = egrn.compare(
+        ex,
+        cad_num="23:49:0420013:1016",
+        area_m2=4851.0,
+        seller_name="Антон Продавец",
+        today=date(2026, 11, 12),
+        created_at=datetime(2026, 11, 12, 13, 0, tzinfo=UTC),
+    )
+    by = {i.key: i for i in res.items}
+    assert by["right"].status != "unknown" and by["date"].status != "unknown"
+    assert by["holder"].status == "mismatch" and "Петров" not in by["holder"].note
+    assert by["fresh"].status == "warn" and "17.04.2025" in by["fresh"].note
+    # прежняя форма Госуслуг читается как раньше
+    old = egrn.parse_extract(EXTRACT)
+    assert old.right_kind == "собственность" and old.issued == "10.10.2026"

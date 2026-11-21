@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Завершённые торги{% if region_name %} — {{ region_name }}{% endif %}{% endblock %}
+{% block content %}
+{% include "_copy_js.html" %}
+{% set tab = 'history' %}
+<h2>Завершённые торги <span class="badge mini">внутренний режим</span></h2>
+{% include "_torgi_nav.html" %}
+<p class="muted small">Чем кончились торги за год: что продано и почём, сколько было заявок, кто взял участок (физлицо, ИП или компания — без имён) и почему торги не состоялись. Причина «не состоялись» — из протокола. Справа — что, вероятно, помешало: стартовая цена за сотку против медианы проданных рядом, слабый спрос в районе, жалобы, отмена.</p>
+
+<form method="get" class="grid no-print">
+  <label>Регион
+    <select name="region" onchange="this.form.submit()">
+      {% if not region %}<option value="">— выберите —</option>{% endif %}
+      {% for r in regions %}<option value="{{ r.code }}"{% if r.code == region %} selected{% endif %}>{{ r.name }}{% if r.synced %} · собран{% endif %}</option>{% endfor %}
+    </select></label>
+  <label>Район или квартал <input name="d" value="{{ place }}" placeholder="{{ region or '40' }}:13 или {{ region or '40' }}:13:120101" onchange="this.form.submit()"></label>
+  <label>Сделка
+    <select name="kind" onchange="this.form.submit()">
+      <option value="">продажа и аренда</option>
+      {% for key, label in kinds.items() %}<option value="{{ key }}"{% if key == kind %} selected{% endif %}>{{ label }}</option>{% endfor %}
+    </select></label>
+  <label>Назначение
+    <select name="group" onchange="this.form.submit()">
+      <option value="">любое</option>
+      {% for key, label in groups.items() %}<option value="{{ key }}"{% if key == group %} selected{% endif %}>{{ label }}</option>{% endfor %}
+    </select></label>
+  <input type="hidden" name="outcome" value="{{ outcome }}">{% if bt == 'other' %}<input type="hidden" name="bt" value="other">{% endif %}
+</form>
+
+{% if not region %}
+<article><p>Выберите регион. Если он ещё не собран — соберите его на вкладке «Лоты».</p></article>
+{% else %}
+<div class="toolbar no-print">
+  <div>
+    {% for key, label in outcomes.items() %}{% if key not in ('failed', 'canceled') or counts.get(key) %}
+    <a href="/tools/torgi-history?{{ qs_outcome }}&amp;outcome={{ key }}" role="button" class="sm {{ '' if outcome == key else 'outline secondary' }}">{{ label }} {{ counts.get(key, 0) }}</a>
+    {% endif %}{% endfor %}
+  </div>
+  <div class="small">{% if place %}<a href="/tools/torgi-scan?region={{ region }}&amp;d={{ place }}&amp;form=all">идущие лоты {{ 'квартала' if place.count(':') >= 2 else 'района' }}</a> · <a href="/tools/torgi-liquidity?region={{ region }}&amp;level=quarter&amp;d={{ place.split(':')[:2]|join(':') }}">ликвидность по кварталам</a>{% endif %}</div>
+</div>
+{% if bt == 'other' %}<p class="small">Торги другого вида: имущество должников (229-ФЗ), публичные торги изъятых участков, лесные участки, приватизация. В ликвидность и медианы цен они не входят — у них аресты, запреты, понижение цены. <a href="/tools/torgi-history?{{ qs_bt }}">← земельные торги по ЗК{% if other %} ({{ other }}){% endif %}</a></p>
+{% elif other %}<p class="small muted">Здесь земельные торги по Земельному кодексу — как в ликвидности. Ещё {{ other }} завершённых торгов другого вида (имущество должников, изъятые участки, лесные, приватизация) — <a href="/tools/torgi-history?{{ qs_bt }}&amp;bt=other">показать отдельно</a>.</p>{% endif %}
+{% if rows %}
+<div class="table-wrap">
+<table class="results torgi">
+  <thead><tr>
+    <th>Участок · назначение</th>
+    <th>Торги</th>
+    <th class="num">Площадь</th>
+    <th class="num" title="Начальная цена; у аренды — годовая плата">Старт</th>
+    <th class="num" title="Цена победителя или цена договора с единственным участником; рост — во сколько раз выше старта">Итог</th>
+    <th class="num" title="Подано заявок по протоколу">Заявок</th>
+    <th>Исход</th>
+    <th>Кто взял</th>
+    <th>Что, вероятно, помешало</th>
+  </tr></thead>
+  <tbody>
+  {% for r in rows %}
+  <tr>
+    <td class="cad">{% if r.cad_num %}<code>{{ r.cad_num }}</code><button type="button" class="copy" data-copy="{{ r.cad_num }}" title="Скопировать кадастровый номер" aria-label="Скопировать кадастровый номер">⧉</button>{% else %}<code>{{ ('квартал ' ~ r.quarter) if r.quarter else 'без номера' }}</code>{% endif %}
+      <span class="badge mini">{{ kinds.get(r.kind, r.kind) }}</span>{% set bl = bidd(r) %}{% if bl %} <span class="badge mini v-check">{{ bl }}</span>{% endif %}
+      <div class="small">{{ (r.vri or groups.get(r.vri_group, ''))|truncate(60) }}</div>
+      <div class="small muted">{% set dn = names.get(r.district, '') %}{% if dn and dn not in (r.address or '') %}{{ dn }}{{ ' · ' if r.address else '' }}{% endif %}{{ (r.address or '')|short_address|truncate(70) }}</div>
+      <a href="https://torgi.gov.ru/new/public/lots/lot/{{ r.id }}" target="_blank" rel="noopener" class="small muted">лот на torgi.gov.ru</a></td>
+    <td class="num small">{% if r.auction_date %}{{ r.auction_date[8:10] }}.{{ r.auction_date[5:7] }}.{{ r.auction_date[2:4] }}{% else %}—{% endif %}</td>
+    <td class="num">{% if r.area_m2 %}{{ (r.area_m2 / 100)|round(1) }} сот.{% else %}—{% endif %}</td>
+    <td class="num">{% if r.price_start %}{{ r.price_start|money }}{% if r.start_sotka %}<div class="small muted">{{ r.start_sotka|money }}/сот.</div>{% endif %}{% else %}—{% endif %}</td>
+    <td class="num">{% if r.price_fin %}{{ r.price_fin|money }}{% if r.fin_sotka %}<div class="small muted">{{ r.fin_sotka|money }}/сот.</div>{% endif %}{% if r.growth %}<div class="small {{ 'ok' if r.growth >= 1.5 else 'muted' }}">×{{ '%.2f'|format(r.growth) }}</div>{% endif %}{% else %}—{% endif %}</td>
+    <td class="num">{% if r.applied is not none %}{{ '≥' if r.applied_min }}{{ r.applied }}{% else %}—{% endif %}</td>
+    <td class="small"><span class="badge mini v-{{ {'sold': 'ok', 'single': 'check', 'none': 'stop'}.get(r.outcome, '') }}">{{ r.outcome_ru }}</span>{% if r.reason %}<div class="muted">{{ r.reason }}</div>{% endif %}</td>
+    <td class="small">{{ r.winner_type or ('—' if r.outcome in ('sold', 'single') else '') }}</td>
+    <td class="reasons small">{% if r.signals %}<ul>{% for t in r.signals %}<li><span class="dot check"></span>{{ t }}</li>{% endfor %}</ul>{% elif r.median_sotka and r.start_sotka %}<span class="muted">старт ×{{ '%.1f'|format(r.ratio) }} к медиане проданных рядом ({{ r.median_sotka|money }}/сот.)</span>{% endif %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if pages > 1 %}
+<p class="small no-print">Страница {{ page }} из {{ pages }}:
+  {% if page > 1 %}<a href="/tools/torgi-history?{{ qs }}&amp;page={{ page - 1 }}">← назад</a>{% endif %}
+  {% if page < pages %}<a href="/tools/torgi-history?{{ qs }}&amp;page={{ page + 1 }}">дальше →</a>{% endif %}</p>
+{% endif %}
+<p class="muted small">{% if zones_pending %}Обременения (ЗОУИТ, ООПТ, лесопарк) у не ушедших лотов этой страницы проверяем в НСПД: осталось {{ zones_pending }} — обновите страницу через несколько минут. {% else %}Обременения (ЗОУИТ, ООПТ, лесопарк) у не ушедших лотов — в колонке «Что, вероятно, помешало». {% endif %}«Цена, похоже, завышена» — старт за сотку от 1,3 медианы проданных в том же квартале или районе по той же сделке (нужно не меньше трёх проданных). «Спрос слабый» — в районе находят хозяина меньше 40 % участков.</p>
+{% else %}
+<article><p>{% if place %}В {{ 'квартале' if place.count(':') >= 2 else 'районе' }} {{ place }}{% else %}В регионе{% endif %} завершённых торгов с исходом «{{ outcomes[outcome] }}» за период нет.</p></article>
+{% endif %}
+{% endif %}
+{% endblock %}

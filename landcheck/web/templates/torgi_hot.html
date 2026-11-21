@@ -1,0 +1,265 @@
+{% extends "base.html" %}
+{% block title %}Горячие предложения — торги{% endblock %}
+{% block content %}
+{% include "_copy_js.html" %}
+{% include "_gallery.html" %}
+{% set tab = 'hot' %}
+{% macro pct(v) %}{% if v is none %}—{% elif v > 10 %}больше 1000 %{% else %}{{ (v * 100)|round|int }} %{% endif %}{% endmacro %}
+{% macro lot_cell(r) %}
+  {% if r.images %}<button type="button" class="lot-thumb" data-gallery="{{ r.images|tojson|forceescape }}" title="Фото лота ({{ r.images|length }})" aria-label="Фото лота"><img src="{{ img_base }}{{ r.images[0] }}" alt="" loading="lazy" data-id="{{ r.images[0] }}" onerror="lotImgFallback(this)">{% if r.images|length > 1 %}<span>{{ r.images|length }}</span>{% endif %}</button>{% endif %}<a href="/tools/torgi-lot/{{ r.id }}/invest" title="Сводка для инвестора: цена входа и продажи, доводы за и против, сроки"><code>{{ r.cad_num or (('квартал ' ~ r.quarter) if r.quarter else 'без номера') }}</code></a>{% if r.cad_num %}<button type="button" class="copy" data-copy="{{ r.cad_num }}" title="Скопировать кадастровый номер" aria-label="Скопировать кадастровый номер">⧉</button>{% endif %}
+  <span class="badge mini">{{ kinds.get(r.kind, r.kind) }}</span>{% if r.area_m2 %} <strong class="small nw">{{ (r.area_m2 / 100)|round(1) }} сот.</strong>{% endif %}{% if r.has_gpzu %} <span class="badge mini v-ok" title="К лоту приложен ГПЗУ">ГПЗУ</span>{% endif %}
+  <div class="small">{{ r.vri or groups.get(r.vri_group, '') }}</div>
+  <div class="small muted"><strong>{{ region_names.get(r.region, r.region) }}</strong>{% set dn = names.get(r.district, '') %}{% if dn and dn not in (r.address or '') %} · {{ dn }}{% endif %}{% if r.address %} · {{ r.address }}{% endif %}</div>
+  {% if r.towns %}<div class="small muted" title="По прямой от точки участка, справочник городов">{% for name, value in r.towns %}{{ name|lower }}: {{ value }}{{ ' · ' if not loop.last else '' }}{% endfor %}</div>{% endif %}
+  <a href="/tools/torgi-lot/{{ r.id }}/invest" class="small"><strong>сводка для инвестора</strong></a> <span class="muted small">·</span> <a href="/tools/torgi-lot/{{ r.id }}{% if lot_qs %}?{{ lot_qs }}{% endif %}" class="small muted">подробный разбор</a> <span class="muted small">·</span> <a href="https://torgi.gov.ru/new/public/lots/lot/{{ r.id }}" target="_blank" rel="noopener" class="small muted">лот на torgi.gov.ru</a>
+  {% set m = marks.get(r.id) %}
+  <div class="small no-print lot-marks">
+    {% if m and m[0] == 'work' %}<span class="badge mini v-ok">в работе</span> <button class="linkbtn" form="hot-pick" formmethod="post" formaction="/tools/torgi-mark/{{ r.id }}/clear">снять</button>
+    {% elif m and m[0] == 'skip' %}<span class="badge mini v-stop" title="{{ m[1] or '' }}">убран: {{ m[1] or 'без причины' }}</span> <button class="linkbtn" form="hot-pick" formmethod="post" formaction="/tools/torgi-mark/{{ r.id }}/clear">вернуть</button>
+    {% else %}<button class="linkbtn" form="hot-pick" formmethod="post" formaction="/tools/torgi-mark/{{ r.id }}/work" title="Лот появится в блоке «В работе», о конце приёма заявок напомнит утренняя сводка">в работу</button>
+    <span class="muted">·</span> <details class="skip-form"><summary>не подходит</summary><select name="reason-{{ r.id }}" form="hot-pick" aria-label="Причина">{% for t in skip_reasons %}<option>{{ t }}</option>{% endfor %}</select> <button class="outline secondary sm" form="hot-pick" formmethod="post" formaction="/tools/torgi-mark/{{ r.id }}/skip">убрать из списка</button></details>{% endif %}
+  </div>
+{% endmacro %}
+<h2>Горячие предложения <span class="badge mini">внутренний режим</span></h2>
+{% include "_torgi_nav.html" %}
+<p class="muted small">Идущие аукционы, по которым можно решать «заходим»: доходность считается не от старта, а от ожидаемой цены победителя, цена рынка проходит сверку, наверху — самые доказанные лоты, а не самые большие проценты. Критерии запоминаются.</p>
+
+<form method="get" class="torgi-filter no-print">
+  <div class="grid">
+    <label title="Годовая доходность после налога при покупке по ожидаемой цене победителя и продаже по середине рынка">Доходность от, % годовых
+      <input name="annual" inputmode="decimal" value="{{ (hp.min_annual * 100)|round|int }}">
+    </label>
+    <label title="Сравнивается с ожидаемой ценой победителя плюс расходы, а не со стартом">Цена входа до
+      <select name="cap">
+        {% for c in caps %}<option value="{{ c }}"{% if hp.price_cap == c %} selected{% endif %}>{{ (c / 1000000)|round|int }} млн ₽</option>{% endfor %}
+        {% if hp.price_cap and hp.price_cap not in caps %}<option value="{{ hp.price_cap|int }}" selected>{{ hp.price_cap|money }}</option>{% endif %}
+        <option value="0"{% if not hp.price_cap %} selected{% endif %}>без лимита</option>
+      </select>
+    </label>
+    <label title="Сколько дней должно оставаться до конца приёма заявок">До конца заявок, дней от
+      <input name="days" inputmode="numeric" value="{{ hp.min_days }}">
+    </label>
+    <label>Сделка
+      <select name="kind">
+        <option value="">продажа и аренда</option>
+        {% for key, label in kinds.items() %}<option value="{{ key }}"{% if hp.kinds and hp.kinds[0] == key %} selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </label>
+  </div>
+  <div class="grid">
+    <label>Регион
+      <select name="region">
+        <option value="all">все собранные ({{ synced|length }})</option>
+        {% for code in synced %}<option value="{{ code }}"{% if region == code %} selected{% endif %}>{{ code }} — {{ region_names.get(code, code) }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Сколько показывать
+      <select name="top">
+        {% for n in tops %}<option value="{{ n }}"{% if hp.top == n %} selected{% endif %}>{{ n }}</option>{% endfor %}
+      </select>
+    </label>
+    <label title="Какие лоты наверху. Столбцы таблицы можно пересортировать щелчком по заголовку">Порядок
+      <select name="order">
+        <option value="">самые доказанные и доходные</option>
+        <option value="mo"{% if crit.get('order') == 'mo' %} selected{% endif %}>сначала Московская область, затем регионы по лучшему лоту</option>
+      </select>
+    </label>
+    <label title="Регистрация, межевание, реклама — всё, что платится сверх цены лота">Расходы на сделку, ₽
+      <input name="extra" inputmode="decimal" value="{{ crit.get('extra', '') }}" placeholder="0">
+    </label>
+    <label title="Прибыль после налога в ожидаемом сценарии. «0,3» — 300 тыс. ₽">Прибыль на сделку от, ₽
+      <input name="profit" inputmode="decimal" value="{{ crit.get('profit', '') }}" placeholder="не задана">
+    </label>
+  </div>
+  <details{% if crit.get('assign') %} open{% endif %}>
+    <summary class="small">Аренда под переуступку</summary>
+    <label class="small" title="Без этой доли аренда не оценивается: цены переуступки в открытых данных нет">Переуступка права аренды, % от цены такого же участка в собственности
+      <input name="assign" inputmode="decimal" value="{{ crit.get('assign', '') }}" placeholder="не задана — аренда в отбор не попадает" style="max-width: 22rem">
+    </label>
+  </details>
+  <details{% if digest_on %} open{% endif %}>
+    <summary class="small">Утренняя сводка{% if digest_on %}: включена, в {{ '%02d'|format(digest_hour) }}:00{% endif %}</summary>
+    <div class="grid">
+      <label class="small"><input type="checkbox" name="dg" value="1"{% if digest_on %} checked{% endif %}> Присылать каждое утро новые лоты по этим критериям и сроки по лотам «в работе»</label>
+      <label class="small">Час отправки
+        <select name="dh">{% for h in range(5, 13) %}<option value="{{ h }}"{% if digest_hour == h %} selected{% endif %}>{{ '%02d'|format(h) }}:00</option>{% endfor %}</select>
+      </label>
+      <label class="small">Ваш часовой пояс
+        <select name="dz">{% for z in range(2, 13) %}<option value="{{ z }}"{% if digest_tz == z %} selected{% endif %}>UTC+{{ z }}{{ ' — Москва' if z == 3 else (' — Красноярск, Алтай' if z == 7 else '') }}</option>{% endfor %}</select>
+      </label>
+    </div>
+    <p class="small muted">Куда придёт: уведомления на сайте{% if can_telegram %}, Telegram{% endif %}{% if can_email %}, почта{% endif %}.{% if not can_telegram %} Telegram не привязан: {% if tg_link %}<a href="{{ tg_link }}" target="_blank" rel="noopener">подключить Telegram</a> — откроется бот, нажмите «Запустить»{% else %}привяжите бота в <a href="/profile">профиле</a>{% endif %}.{% endif %} Если новых лотов нет, сообщение не отправляется.</p>
+  </details>
+  <button class="sm">Показать</button>
+</form>
+
+<details class="small hot-funnel"{% if not hot_n %} open{% endif %}>
+  <summary>Как сузился список: из {{ res.total }} идущих аукционов прошло {{ res.hot|length + res.weak|length }}</summary>
+  <table class="results">
+    <thead><tr><th>Условие</th><th class="num">Осталось лотов</th></tr></thead>
+    <tbody>
+      <tr><td>Идущие аукционы{% if region != 'all' %} региона{% else %} всех собранных регионов{% endif %}</td><td class="num">{{ res.total }}</td></tr>
+      {% for f in res.funnel %}<tr><td>{{ f.label }}</td><td class="num">{{ f.left }}</td></tr>{% endfor %}
+    </tbody>
+  </table>
+  <p>Из прошедших: класс A — {{ res.classes.A }}, класс B — {{ res.classes.B }}, класс C (гипотезы) — {{ res.classes.C }}. В «Проверить руками» (цена рынка или спрос под вопросом) — {{ res.check|length }}.
+  {% if more_at %}Если понизить порог доходности: {% for level, n in more_at %}до {{ (level * 100)|round|int }} % — пройдёт {{ n }}{{ '; ' if not loop.last else '.' }}{% endfor %}{% endif %}</p>
+</details>
+{% if zones_queued %}<p class="small muted">Обременения проверяются: в очереди {{ zones_queued }} участк. Пока проверка не прошла, лот стоит в классе B — обновите страницу через несколько минут.</p>{% endif %}
+{% if nearby_queued %}<p class="small muted">Карта спрашивается: в очереди {{ nearby_queued }} лот. Доступность места (населённый пункт, дорога, город) появится в строке лота — запрос к карте идёт до минуты на участок.</p>{% endif %}
+{% if cards_queued %}<p class="small muted">Карточки лотов читаются: в очереди {{ cards_queued }}. Задаток, шаг аукциона и отметка о градплане появятся после чтения.</p>{% endif %}
+{% if skipped and not show_skipped %}<p class="small muted">Вы убрали из списков {{ skipped }} лот. — <a href="/tools/torgi-hot?skipped=1">показать</a>.</p>{% elif show_skipped %}<p class="small muted">Показаны и убранные вами лоты — <a href="/tools/torgi-hot">скрыть</a>.</p>{% endif %}
+
+{% macro hot_table(items) %}
+<div class="table-wrap sticky">
+<table class="results torgi hot sortable">
+  <thead><tr>
+    <th data-key="cls" title="A — всё доказано: цена по кварталу, сделок достаточно, район ликвидный, обременений нет. B — чего-то не хватает, причина в последней колонке. C — гипотеза.">Класс</th>
+    <th>Участок · назначение · адрес<div class="small no-print">по: <button type="button" class="linkbtn" data-key="region">региону</button> · <button type="button" class="linkbtn" data-key="area">площади</button></div></th>
+    <th class="num" data-key="start" title="Начальная цена и задаток. У аренды старт — годовая плата.">Старт, задаток</th>
+    <th data-key="end" title="Последний день подачи заявок по местному времени лота">Заявки до</th>
+    <th class="num" data-key="market" title="Середина рынка за сотку, источник и разброс">Рынок за сотку</th>
+    <th class="num" data-key="entry" title="Ожидаемая цена победителя: старт × типичный рост цены на торгах в этом месте. Цена отсечения — наибольшая ставка, при которой доходность ещё не ниже порога.">Вход, цена отсечения</th>
+    <th class="num" data-key="annual" title="Годовых и прибыль после налога — при покупке по ожидаемой цене победителя и продаже по середине рынка. Без борьбы — покупка по старту. Осторожно — продажа по низу рынка и в полтора раза дольше.">Доходность</th>
+    <th>Чего не хватает до класса A</th>
+  </tr></thead>
+  <tbody>
+  {% for i in items %}{% set r = i.row %}{% set s = r.s %}{% set e = i.sc.expected %}
+  <tr data-cls="{{ i.cls }}" data-region="{{ region_names.get(r.region, r.region) }}" data-area="{{ r.area_m2 or 0 }}" data-start="{{ r.price_start or 0 }}" data-end="{{ r.bidd_end or '' }}" data-market="{{ s.sale_sotka.mid or 0 }}" data-entry="{{ e.entry or 0 }}" data-annual="{{ e.annual or 0 }}">
+    <td class="nw"><input type="checkbox" name="lot" value="{{ r.id }}" aria-label="В подборку"> <span class="badge v-{{ {'A': 'ok', 'B': 'check'}.get(i.cls, '') }}">{{ i.cls }}</span></td>
+    <td class="cad">{{ lot_cell(r) }}{% if i.place %}<div class="small {{ {'good': 'ok-msg', 'weak': 'warn'}.get(i.place.level, 'muted') }}" title="По OpenStreetMap, расстояния по прямой от точки участка">Доступность {{ i.place.label }}: {{ i.place.why|join(', ') }}</div>{% endif %}</td>
+    <td class="num">{{ r.price_start|money }}{% if s.start_sotka %}<div class="small muted nw">{{ s.start_sotka|money }}/сот.</div>{% endif %}<div class="small muted nw">{% if r.deposit %}задаток {{ r.deposit|money }}{% elif not r.card %}задаток: карточка читается{% else %}задаток не указан{% endif %}</div></td>
+    <td class="num small">{% if r.bidd_end %}{{ r.bidd_end[8:10] }}.{{ r.bidd_end[5:7] }}{% endif %}<div class="{{ 'err' if s.days_left < 5 else 'muted' }}">{{ s.days_left }} дн.</div></td>
+    <td class="num">{{ s.sale_sotka.mid|money }}<div class="small muted" title="{{ s.market.note or '' }}">{{ s.market.source_label }}</div>{% if s.sale_sotka.min and s.sale_sotka.max and s.sale_sotka.min != s.sale_sotka.max %}<div class="small muted nw">{{ s.sale_sotka.min|money }} – {{ s.sale_sotka.max|money }}</div>{% endif %}{% if s.turnover %}<div class="small nw {{ 'warn' if s.turnover.quarter_n == 0 else 'muted' }}" title="Сделки Росреестра с участками того же назначения и похожей площади за {{ s.turnover.span }}: в квартале {{ s.turnover.quarter_n }}, в районе {{ s.turnover.district_n }}">сделок в квартале: {{ s.turnover.quarter_n }}</div>{% endif %}</td>
+    <td class="num">{{ e.entry|money }}{% if e.entry != r.price_start %}<div class="small muted nw">старт × {{ (e.entry / r.price_start)|round(2) }}</div>{% endif %}<div class="small nw"><strong>до {{ i.cutoff|money if i.cutoff else '—' }}</strong></div>{% if i.comp %}<div class="small {{ {'calm': 'ok-msg', 'empty': 'warn'}.get(i.comp.level, 'muted') }}" title="{{ i.comp.detail }}">{{ i.comp.text }}</div>{% endif %}{% if s.repeats %}<div class="small warn" title="Участок уже выставляли без результата">повторные торги</div>{% endif %}</td>
+    <td class="num"><strong>{{ pct(e.annual) }} годовых</strong><div class="small nw">{{ e.profit|money }} за {{ i.sc.hold }} мес.</div><div class="small muted nw">без борьбы {{ pct(i.sc.alone.annual) }}</div><div class="small muted nw">осторожно {{ pct(i.sc.cautious.annual) }}</div></td>
+    <td class="reasons small"><ul>
+      {% for t in i.cls_why %}<li><span class="dot check"></span>{{ t }}</li>{% endfor %}
+      {% if not i.cls_why %}<li><span class="dot ok"></span>цена по кварталу, район ликвидный (индекс {{ s.liquidity.index }}), обременений нет</li>{% endif %}
+    </ul></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endmacro %}
+
+{% if request.query_params.get('nopick') %}<p class="warn small">Отметьте хотя бы один лот — тогда соберётся подборка.</p>{% endif %}
+<form method="post" action="/tools/torgi-picks" id="hot-pick">
+{% if work or work_elsewhere %}
+<h3>В работе: {{ work|length + work_elsewhere }}</h3>
+{% if work %}{{ hot_table(work) }}{% endif %}
+{% if work_elsewhere %}<p class="small muted">Ещё {{ work_elsewhere }} лот. в работе не попали в таблицу: торги по ним закончились либо они вне выбранного региона.</p>{% endif %}
+<h3>Предложения</h3>
+{% endif %}
+{% if shown %}
+<p class="small">Показано {{ shown|length }} из {{ hot_n }}: {% if crit.get('order') == 'mo' %}сначала Московская область, затем остальные регионы — по лучшему лоту региона; внутри региона{% else %}сначала класс A, затем B, внутри класса{% endif %} — по ожидаемой годовой доходности. Щелчок по заголовку столбца пересортирует таблицу. Название участка открывает сводку для инвестора.</p>
+{{ hot_table(shown) }}
+{% else %}
+<article><p>Под эти критерии{% if region != 'all' %} в регионе {{ region_label }}{% endif %} сейчас не попадает ни один лот. Выше видно, какое условие отсеяло больше всего{% if more_at %}, и сколько лотов пройдёт при пороге ниже{% endif %}.</p></article>
+{% endif %}
+
+{% if weak %}
+<details class="small">
+  <summary>Гипотезы — класс C: {{ weak|length }} лот. Проходят по цифрам, но цена взята по району (а район не ликвидный или цены в нём расходятся вдвое) либо по объявлениям — их стоит сверить с рынком руками</summary>
+  {{ hot_table(weak[:hp.top]) }}
+</details>
+{% endif %}
+{% if shown or weak or work %}
+<div class="toolbar no-print">
+  <div>
+    <input name="title" placeholder="Название подборки — необязательно" maxlength="160" style="max-width: 22rem; display: inline-block; margin: 0 0.5rem 0 0">
+    <button class="sm" title="Отмеченные лоты — одной сравнительной таблицей со ссылкой, которая открывается без входа">В подборку для инвестора</button>
+  </div>
+  <div class="small"><a href="/tools/torgi-picks">Мои подборки</a></div>
+</div>
+{% endif %}
+</form>
+
+{% if returning %}
+<details class="small">
+  <summary>Вернутся на торги: {{ returning_n }} участк. — на них не подали заявок, а по цене они прошли бы отбор</summary>
+  <p class="muted">Торги по этим участкам не состоялись за последние полгода, сейчас они не выставлены. Если участок выставят снова, он появится в утренней сводке. Доходность — при покупке по прежней начальной цене.{% if returning_n > returning|length %} Показаны первые {{ returning|length }}.{% endif %}</p>
+  <table class="results torgi">
+    <thead><tr><th>Участок · адрес</th><th class="num">Площадь</th><th>Торги были</th><th class="num">Старт</th><th class="num">Рынок за сотку</th><th class="num">Годовых по старту</th></tr></thead>
+    <tbody>
+    {% for x in returning %}
+    <tr>
+      <td class="cad"><a href="/tools/torgi-lot/{{ x.id }}"><code>{{ x.cad_num }}</code></a><div class="small muted"><strong>{{ region_names.get(x.region, x.region) }}</strong>{% if x.address %} · {{ x.address|short_address }}{% endif %}</div></td>
+      <td class="num">{{ (x.area_m2 / 100)|round(1) }} сот.</td>
+      <td class="small">{{ x.day[8:10] }}.{{ x.day[5:7] }}.{{ x.day[:4] }}</td>
+      <td class="num">{{ x.price_start|money }}</td>
+      <td class="num">{{ x.sale_sotka|money if x.sale_sotka else '—' }}<div class="small muted">{{ x.source or '' }}</div></td>
+      <td class="num">{{ pct(x.annual) }} <span class="badge mini">{{ x.cls }}</span></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</details>
+{% elif backtest_pending %}
+<p class="small muted">Список «Вернутся на торги» собирается: считается история {{ backtest_pending }} регион. — обновите страницу через пару минут.</p>
+{% endif %}
+
+{% if check %}
+<h3>Проверить руками: {{ check_n }}</h3>
+<p class="muted small">Эти лоты прошли бы отбор по цифрам, но расчёту по ним верить нельзя. Причин две. Цена рынка выше старта или кадастровой стоимости больше чем в {{ check_ratio|int }} раз — обычно это несопоставимые сделки в выборке; если по опыту цена верная, запишите её в слой рынка района, и лот перейдёт в основной список. Либо в этом месте половина торгов и больше проходит без единой заявки — участки здесь по таким ценам не берут: на истории такие лоты оставались без покупателя в 86 % случаев.{% if check_n > check|length %} Показаны первые {{ check|length }}.{% endif %}</p>
+<div class="table-wrap">
+<table class="results torgi">
+  <thead><tr>
+    <th>Участок · назначение · адрес</th><th class="num">Старт</th><th>Заявки до</th>
+    <th class="num">«Рынок» за сотку</th><th>Почему расчёту нельзя верить</th>
+  </tr></thead>
+  <tbody>
+  {% for i in check %}{% set r = i.row %}{% set s = r.s %}
+  <tr>
+    <td class="cad">{{ lot_cell(r) }}</td>
+    <td class="num">{{ r.price_start|money }}{% if s.start_sotka %}<div class="small muted">{{ s.start_sotka|money }}/сот.</div>{% endif %}</td>
+    <td class="num small">{% if r.bidd_end %}{{ r.bidd_end[8:10] }}.{{ r.bidd_end[5:7] }}{% endif %}<div class="muted">{{ s.days_left }} дн.</div></td>
+    <td class="num">{{ s.sale_sotka.mid|money }}<div class="small muted">{{ s.market.source_label }}</div>{% if s.turnover %}<div class="small muted nw">сделок в квартале: {{ s.turnover.quarter_n }}</div>{% endif %}</td>
+    <td class="reasons small"><ul>
+      {% for t in i.fail + i.nodemand %}<li><span class="dot stop"></span>{{ t }}</li>{% endfor %}
+      {% for t in i.warn %}<li><span class="dot check"></span>{{ t }}</li>{% endfor %}
+    </ul></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+
+{% if skip_stats and skip_stats.total %}
+<details class="small">
+  <summary>Почему лоты убирали из списка — все пользователи: {{ skip_stats.total }}</summary>
+  <p>{% for reason, n in skip_stats.counts %}{{ reason }} — {{ n }}{{ '; ' if not loop.last else '.' }}{% endfor %}</p>
+  <table class="results">
+    <thead><tr><th>Когда</th><th>Кто</th><th>Лот</th><th>Причина</th></tr></thead>
+    <tbody>{% for x in skip_stats.recent %}<tr><td>{{ x.at.strftime('%d.%m %H:%M') }}</td><td>{{ x.user }}</td><td><a href="/tools/torgi-lot/{{ x.lot }}/invest">{{ x.cad or x.lot }}</a></td><td>{{ x.reason }}</td></tr>{% endfor %}</tbody>
+  </table>
+</details>
+{% endif %}
+
+<p class="muted small">Как читать. «Годовых» — доходность после налога в пересчёте на год: срок до продажи принят {{ sp.hold_months }} мес.; где в квартале лота за год не зарегистрировано ни одной сделки с такими участками — {{ quiet_hold }} мес. «Цена отсечения» — выше неё на торгах идти не стоит: доходность упадёт ниже вашего порога. Лесные участки, имущество должников, изъятые участки и извещения по ст. 39.18 сюда не попадают. Число заявок у идущего лота площадка не публикует — конкуренция оценивается по истории торгов в этом месте. Как модель показала себя на завершённых торгах — на вкладке <a href="/tools/torgi-backtest">«Точность модели»</a>.</p>
+<script>
+// Сортировка таблиц «Горячих» по щелчку на заголовке (зум 20.11.2026: «как обычно, стрелочки»).
+document.querySelectorAll('table.sortable').forEach(function (table) {
+  table.querySelectorAll('[data-key]').forEach(function (head) {
+    head.classList.add('sort-head');
+    head.addEventListener('click', function () {
+      const key = head.dataset.key;
+      const dir = head.dataset.dir === 'asc' ? 'desc' : 'asc';
+      table.querySelectorAll('[data-key]').forEach(function (h) { delete h.dataset.dir; });
+      head.dataset.dir = dir;
+      const body = table.tBodies[0];
+      const rows = Array.from(body.rows);
+      const text = key === 'cls' || key === 'region' || key === 'end';
+      rows.sort(function (a, b) {
+        const x = a.dataset[key] || '', y = b.dataset[key] || '';
+        const d = text ? x.localeCompare(y, 'ru') : parseFloat(x) - parseFloat(y);
+        return dir === 'asc' ? d : -d;
+      });
+      rows.forEach(function (row) { body.appendChild(row); });
+    });
+  });
+});
+</script>
+{% endblock %}

@@ -1,0 +1,28 @@
+{# Гипотезы «большой участок под раздел» — подгружаются после страницы «Выбор системы» #}
+<details>
+  <summary>Большие участки под раздел: {{ found|length }}</summary>
+  {% if found %}
+  <p class="small muted">Участок на продажу в несколько раз больше ходовой площади. Если разделить его на участки по {{ plot_sotka|round|int }} соток, оставив {{ ((1 - use) * 100)|round|int }} % под проезды, то по сделкам Росреестра в том же квартале они стоили бы не меньше чем в {{ min_ratio|round|int }} раза дороже цены входа. <strong>Нужна оценка межевания:</strong> можно ли делить по правилам застройки, сколько на самом деле уйдёт под проезды, цена и срок работ — этого код не знает, и в общий список эти лоты не идут.</p>
+  <div class="table-wrap">
+  <table class="results">
+    <thead><tr><th>Участок</th><th class="num">Площадь</th><th class="num">Вход</th><th class="num">Участков после раздела</th><th class="num">Цена одного по сделкам квартала</th><th class="num">Выручка</th><th class="num">К цене входа</th><th class="num">Заявки до</th></tr></thead>
+    <tbody>
+    {% for x in found %}{% set r = x.row %}
+      <tr>
+        <td><a href="/tools/torgi-lot/{{ r.id }}"><code>{{ r.cad_num or r.quarter or 'без номера' }}</code></a><div class="small muted"><strong>{{ region_names.get(r.region, r.region) }}</strong>{% if r.address %} · {{ r.address|short_address }}{% endif %}</div><div class="small muted">{{ r.vri or '' }}</div></td>
+        <td class="num">{{ (r.area_m2 / 100)|round(1) }} сот.</td>
+        <td class="num">{{ x.entry|money }}</td>
+        <td class="num">{{ x.plots }}</td>
+        <td class="num">{{ x.plot_price|money }}<div class="small muted">{{ x.deals_n }} сдел.{% if x.deals_span %} за {{ x.deals_span }}{% endif %}</div></td>
+        <td class="num">{{ x.gross|money }}</td>
+        <td class="num"><strong>× {{ x.ratio }}</strong></td>
+        <td class="num small">{% if r.bidd_end %}{{ r.bidd_end[8:10] }}.{{ r.bidd_end[5:7] }}{% endif %}<div class="muted">{{ r.s.days_left }} дн.</div></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="small muted">Больших участков на продажу, которые после раздела стоили бы по сделкам своего квартала в разы дороже входа, сейчас нет.</p>
+  {% endif %}
+</details>
