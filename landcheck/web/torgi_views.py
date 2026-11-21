@@ -1051,6 +1051,7 @@ def _lot_row(lot_id: str, sp: torgi_scan.ScanParams) -> tuple[dict[str, Any], di
         sp,
         layer=_layer(region),
         repeats=torgi_scan.repeats_of(lots),
+        prior=torgi_scan.prior_of(lots),
         near=near_fn(found) if near_fn else None,
     )
     return {**found, "s": s}, names
@@ -1425,6 +1426,7 @@ def torgi_lot_page(request: Request, user: TorgiDep, lot_id: str, saved: str = "
         params,
         layer=layer,
         repeats=torgi_scan.repeats_of(lots),
+        prior=torgi_scan.prior_of(lots),
         near=near_fn(lot) if near_fn else None,
     )
     # объявления, из которых сложилась цена рядом с лотом, — показать, чтобы проверить глазами

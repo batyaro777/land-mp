@@ -516,3 +516,48 @@ def test_big_plot_for_splitting_is_a_hypothesis_with_quarter_deals_only():
     assert th.split_candidates(rows, cheap) == []
     rent = big | {"id": "BIG2", "kind": "rent"}
     assert [x["row"]["id"] for x in th.split_candidates(_rows(rent, big), by_quarter)] == ["BIG1"]
+
+
+def test_plot_nobody_took_twice_at_the_same_price_goes_to_manual_check():
+    """Прод, 21.11.2026, «горячие» на завершённых торгах (321 лот): у участков, которые дважды
+    и больше выставляли по той же цене, без заявок остались 86 % торгов; у повторных со
+    сниженным стартом — 23 %, как у новых. Не берут не «повторные», а «по той же цене»."""
+    cad = "40:13:120105:4"
+
+    def failed(lot_id: str, day: str, start: int = 200_000) -> dict:
+        return _closed(lot_id, cad, start=start, fin=None, status="FAILED", applied=0) | {
+            "auction_date": day
+        }
+
+    twice = [failed("N1", "2026-06-01"), failed("N2", "2026-08-01")]
+    now = _active("N3", start=200_000) | {"cad_num": cad}
+    res = th.select(_rows(*twice, now))
+    assert res["hot"] == [] and [i["row"]["id"] for i in res["check"]] == ["N3"]
+    item = res["check"][0]
+    assert item["stop"] == "demand" and item["row"]["s"]["repeats_same"] == 2
+    assert item["row"]["s"]["repeat_ratio"] == 1.0
+    assert "выставляли 2 раза без результата, и цена с тех пор не снижена" in item["nodemand"][0]
+    # один раз по той же цене — это ещё не приговор: лот остаётся, класс B
+    once = th.select(_rows(twice[1], now))
+    assert [i["row"]["id"] for i in once["hot"]] == ["N3"] and once["hot"][0]["cls"] == "B"
+    # цену снизили — лот остаётся, и в стратегии сказано, на сколько
+    cheaper = _active("N3", start=170_000) | {"cad_num": cad}
+    cut = th.best(_rows(*twice, cheaper))
+    pick = cut["picks"][0]
+    assert pick["row"]["id"] == "N3" and pick["strategy"] == "repeat"
+    assert pick["row"]["s"]["repeat_ratio"] == 0.85 and th.repeat_cut(pick["row"]["s"]) == 0.15
+    assert (
+        "уже выставляли 2 раза без результата, старт с тех пор снижен на 15 %"
+        in (pick["strategy_why"])
+    )
+    # прежние торги были на аренду, сейчас продажа — цены сравнивать не с чем, правило молчит
+    rent_before = [f | {"kind": "rent"} for f in twice]
+    other = th.select(_rows(*rent_before, now))
+    assert [i["row"]["id"] for i in other["hot"]] == ["N3"]
+    assert other["hot"][0]["row"]["s"]["repeats_same"] == 0
+    assert other["hot"][0]["row"]["s"]["repeats"] == 2
+    # проверка на истории применяет то же правило на день каждого лота
+    third = failed("N3", "2026-10-20")
+    raw = th.backtest([*twice, third, *_district()], layer=LAYER, today=TODAY)
+    assert raw["nodemand"] == 1 and raw["nodemand_outcomes"]["none"] == 1
+    assert ts.prior_of([*twice, third])[(cad, "sale")] == (3, 200_000)

@@ -121,6 +121,21 @@ NO_DEMAND_SHARE = 0.5
 THIN_DEMAND_SHARE = 0.2
 
 
+# Прод, 21.11.2026, «горячие» на завершённых торгах всех регионов (321 лот): у участков без
+# прежних попыток без заявок остались 22 % торгов; у тех, кого дважды и больше выставляли по
+# той же цене, — 86 % (14 лотов); у повторных со сниженным стартом — 23 % (13 лотов), и больше
+# половины из них ушли единственному участнику. Не берут не «повторные», а «по той же цене».
+REPEAT_STOP = 2  # столько раз участок не взяли по той же цене — спроса на него по ней нет
+REPEAT_CUT = 0.97  # старт ниже прошлого хотя бы на 3 % — цену снизили
+
+
+def repeat_cut(s: dict[str, Any]) -> float | None:
+    """На сколько снижен старт против прошлой попытки (доля, 0,25 — на четверть); None — не
+    снижен или сравнить не с чем."""
+    ratio = s.get("repeat_ratio")
+    return round(1 - ratio, 3) if ratio is not None and ratio < REPEAT_CUT else None
+
+
 def outcomes_unread(row: dict[str, Any]) -> bool:
     """Итог не прочитан у половины торгов места и больше: о спросе там судить рано. Прод,
     20.11.2026: три лота вышли в класс A и в утреннюю сводку, хотя у семи из восьми торгов
@@ -155,6 +170,12 @@ def demand_check(row: dict[str, Any]) -> tuple[list[str], list[str]]:
         warn.append(
             f"итоги {unknown} из {closed} торгов в этом {where} ещё не прочитаны: были ли на "
             "них заявки, пока неизвестно"
+        )
+    same = s.get("repeats_same") or 0
+    if same >= REPEAT_STOP and s.get("repeat_ratio") is not None and repeat_cut(s) is None:
+        fail.append(
+            f"участок уже выставляли {torgi_scan.times_ru(same)} без результата, и цена с тех "
+            "пор не снижена: по этой цене его не берут"
         )
     turn = s.get("turnover")
     if turn and turn["quarter_n"] == 0:
@@ -684,10 +705,12 @@ def strategy_of(item: dict[str, Any]) -> tuple[str, str]:
         )
     n = row["s"].get("repeats") or 0
     if n:
+        cut = repeat_cut(row["s"])
+        lower = f", старт с тех пор снижен на {round(cut * 100)} %" if cut else ""
         return "repeat", (
-            f"участок уже выставляли {torgi_scan.times_ru(n)} без результата: соперников, скорее "
-            "всего, не будет, вход рядом со стартом; почему его не взяли раньше — проверить на "
-            "месте"
+            f"участок уже выставляли {torgi_scan.times_ru(n)} без результата{lower}: соперников, "
+            "скорее всего, не будет, вход рядом со стартом; почему его не взяли раньше — "
+            "проверить на месте"
         )
     comp = item.get("comp")
     if comp and comp["level"] == "calm":
@@ -942,6 +965,15 @@ def backtest(
         "relist": [],
         "returning": [],
     }
+    # прежние попытки продать участок без результата — на день каждого лота: правило «не берут
+    # по той же цене» проверяется на истории так же, как работает на идущих лотах
+    attempts: dict[tuple[str, str], list[tuple[str, float | None]]] = {}
+    for lot in lots:
+        if lot.get("cad_num") and torgi_scan._outcome(lot) in ("none", "failed", "canceled"):
+            key = (lot["cad_num"], lot.get("kind") or "sale")
+            attempts.setdefault(key, []).append((_lot_day(lot), lot.get("price_start")))
+    for found in attempts.values():
+        found.sort(key=lambda a: a[0])
     by_cad: dict[str, list[dict[str, Any]]] = {}
     for lot in lots:
         if (
@@ -960,8 +992,17 @@ def backtest(
         raw["lots"] += 1
         raw["outcomes"][outcome] += 1
         virt = {**lot, "status": "APPLICATIONS_SUBMISSION", "bidd_end": virtual_end}
+        cad, day = lot.get("cad_num") or "", _lot_day(lot)
+        earlier = [a for a in attempts.get((cad, "sale"), ()) if a[0] < day]
         s = torgi_scan.score_lot(
-            virt, stats, sp, layer=layer, today=today, near=near_fn(virt) if near_fn else None
+            virt,
+            stats,
+            sp,
+            layer=layer,
+            today=today,
+            near=near_fn(virt) if near_fn else None,
+            repeats={cad: len(earlier)} if earlier else None,
+            prior={(cad, "sale"): (len(earlier), earlier[-1][1])} if earlier else None,
         )
         if not s.get("market_based"):
             continue

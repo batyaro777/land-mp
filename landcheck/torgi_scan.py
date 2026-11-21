@@ -651,6 +651,24 @@ def repeats_of(lots: list[dict[str, Any]]) -> dict[str, int]:
     return out
 
 
+def prior_of(lots: list[dict[str, Any]]) -> dict[tuple[str, str], tuple[int, float | None]]:
+    """Прежние попытки той же сделки с участком без результата: (кадастровый номер, продажа
+    или аренда) → сколько их было и начальная цена последней. По ней видно, снизили ли цену:
+    участок, который не берут по той же цене, и участок, который подешевел, — разные случаи."""
+    last: dict[tuple[str, str], tuple[str, float | None]] = {}
+    count: dict[tuple[str, str], int] = {}
+    for lot in lots:
+        cad = lot.get("cad_num")
+        if not cad or _outcome(lot) not in ("none", "failed", "canceled"):
+            continue
+        key = (cad, lot.get("kind") or "sale")
+        count[key] = count.get(key, 0) + 1
+        day = lot.get("auction_date") or lot.get("bidd_end") or lot.get("published") or ""
+        if key not in last or day >= last[key][0]:
+            last[key] = (day, lot.get("price_start"))
+    return {key: (n, last[key][1]) for key, n in count.items()}
+
+
 # --- оценка идущего лота -------------------------------------------------------------------
 @dataclass
 class ScanParams:
@@ -938,6 +956,7 @@ def score_lot(
     repeats: dict[str, int] | None = None,
     today: date | None = None,
     near: dict[str, Any] | None = None,
+    prior: dict[tuple[str, str], tuple[int, float | None]] | None = None,
 ) -> dict[str, Any]:
     """Оценка идущего лота. Вердикт строится на предельной цене входа:
     «интересен» — цена перепродажи взята с рынка (слой рынка, свои сделки, объявления), предел
@@ -1057,6 +1076,9 @@ def score_lot(
     elif mk and mk.get("liquid") == "liquid":
         plus.append("в слое рынка локация помечена как ликвид")
     n_rep = (repeats or {}).get(lot.get("cad_num") or "", 0)
+    same_n, prev_start = (prior or {}).get(
+        (lot.get("cad_num") or "", lot.get("kind") or "sale"), (0, None)
+    )
     if n_rep:
         minus.append(f"участок уже выставляли без результата: {times_ru(n_rep)}")
     if lot.get("has_gpzu"):
@@ -1242,6 +1264,9 @@ def score_lot(
         "start_m2": round(start / area, 1) if start and area else None,
         "start_sotka": round(start / area * SOTKA) if start and area else None,
         "repeats": n_rep,
+        # прежние попытки той же сделки (продажа или аренда) и старт сейчас к старту последней
+        "repeats_same": same_n,
+        "repeat_ratio": round(start / prev_start, 3) if same_n and start and prev_start else None,
     }
 
 
@@ -1258,6 +1283,7 @@ def scan(
     p = params or ScanParams()
     stats = index_by(lots)
     repeats = repeats_of(lots)
+    prior = prior_of(lots)
     rows = []
     forms = {"auction": 0, "notice": 0}
     # что в выбранном месте отсеяли остальные фильтры — чтобы пустой список объяснял себя
@@ -1295,7 +1321,9 @@ def scan(
             hidden["price"] += 1
             continue
         near = near_fn(lot) if near_fn else None
-        s = score_lot(lot, stats, p, layer=layer, repeats=repeats, today=today, near=near)
+        s = score_lot(
+            lot, stats, p, layer=layer, repeats=repeats, today=today, near=near, prior=prior
+        )
         rows.append({**lot, "s": s})
     rows.sort(key=lambda r: (r["s"]["rank"], -r["s"]["score"]))
     counts = {key: 0 for key in VERDICTS}
